@@ -1,0 +1,38 @@
+{
+  "name": "fsk-timekeeper-console",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host",
+    "build": "vite build",
+    "build:single": "vite build --mode single",
+    "preview": "vite preview",
+    "test": "vitest run"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/luftaquila/fsk-timekeeper.git"
+  },
+  "author": "LUFT-AQUILA",
+  "license": "Beerware",
+  "bugs": {
+    "url": "https://github.com/luftaquila/fsk-timekeeper/issues"
+  },
+  "homepage": "https://github.com/luftaquila/fsk-timekeeper#readme",
+  "dependencies": {
+    "notyf": "^3.10.0",
+    "pinia": "^3.0.4",
+    "vue": "^3.5.26",
+    "vue-router": "^4.6.4"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^6.0.3",
+    "@vue/test-utils": "^2.5.1",
+    "fake-indexeddb": "^6.2.5",
+    "jsdom": "^30.1.1",
+    "vite": "^7.3.0",
+    "vite-plugin-singlefile": "^2.3.0",
+    "vitest": "^5.0.2"
+  }
+}
