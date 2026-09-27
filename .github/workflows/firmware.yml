@@ -1,0 +1,71 @@
+name: Build firmware
+
+on:
+  push:
+    branches:
+      - '**'
+    paths:
+      - 'device/firmware/**'
+      - '.github/workflows/firmware.yml'
+      - '.github/assets/flash.*'
+  workflow_call:
+  workflow_dispatch:
+
+jobs:
+  build-firmware:
+    name: build firmware
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install ARM toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            make \
+            gcc-arm-none-eabi \
+            libnewlib-arm-none-eabi \
+            libstdc++-arm-none-eabi-newlib \
+            python3 \
+            git
+
+      # The Makefile pins the dependency refs, so hashing it keys the cache on
+      # every pin at once.
+      - name: Cache bare-metal deps
+        uses: actions/cache@v5
+        with:
+          path: device/firmware/vendor
+          key: nrf-deps-${{ hashFiles('device/firmware/Makefile') }}
+
+      # The USB `I` line reports the release tag as the firmware version
+      # (v1.2.3 -> 1.2.3); builds without a tag report the Makefile default.
+      - name: Version from tag
+        if: github.ref_type == 'tag'
+        run: echo "FW_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
+      - name: Build
+        run: make -C device/firmware
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Package
+        run: |
+          cd device/firmware
+          mkdir -p actions
+          cp build/fsk-timekeeper.uf2 build/fsk-timekeeper.hex build/fsk-timekeeper.bin \
+             build/fsk-timekeeper.elf build/fsk-timekeeper.map actions/
+          # Serial-DFU package for the Adafruit nRF52 bootloader. The hex is already
+          # linked at 0x26000 (S140 user-app base), so no offset conversion is needed.
+          pip install adafruit-nrfutil
+          adafruit-nrfutil dfu genpkg --dev-type 0x0052 \
+            --application build/fsk-timekeeper.hex actions/fsk-timekeeper-dfu.zip
+          cp ../../.github/assets/flash.sh ../../.github/assets/flash.ps1 ../../.github/assets/flash.bat actions/
+          arm-none-eabi-size build/fsk-timekeeper.elf
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: fsk-timekeeper-firmware
+          path: device/firmware/actions
+          if-no-files-found: error

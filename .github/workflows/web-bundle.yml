@@ -1,0 +1,33 @@
+name: Build bundled HTML
+
+on:
+  push:
+    branches:
+      - '**'
+    paths:
+      - 'console/**'
+      - '.github/workflows/web-bundle.yml'
+  workflow_call:
+  workflow_dispatch:
+
+jobs:
+  build-html:
+    name: Build html
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: console/package-lock.json
+      - run: |
+          cd console
+          npm ci
+          npm run build:single
+          mv dist-single/index.html fsk-timekeeper-console.html
+      - uses: actions/upload-artifact@v7
+        with:
+          name: html
+          path: console/fsk-timekeeper-console.html
+          if-no-files-found: error

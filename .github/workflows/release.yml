@@ -1,0 +1,58 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - v*
+
+# Called workflows inherit at most these permissions (Pages deploy needs
+# pages/id-token; the release needs contents: write).
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+jobs:
+  build-firmware:
+    uses: ./.github/workflows/firmware.yml
+  build-pcb:
+    uses: ./.github/workflows/kicad.yml
+  build-3d:
+    uses: ./.github/workflows/3d.yml
+  build-html:
+    uses: ./.github/workflows/web-bundle.yml
+  deploy-web:
+    uses: ./.github/workflows/web.yml
+  release:
+    name: release
+    runs-on: ubuntu-24.04
+    needs: [build-firmware, build-pcb, build-3d, build-html]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v8
+      - run: |
+          zip -r fsk-timekeeper-firmware.zip fsk-timekeeper-firmware
+          zip -r fsk-timekeeper-pcb.zip fsk-timekeeper-pcb
+          zip -r fsk-timekeeper-3d.zip fsk-timekeeper-3d
+          mv html/fsk-timekeeper-console.html .
+      - uses: ncipollo/release-action@v1
+        with:
+          allowUpdates: true
+          artifacts: |
+            fsk-timekeeper-3d.zip
+            fsk-timekeeper-firmware.zip
+            fsk-timekeeper-pcb.zip
+            fsk-timekeeper-console.html
+          commit: ${{ github.sha }}
+          tag: ${{ github.ref_name }}
+          body: |
+            ### FSK Timekeeper Console
+
+            * https://luftaquila.github.io/fsk-timekeeper/
+            * Or download `fsk-timekeeper-console.html` and open it with a Chromium-based browser (Web Serial is required to talk to the master).
+
+            ### Firmware
+
+            * Windows: double-tap `RST` and copy `fsk-timekeeper.uf2` to the `NICENANO` drive.
+            * Linux / macOS: `./flash.sh [port]` (serial DFU via adafruit-nrfutil).
+            * Windows (serial DFU): `flash.bat` / `flash.ps1 [COMx]`.

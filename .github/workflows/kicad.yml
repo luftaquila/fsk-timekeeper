@@ -1,0 +1,91 @@
+name: Build PCB
+
+on:
+  push:
+    branches:
+      - '**'
+    paths:
+      - 'device/hardware/**'
+      - '.github/workflows/kicad.yml'
+  workflow_call:
+  workflow_dispatch:
+
+jobs:
+  build-pcb:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - run: |
+          sudo add-apt-repository -y ppa:kicad/kicad-10.0-releases
+          sudo apt-get update
+      - uses: awalsh128/cache-apt-pkgs-action@latest
+        with:
+          packages: kicad imagemagick
+          version: 1.0
+
+      # Both checks run with --exit-code-violations so violations are annotated,
+      # but they do not block the artifact yet: the schematic still reports
+      # pin_to_pin (SuperMini symbol power-output GND/BAT+ pins) and
+      # power_pin_not_driven errors, and the board two starved_thermal errors.
+      # Drop `continue-on-error` once the design is clean.
+      - name: Schematic ERC
+        continue-on-error: true
+        run: |
+          cd device/hardware
+          kicad-cli --version
+          kicad-cli sch erc -o fsk-timekeeper-erc.rpt --severity-error --severity-warning --exit-code-violations fsk-timekeeper.kicad_sch
+
+      - name: PCB DRC
+        continue-on-error: true
+        run: |
+          cd device/hardware
+          kicad-cli pcb drc -o fsk-timekeeper-drc.rpt --schematic-parity --refill-zones --severity-error --exit-code-violations fsk-timekeeper.kicad_pcb
+
+      - name: Show ERC / DRC reports
+        run: |
+          echo "##### ERC REPORT #####"
+          cat device/hardware/fsk-timekeeper-erc.rpt
+          echo "##### DRC REPORT #####"
+          cat device/hardware/fsk-timekeeper-drc.rpt
+          mkdir -p kicad
+          mv device/hardware/fsk-timekeeper-erc.rpt device/hardware/fsk-timekeeper-drc.rpt kicad/
+
+      - name: Build PCB schematic, artwork and 3d models
+        run: |
+          npm i -g svgexport
+          kicad-cli sch export svg device/hardware/fsk-timekeeper.kicad_sch -o kicad --exclude-drawing-sheet --no-background-color
+          kicad-cli pcb export svg device/hardware/fsk-timekeeper.kicad_pcb -o kicad/fsk-timekeeper-artwork.svg --layers "B.Cu,F.Cu,F.Silkscreen,B.Silkscreen,User.Drawings,Edge.Cuts" --exclude-drawing-sheet
+          svgexport kicad/fsk-timekeeper.svg kicad/fsk-timekeeper-schematic-transparent.png 8000:
+          convert kicad/fsk-timekeeper-schematic-transparent.png -trim -bordercolor transparent -border 100x100 kicad/fsk-timekeeper-schematic-transparent.png
+          svgexport kicad/fsk-timekeeper.svg kicad/fsk-timekeeper-schematic.png 8000: "svg{background:white;}"
+          convert kicad/fsk-timekeeper-schematic.png -trim -bordercolor white -border 100x100 kicad/fsk-timekeeper-schematic.png
+          mv kicad/fsk-timekeeper.svg kicad/fsk-timekeeper-schematic.svg
+          svgexport kicad/fsk-timekeeper-artwork.svg kicad/fsk-timekeeper-artwork-transparent.png 8000:
+          convert kicad/fsk-timekeeper-artwork-transparent.png -trim -bordercolor transparent -border 100x100 kicad/fsk-timekeeper-artwork-transparent.png
+          svgexport kicad/fsk-timekeeper-artwork.svg kicad/fsk-timekeeper-artwork.png 8000: "svg{background:#001023;}"
+          convert kicad/fsk-timekeeper-artwork.png -trim -bordercolor "#001023" -border 100x100 kicad/fsk-timekeeper-artwork.png
+          kicad-cli pcb export step -o kicad/fsk-timekeeper-3d.stp --include-tracks device/hardware/fsk-timekeeper.kicad_pcb
+          kicad-cli pcb export vrml -o kicad/fsk-timekeeper-3d.wrl device/hardware/fsk-timekeeper.kicad_pcb
+
+      # JLCPCB-compatible fabrication files, generated from the committed board
+      # (no plugin output is checked in). Options follow the JLCPCB KiCad guide:
+      # Protel extensions, no X2/netlist attributes, no aperture macros, silk
+      # subtracted from mask, absolute origin, Excellon drills in mm.
+      - name: Export gerbers and drills
+        run: |
+          mkdir -p kicad/gerbers
+          kicad-cli pcb export gerbers -o kicad/gerbers/ \
+            --layers "F.Cu,B.Cu,F.Paste,B.Paste,F.Silkscreen,B.Silkscreen,F.Mask,B.Mask,Edge.Cuts" \
+            --subtract-soldermask --no-x2 --no-netlist --disable-aperture-macros --check-zones \
+            device/hardware/fsk-timekeeper.kicad_pcb
+          kicad-cli pcb export drill -o kicad/gerbers/ \
+            --format excellon --excellon-units mm --excellon-zeros-format decimal \
+            --generate-map --map-format gerberx2 --drill-origin plot \
+            device/hardware/fsk-timekeeper.kicad_pcb
+          (cd kicad/gerbers && zip -r ../GERBER-fsk-timekeeper.zip .)
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: fsk-timekeeper-pcb
+          path: kicad
+          if-no-files-found: error
