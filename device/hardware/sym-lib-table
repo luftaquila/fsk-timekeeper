@@ -1,0 +1,4 @@
+(sym_lib_table
+	(version 7)
+	(lib (name "SuperMini_NRF52840") (type "KiCad") (uri "${KIPRJMOD}/lib/SuperMini_NRF52840.kicad_sym") (options "") (descr ""))
+)
