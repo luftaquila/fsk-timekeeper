@@ -23,10 +23,14 @@ RADIOLIB_OBJ := $(patsubst $(RADIOLIB)/%.cpp,$(OUT)/radiolib/%.o,$(RADIOLIB_SRC)
 QUEUE_SRC := $(SRC)/sensor_queue.c $(SRC)/sync.c $(SRC)/master_queue.c $(SRC)/registry.c \
 	$(SRC)/proto_usb.c $(SRC)/errlog.c $(SRC)/crc32.c
 MAC_SRC := $(SRC)/mac_sensor.c $(SRC)/mac_master.c $(QUEUE_SRC)
+LINES_SRC := $(SRC)/proto_usb.c $(SRC)/master_queue.c $(SRC)/errlog.c $(SRC)/crc32.c
 HEADERS := $(wildcard $(SRC)/*.h)
 
 .PHONY: test
-test: $(OUT)/gps-test $(OUT)/sync-test $(OUT)/queue-test $(OUT)/fault-test $(OUT)/mac-sim $(OUT)/radio-test
+# usb_lines.txt is what the console's firmware-lines test parses. After a line format
+# change, regenerate it here: ../build/host/usb-lines > usb_lines.txt
+test: $(OUT)/gps-test $(OUT)/sync-test $(OUT)/queue-test $(OUT)/fault-test $(OUT)/mac-sim $(OUT)/radio-test \
+	$(OUT)/usb-lines
 	@ulimit -c 0; failed=0; \
 	for case in $(GPS_CASES); do "$(OUT)/gps-test" "$$case" || failed=1; done; \
 	"$(OUT)/sync-test" || failed=1; \
@@ -34,6 +38,8 @@ test: $(OUT)/gps-test $(OUT)/sync-test $(OUT)/queue-test $(OUT)/fault-test $(OUT
 	"$(OUT)/fault-test" || failed=1; \
 	for case in $(SIM_CASES); do "$(OUT)/mac-sim" "$$case" || failed=1; done; \
 	for case in $(RADIO_CASES); do "$(OUT)/radio-test" "$$case" || failed=1; done; \
+	"$(OUT)/usb-lines" > "$(OUT)/usb_lines.txt" && diff -u usb_lines.txt "$(OUT)/usb_lines.txt" && \
+		echo "PASS usb_lines" || failed=1; \
 	exit $$failed
 
 $(OUT)/gps-test: gps_test.c fakes/nrf.h $(SRC)/gps.c $(HEADERS)
@@ -55,6 +61,10 @@ $(OUT)/fault-test: fault_test.c $(SRC)/fault.c $(SRC)/power.c $(HEADERS)
 $(OUT)/mac-sim: mac_sim.c $(MAC_SRC) $(HEADERS)
 	@mkdir -p $(OUT)
 	$(CC) $(CFLAGS) -O2 -I$(SRC) mac_sim.c $(MAC_SRC) -o $@
+
+$(OUT)/usb-lines: usb_lines.c $(LINES_SRC) $(HEADERS)
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) -I$(SRC) usb_lines.c $(LINES_SRC) -o $@
 
 $(OUT)/radiolib/%.o: $(RADIOLIB)/%.cpp
 	@mkdir -p $(dir $@)

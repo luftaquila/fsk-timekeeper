@@ -1,0 +1,44 @@
+name: Export 3d models
+
+on:
+  push:
+    branches:
+      - '**'
+    paths:
+      - 'device/3d/**'
+      - '.github/workflows/3d.yml'
+  workflow_call:
+  workflow_dispatch:
+
+jobs:
+  build-3d:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      # The housings use minkowski() with a sphere; the Manifold backend of the
+      # OpenSCAD nightlies renders them in seconds, where the 2021.01 release in
+      # apt (CGAL only) needs minutes. Bump the dated tag occasionally.
+      #
+      # apt fallback (no Docker):
+      #   sudo apt-get install -y openscad
+      #   openscad -o master-lid.stl -D 'part="lid"' master.scad   # no --backend flag
+      - name: Render STL files from OpenSCAD sources
+        run: |
+          docker run --rm --entrypoint sh \
+            -v "$PWD/device/3d:/work" -w /work \
+            openscad/openscad:dev.2026-09-23 -ec '
+              for v in master sensor; do
+                for p in lid base; do
+                  openscad --backend=manifold -o "$v-$p.stl" -D "part=\"$p\"" "$v.scad"
+                done
+              done'
+          ls -la device/3d/*.stl
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: fsk-timekeeper-3d
+          path: |
+            device/3d/*.stl
+            device/3d/*.scad
+          if-no-files-found: error

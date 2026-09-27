@@ -1,0 +1,42 @@
+name: Build bundled HTML
+
+on:
+  push:
+    branches:
+      - '**'
+    paths:
+      - 'console/**'
+      - 'device/firmware/src/protocol.h'
+      - 'device/firmware/src/proto_usb.h'
+      - 'device/firmware/src/config.h'
+      - 'device/firmware/tests/usb_lines.txt'
+      - '.github/workflows/web-bundle.yml'
+  workflow_call:
+  workflow_dispatch:
+
+jobs:
+  build-html:
+    name: Build html
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: console/package-lock.json
+      - name: Install
+        run: cd console && npm ci
+      # The constants and firmware-lines tests read firmware files, so the whole repo is checked out.
+      - name: Test
+        run: cd console && npm test
+      - name: Build
+        run: |
+          cd console
+          npm run build:single
+          mv dist-single/index.html fsk-timekeeper-console.html
+      - uses: actions/upload-artifact@v7
+        with:
+          name: html
+          path: console/fsk-timekeeper-console.html
+          if-no-files-found: error
