@@ -29,7 +29,14 @@
 #define PIN_LORA_RXEN  PIN(0, 24) /* RF switch RX enable */
 
 /* Sensor input (BA2M NPN open-collector, falling edge) — sensor role */
-#define PIN_SENSOR_IN  PIN(1, 11) /* GPIOTE capture (falling) — port 1 */
+#define PIN_SENSOR_IN  PIN(1, 13) /* GPIOTE capture (falling) — port 1 */
+
+/* GPS (ATGM336H breakout, master only; sensor boards leave U4 unpopulated).
+ * P0.09/P0.10 are the nRF52840 NFC antenna pins — board.c clears
+ * UICR.NFCPINS.PROTECT once per board so they work as plain GPIO. */
+#define PIN_GPS_PPS    PIN(0, 9)  /* 1PPS in — GPIOTE capture (rising); re-uses the SENSOR channel on the master */
+#define PIN_GPS_RXD    PIN(1, 11) /* UARTE0 RXD <- GPS TXD (NMEA, 9600 8N1) */
+#define PIN_GPS_TXD    PIN(0, 10) /* UARTE0 TXD -> GPS RXD (CASIC config commands) */
 
 /* VCC enable gate — must be driven HIGH at boot (DESIGN.md §8) */
 #define PIN_EXT_POWER  PIN(0, 13)
@@ -130,6 +137,20 @@
  * this value is reported but never used to calibrate ticks. */
 #define USB_CLOCK_WINDOW_FRAMES 10000u
 #define USB_CLOCK_MAX_GAP_FRAMES 500u
+
+/* GPS PPS calibration (master). Consecutive PPS edges must be one nominal second
+ * apart within PPS_MAX_DEV_PPM (3200 ticks): a missed pulse, a glitch or an RC-
+ * fallback clock fails the gate and restarts the window. Per-edge noise is ~30 ns
+ * PPS jitter ⊕ 62.5 ns capture quantisation ≈ 0.56 tick, so a span of N seconds
+ * resolves ≈ 50/N ppb; the trailing window is capped at PPS_MAX_SPAN_S so the
+ * estimate follows crystal temperature drift within about a minute. The estimate
+ * is reported on the P line and applied by the console — wire ticks stay raw. */
+#define PPS_MAX_DEV_PPM     200u
+#define PPS_MIN_SPAN_S      8u
+#define PPS_MAX_SPAN_S      64u
+#define PPS_STALE_MS        2500u  /* no PPS edge for this long -> estimate reported invalid */
+#define GPS_RMC_LAG_MAX_MS  900u   /* an RMC completed within this after a PPS edge carries that edge's UTC */
+#define GPS_CFG_RESEND_MS   10000u /* $PCAS03 (GGA+RMC only; volatile in the module) re-sent at most this often */
 
 /* Event-timestamp skew correction (DESIGN §2.5). The sensor's offset is measured at a
  * beacon (sync_ref_tick); applying the measured clock skew to the drift since that anchor

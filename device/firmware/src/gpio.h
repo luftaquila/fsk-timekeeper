@@ -34,6 +34,15 @@ static inline void gpio_cfg_input_pullup(uint32_t pin)
         ((uint32_t)GPIO_PIN_CNF_PULL_Pullup   << GPIO_PIN_CNF_PULL_Pos);
 }
 
+/* Input with pull-down — an unpopulated/unpowered driver reads as a steady low. */
+static inline void gpio_cfg_input_pulldown(uint32_t pin)
+{
+    gpio_port(pin)->PIN_CNF[pin & 31u] =
+        ((uint32_t)GPIO_PIN_CNF_DIR_Input     << GPIO_PIN_CNF_DIR_Pos)   |
+        ((uint32_t)GPIO_PIN_CNF_INPUT_Connect << GPIO_PIN_CNF_INPUT_Pos) |
+        ((uint32_t)GPIO_PIN_CNF_PULL_Pulldown << GPIO_PIN_CNF_PULL_Pos);
+}
+
 /* Plain input, no pull — for lines the far end drives (e.g. radio BUSY/DIO1). */
 static inline void gpio_cfg_input(uint32_t pin)
 {

@@ -41,7 +41,7 @@ SIZE    := $(PREFIX)size
 APP_C := \
 	src/main.c src/board.c src/sensor.c src/meas.c src/capture.c \
 	src/secure.c src/keystore.c src/proto_usb.c src/node_id.c \
-	src/usb.c src/usb_descriptors.c
+	src/usb.c src/usb_descriptors.c src/gps.c
 APP_CXX := src/radio_hal.cpp src/radio.cpp src/runtime.cpp
 
 # Vendored: warnings off. RadioLib is built whole (non-Arduino mode, our HAL);

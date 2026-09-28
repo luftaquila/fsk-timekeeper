@@ -19,6 +19,11 @@
  *        (forgery/wrong-key), for a sensor its replay/freshness/binding rejects;
  *        provisioned = 1 if the master holds a fleet key, else 0)
  *     T <32-hex token> <tick> <master_boot_id>
+ *     P <pps_tick> <utc_s> <ppb> <pps_valid> <fix> <sats> <span_s>
+ *       (master GPS, ~1 Hz and in ?STATUS: tick of the latest PPS edge, its UTC in
+ *        Unix seconds or 0, HFXO error in parts per billion measured against PPS
+ *        over <span_s> seconds (+ = timebase fast; 0 unless pps_valid), GGA fix
+ *        quality and satellites. Ticks on E/H/T stay raw — the PC applies ppb.)
  *     A <cmd> OK
  *     X <reason>
  *   PC -> Master (K and ?ID/PING also accepted by sensors, for provisioning):
@@ -58,6 +63,8 @@ void pu_emit_diag(uint32_t node_id, int is_master,
                   uint16_t queue_depth, uint16_t queue_overflow,
                   int usb_ref_valid, int32_t usb_ref_ppm, uint32_t sensor_boot_id, uint32_t master_boot_id);
 void pu_emit_clock(const char *token, uint64_t tick, uint32_t master_boot_id);
+void pu_emit_pps(uint64_t pps_tick, uint32_t utc_s, int32_t ppb, int pps_valid,
+                 uint8_t fix, uint8_t sats, uint8_t span_s);
 void pu_emit_ack(const char *cmd);
 void pu_emit_err(const char *reason);
 
