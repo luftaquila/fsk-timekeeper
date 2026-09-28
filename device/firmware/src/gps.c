@@ -86,6 +86,12 @@ static uint64_t s_pps_last_tick;
 static uint32_t s_pps_last_ms;
 static int s_pps_have;
 
+/* Only edges produced while the receiver reports a valid fix (RMC status A) enter the
+ * window: without one the module may keep pulsing from its own TCXO (holdover / not yet
+ * fixed), which is stable enough to pass the deviation gate yet is not a UTC reference.
+ * The window restarts on the first edge after the fix returns. */
+static int s_nav_valid;
+
 static void pps_feed(uint64_t tick, uint32_t now_ms)
 {
     if (s_pps_have) {
@@ -98,6 +104,7 @@ static void pps_feed(uint64_t tick, uint32_t now_ms)
     s_pps_ring[s_pps_w] = tick;
     s_pps_w = (uint8_t)((s_pps_w + 1u) % PPS_RING);
     if (s_pps_count < PPS_RING) { s_pps_count++; }
+    if (!s_nav_valid) { s_pps_count = 0; } /* edge kept for the UTC association only */
 }
 
 /* ppb = err * 1e9 / (n * 16e6) = err * 125 / (2 n); |err| <= 64 * 3200 so no overflow. */
@@ -153,8 +160,13 @@ static uint32_t civil_to_epoch(int y, int m, int d, unsigned hh, unsigned mm, un
  * on the PPS edge that opened this second. */
 static void parse_rmc(char *f[], unsigned nf)
 {
+    int fixed = nf >= 3 && f[2][0] == 'A';
+    /* Fix lost, or regained: the PPS edges around the transition are not a UTC reference
+     * (holdover, phase re-alignment), so the estimation window starts over. */
+    if (fixed != s_nav_valid) { s_pps_count = 0; }
+    s_nav_valid = fixed;
     if (nf < 10 || !digits2(f[1]) || !digits2(f[1] + 2) || !digits2(f[1] + 4) ||
-        !digits2(f[9]) || !digits2(f[9] + 2) || !digits2(f[9] + 4) || f[2][0] != 'A') {
+        !digits2(f[9]) || !digits2(f[9] + 2) || !digits2(f[9] + 4) || !fixed) {
         s_rmc_valid = 0;
         return;
     }
@@ -277,7 +289,8 @@ void gps_report(gps_report_t *out)
     uint32_t now = board_millis();
     int32_t ppb = 0;
     uint8_t span = 0;
-    int valid = pps_estimate(&ppb, &span) &&
+    int valid = s_nav_valid &&
+                pps_estimate(&ppb, &span) &&
                 (uint32_t)(now - s_pps_last_ms) < PPS_STALE_MS &&
                 board_hfclk_xtal();
     out->pps_tick = s_pps_have ? s_pps_last_tick : 0;
