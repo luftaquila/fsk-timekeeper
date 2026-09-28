@@ -34,8 +34,9 @@ function act(fn) {
           <button class="btn btn-danger btn-sm" @click="act((f) => f.masterClockFault())">Master clock fault</button>
           <button class="btn btn-danger btn-sm" @click="act((f) => f.rebootMaster())">Reboot master</button>
           <button class="btn btn-ghost btn-sm" @click="act((f) => f.addSensor((0x10000000 + Math.floor(Math.random() * 0xefffffff)).toString(16).toUpperCase()))">Add sensor</button>
-          <span class="mono muted">queue {{ fake.queueLength }}</span>
-        </template>
+          <button class="btn btn-ghost btn-sm" @click="act((f) => f.setGps({ ppb: f.gps.ppb ? 0 : 100000 }))">GPS {{ fake.gps.ppb ? "→ 0" : "+100" }} ppm</button>
+          <button class="btn btn-ghost btn-sm" @click="act((f) => f.setGps({ valid: !f.gps.valid, fix: f.gps.valid ? 0 : 1 }))">GPS {{ fake.gps.valid ? "off" : "on" }}</button>
+$1        </template>
       </div>
     </div>
   </div>

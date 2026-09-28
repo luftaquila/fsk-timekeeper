@@ -1,6 +1,6 @@
 import { describe, it } from "vitest";
 import assert from "node:assert/strict";
-import { formatLapMs, masterTickDeltaMs, masterTickDurationsMs, masterTickDistanceBelowMs } from "../src/lib/event-timing.js";
+import { formatLapMs, masterTickDeltaMs, masterTickDurationsMs, masterTickDistanceBelowMs, tickDurationMs } from "../src/lib/event-timing.js";
 
 describe("master-tick arithmetic", () => {
   it("formats ms as MM:SS.mmm", () => {
@@ -21,6 +21,19 @@ describe("master-tick arithmetic", () => {
     assert.equal(masterTickDurationsMs([8000n, 8000n]), 1); // 0.5 ms + 0.5 ms -> 1 ms, not 1 + 1
     assert.equal(masterTickDurationsMs([]), 0);
     assert.equal(masterTickDurationsMs(["16000", 16000n, 16000]), 3);
+  });
+
+  it("applies the GPS ppb correction with exact rational rounding", () => {
+    // 60 s at nominal = 960 000 000 ticks; +100 ppm fast clock -> 59994 ms, -100 ppm -> 60006 ms
+    assert.equal(masterTickDeltaMs("960000000", "0", 100000), 59994);
+    assert.equal(masterTickDeltaMs("960000000", "0", -100000), 60006);
+    assert.equal(masterTickDeltaMs("960000000", "0", 0), 60000);
+    assert.equal(masterTickDurationsMs([480000000n, 480000000n], 100000), 59994);
+    assert.equal(tickDurationMs(-16000n, 0), -1);
+    assert.equal(tickDurationMs("8000", 0), 1); // half up, unchanged at nominal
+    assert.equal(tickDurationMs(7999n, 0), 0);
+    assert.throws(() => masterTickDeltaMs("16000", "0", 1.5), /invalid ppb/);
+    assert.throws(() => masterTickDeltaMs("16000", "0", 2_000_000), /invalid ppb/);
   });
 
   it("compares debounce windows in raw ticks without endpoint rounding", () => {

@@ -10,6 +10,7 @@
  *     <skew_valid> <XTAL|RC> <sync_age_ms> <capture_overflow> <event_drop> <queue_depth>
  *     <queue_overflow> <usb_ref_valid> <usb_ref_ppm> <sensor_boot_id> <master_boot_id>
  *   T <request_id> <tick> <master_boot_id>
+ *   P <pps_tick> <utc_s|0> <ppb> <pps_valid> <fix> <sats> <span_s>   (master with GPS, ~1 Hz)
  *   A <cmd> OK
  *   X <reason>
  * Host -> master: ?ID ?STATUS PING K<64hex> T<32hex> C <node> <ev_seq> <tick> <mboot> <sboot>
@@ -113,6 +114,11 @@ export function parseLine(line) {
       return { type: "H", nowTick: t[1], uptimeMs: num(t[2]), beaconSeq: num(t[3]), nseen: num(t[4]) };
     case "T":
       return { type: "T", requestId: t[1], masterTick: t[2], masterBootId: num(t[3]) };
+    case "P":
+      return {
+        type: "P",
+        pps: { tick: t[1], utc: num(t[2]), ppb: num(t[3]), valid: num(t[4]), fix: num(t[5]), sats: num(t[6]), span: num(t[7]) },
+      };
     case "I":
       return {
         type: "I",
@@ -220,6 +226,23 @@ export function normalizeTelemetry(t, now = Date.now()) {
     link_state: ["online", "degraded", "lost"].includes(t.link_state) ? t.link_state : null,
     last_seen_at: heardAgeMs === null ? now : now - heardAgeMs,
     received_at: now,
+  };
+}
+
+// GPS/PPS report normalisation. `tick` = master tick of the latest PPS edge (0 when none yet),
+// `utc` = Unix seconds of that edge or null, `ppb` = HFXO error (positive = fast), `at` = receive time.
+export function normalizePps(p, now = Date.now()) {
+  const tick = tickToText(p.tick);
+  if (tick == null) return null;
+  return {
+    tick,
+    utc: Number.isInteger(p.utc) && p.utc > 0 ? p.utc : null,
+    ppb: Number.isInteger(p.ppb) ? p.ppb : 0,
+    valid: bitOrNull(p.valid) ?? 0,
+    fix: nonNegOrNull(p.fix) ?? 0,
+    sats: nonNegOrNull(p.sats) ?? 0,
+    span: nonNegOrNull(p.span) ?? 0,
+    at: now,
   };
 }
 

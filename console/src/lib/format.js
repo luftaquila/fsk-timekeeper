@@ -11,8 +11,15 @@ export function msToClockStr(ms) {
 }
 
 // Fractional ms between two raw ticks (display only; official results round once via event-timing).
-export function tickDeltaToMs(end, start) {
-  return Number(BigInt(end) - BigInt(start)) / Number(TICKS_PER_MS);
+// ppb = master HFXO error from GPS PPS, 0 = nominal.
+export function tickDeltaToMs(end, start, ppb = 0) {
+  return (Number(BigInt(end) - BigInt(start)) / Number(TICKS_PER_MS)) * (1e9 / (1e9 + ppb));
+}
+
+// ppb -> "±x.xx ppm"
+export function fmtPpm(ppb) {
+  const ppm = ppb / 1000;
+  return `${ppm >= 0 ? "+" : "−"}${Math.abs(ppm).toFixed(2)} ppm`;
 }
 
 export function fmtNum(v, digits = 1) {

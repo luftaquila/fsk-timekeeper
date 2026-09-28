@@ -74,6 +74,15 @@ export function createFakeTransport({ onLine, onDisconnect }) {
   function identity() {
     return `I FSK-WL 1.0.0 ${devid} 921.30 7 250.00 16000`;
   }
+  // GPS/PPS report: latest PPS edge = the last whole second, never before the master booted (tick ≥ 0).
+  const gps = { ppb: 0, valid: true, fix: 1, sats: 9, span: 64 };
+  function ppsLine() {
+    const now = Date.now();
+    const edgeMs = Math.max(t0, now - (now % 1000));
+    const tick = tickBase + BigInt(edgeMs - t0) * TICKS_PER_MS;
+    const valid = gps.valid ? 1 : 0;
+    return `P ${tick} ${gps.fix ? Math.floor(edgeMs / 1000) : 0} ${valid ? gps.ppb : 0} ${valid} ${gps.fix} ${gps.sats} ${valid ? gps.span : 0}`;
+  }
   function heartbeat() {
     return `H ${nowTick()} ${Date.now() - t0} ${seq % 256} ${sensors.size}`;
   }
@@ -86,14 +95,16 @@ export function createFakeTransport({ onLine, onDisconnect }) {
     const tick = String(s.lastTick != null && s.lastTick >= at ? s.lastTick + TICKS_PER_MS : at);
     enqueue({ node, ev_seq: evSeq++ % 65536, tick, flags: 47, rssi: s.rssi, snr: s.snr, master_boot: masterBoot, sensor_boot: s.boot, capture_seq: s.captureSeq, end_seq: s.captureSeq, end_tick: tick, sync_age: 300 });
   }
-  function crossing(node, { offsetMs = 0, flags = 15 } = {}) {
+  // Returns the capture tick (string); `at` pins it exactly instead of now + offsetMs.
+  function crossing(node, { offsetMs = 0, flags = 15, at = null } = {}) {
     const s = addSensor(node);
     s.captureSeq = (s.captureSeq + 1) >>> 0;
-    const at = nowTick() + BigInt(offsetMs) * TICKS_PER_MS;
-    s.lastTick = s.lastTick != null && s.lastTick > at ? s.lastTick : at;
-    const tick = String(at);
+    const when = at ?? nowTick() + BigInt(offsetMs) * TICKS_PER_MS;
+    s.lastTick = s.lastTick != null && s.lastTick > when ? s.lastTick : when;
+    const tick = String(when);
     enqueue({ node: node.toUpperCase(), ev_seq: evSeq++ % 65536, tick, flags, rssi: s.rssi, snr: s.snr, master_boot: masterBoot, sensor_boot: s.boot, capture_seq: s.captureSeq, end_seq: s.captureSeq, end_tick: tick, sync_age: 300 });
     s.pendingCount++;
+    return tick;
   }
   function loss(node, n = 1) {
     const s = addSensor(node);
@@ -136,6 +147,7 @@ export function createFakeTransport({ onLine, onDisconnect }) {
         emit(heartbeat());
         for (const [node, s] of sensors) emit(diagLine(node, s));
         emit(masterDiag());
+        emit(ppsLine());
         emit("A STATUS OK");
         break;
       case "PING":
@@ -181,6 +193,7 @@ export function createFakeTransport({ onLine, onDisconnect }) {
         emit(heartbeat());
         if (seq % 5 === 0) emit(masterDiag());
         if (!provisioned && seq % 5 === 0) emit("X noprov");
+        emit(ppsLine());
       }, 1000),
     );
     timers.push(
@@ -240,6 +253,14 @@ export function createFakeTransport({ onLine, onDisconnect }) {
     rebootMaster,
     setProvisioned(v) {
       provisioned = !!v;
+    },
+    // GPS scenario: { ppb, valid, fix, sats, span }
+    setGps(patch) {
+      Object.assign(gps, patch);
+      if (open) emit(ppsLine());
+    },
+    get gps() {
+      return { ...gps };
     },
     get queueLength() {
       return queue.length;

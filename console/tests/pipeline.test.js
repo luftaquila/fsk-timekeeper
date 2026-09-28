@@ -91,7 +91,7 @@ describe("pipeline with the fake master", () => {
     assert.equal(history.rows.length, 1);
     assert.equal(history.rows[0].verification, "pending");
 
-    fake.crossing(a);
+    const startTick = fake.crossing(a);
     fake.crossing(b, { offsetMs: 1000 });
     await waitFor(() => timing.live.crossings.length === 2);
     assert.equal(timing.live.crossings[0].role, "start");
@@ -211,4 +211,43 @@ describe("pipeline with the fake master", () => {
     timing.stop();
     await device.disconnect();
   });
+  it("freezes the GPS calibration at START and stamps the run with UTC", { timeout: 20000 }, async () => {
+    const { device, settings, timing, history } = await boot();
+    const fake = await connectFake(device);
+    const [a, b] = [...fake.sensors.keys()];
+    settings.setMapping(a, { role: "start" });
+    settings.setMapping(b, { role: "finish" });
+    fake.setGps({ ppb: 500000, valid: true, fix: 1, sats: 9, span: 64 }); // +500 ppm: an exact 2 s interval reads 1999 ms
+    await waitFor(() => device.pps?.valid === 1 && device.pps.ppb === 500000);
+    assert.equal(await timing.start("sprint", "gps"), true, toasts.error.join(" | "));
+    assert.equal(timing.run.calib.ppb, 500000);
+    assert.match(timing.run.startedUtc, /^\d{4}-\d{2}-\d{2}T/);
+    fake.setGps({ ppb: 0 }); // a later change must not affect the frozen run
+    const startTick = fake.crossing(a);
+    fake.crossing(b, { at: BigInt(startTick) + 2000n * 16000n });
+    await sleep(2100); // both sensors checkpoint past the finish
+    fake.checkpoint(a);
+    fake.checkpoint(b);
+    await waitFor(() => timing.run.verification === "verified");
+    assert.equal(timing.run.result, 1999);
+    await waitFor(() => history.rows[0].verification === "verified");
+    assert.equal(history.rows[0].ppb, 500000);
+    assert.equal(history.rows[0].startedUtc, timing.run.startedUtc);
+    assert.equal(device.dropped.count, 0);
+    await device.disconnect();
+
+    // no valid PPS -> nominal
+    const again = await boot();
+    const fake2 = await connectFake(again.device);
+    const [c, d] = [...fake2.sensors.keys()];
+    again.settings.setMapping(c, { role: "start" });
+    again.settings.setMapping(d, { role: "finish" });
+    fake2.setGps({ valid: false, fix: 0 });
+    await waitFor(() => again.device.pps && again.device.pps.valid === 0);
+    assert.equal(await again.timing.start("sprint"), true, toasts.error.join(" | "));
+    assert.equal(again.timing.run.calib, null);
+    assert.equal(again.timing.run.startedUtc, null);
+    await again.device.disconnect();
+  });
+
 });

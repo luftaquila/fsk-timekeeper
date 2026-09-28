@@ -3,7 +3,7 @@ import { ref, computed } from "vue";
 import { useTimingStore } from "../stores/timing";
 import { useSettingsStore } from "../stores/settings";
 import { MODE_LABEL } from "../lib/constants";
-import { msToClockStr } from "../lib/format";
+import { msToClockStr, fmtPpm } from "../lib/format";
 import RunControlCard from "../components/RunControlCard.vue";
 import RunSetupCard from "../components/RunSetupCard.vue";
 import TimerCard from "../components/TimerCard.vue";
@@ -130,10 +130,11 @@ function delta(ms) {
         <div class="card-body result-body">
           <div class="result-time mono">{{ source.result != null ? msToClockStr(source.result) : "—" }}</div>
           <div class="result-meta">
-            <span v-if="source.verification === 'verified'" class="badge badge-success">official (raw ticks, rounded once)</span>
+            <span v-if="source.verification === 'verified'" class="badge badge-success">official</span>
             <span v-else-if="source.verification === 'invalid'" class="badge badge-danger">invalid</span>
             <span v-else-if="source.run" class="badge badge-warning">pending</span>
-            <span v-if="source.run?.label" class="lbl">{{ source.run.label }}</span>
+            <span v-if="source.run" class="badge" :class="source.calib ? 'badge-primary' : 'badge-default'">{{ source.calib ? `GPS-calibrated ${fmtPpm(source.calib.ppb)}` : "nominal 16 MHz" }}</span>
+            <span v-if="source.run?.note" class="lbl">{{ source.run.note }}</span>
           </div>
         </div>
       </div>

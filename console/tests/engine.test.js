@@ -106,6 +106,23 @@ describe("createRun", () => {
     assert.equal(start(sprintLog(), "sprint", SPRINT, { lapTarget: 4 }).lapTarget, null);
   });
 
+  it("freezes the GPS calibration into the run and applies it to results", () => {
+    const calibration = { ppb: 100000, ppsTick: String(T0 - 1000n), utc: 1727500000, fix: 1, sats: 9, span: 64 };
+    const log = sprintLog();
+    const run = createRun({
+      mode: "sprint", clock: { master_tick: String(T0), master_boot_id: 1 }, mappings: SPRINT,
+      findCheckpoint: log.findCheckpoint, currentSensorBoot: () => 100, lastSeq: log.rows.length, calibration, now: NOW,
+    });
+    assert.deepEqual(run.calib, calibration);
+    log.capture("A", 1000);
+    log.capture("B", 61000);
+    log.checkpoint("A", 62000);
+    log.checkpoint("B", 62000);
+    assert.equal(evaluateRun(run, log.since(run.cursor), 300).result, 59994);
+    assert.equal(evaluateRun({ ...run, calib: null }, log.since(run.cursor), 300).result, 60000);
+    assert.equal(start(sprintLog(), "sprint", SPRINT).calib, null);
+  });
+
   it("refuses to start without a fresh healthy checkpoint from the current boot", () => {
     const log = makeLog();
     assert.throws(() => start(log, "sprint", SPRINT), (e) => e instanceof EngineError && e.code === "checkpoint" && e.node === "A");

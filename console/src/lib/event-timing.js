@@ -1,6 +1,12 @@
-/* Master-tick arithmetic (pure). Official results subtract raw 64-bit ticks and round to ms once. */
+/* Master-tick arithmetic (pure). Official results subtract raw 64-bit ticks and round to ms once.
+ *
+ * `ppb` is the master HFXO error measured against GPS PPS (parts per billion, positive = the
+ * 16 MHz timebase runs fast). 0 = nominal 16 000 ticks/ms. With ppb the real rate is
+ * 16e6·(1e9+ppb)/1e9 ticks/s, so ms = ticks·62500/(1e9+ppb), rounded half up in exact integers.
+ */
 
 export const MASTER_TICKS_PER_MS = 16000n;
+export const MAX_PPB = 1_000_000;
 const MASTER_TICK_MAX = (1n << 64n) - 1n;
 
 function masterTick(value) {
@@ -12,23 +18,41 @@ function masterTick(value) {
   throw new TypeError("invalid master tick");
 }
 
-function roundTickDuration(ticks) {
-  if (ticks < 0n) return -Number((-ticks + MASTER_TICKS_PER_MS / 2n) / MASTER_TICKS_PER_MS);
-  return Number((ticks + MASTER_TICKS_PER_MS / 2n) / MASTER_TICKS_PER_MS);
+function checkPpb(ppb) {
+  if (!Number.isInteger(ppb) || Math.abs(ppb) > MAX_PPB) throw new TypeError("invalid ppb");
+  return BigInt(ppb);
+}
+
+// ticks (bigint, may be negative) -> ms, rounded half away from zero, exact rational arithmetic.
+function roundTickDuration(ticks, ppb = 0) {
+  const d = 1_000_000_000n + checkPpb(ppb);
+  if (ticks < 0n) return -Number((-ticks * 125000n + d) / (2n * d));
+  return Number((ticks * 125000n + d) / (2n * d));
 }
 
 export function masterTickDelta(end, start) {
   return masterTick(end) - masterTick(start);
 }
 
-export function masterTickDeltaMs(end, start) {
-  return roundTickDuration(masterTickDelta(end, start));
+export function masterTickDeltaMs(end, start, ppb = 0) {
+  return roundTickDuration(masterTickDelta(end, start), ppb);
 }
 
-export function masterTickDurationsMs(durations) {
-  return roundTickDuration((durations || []).reduce((sum, value) => sum + masterTick(value), 0n));
+export function masterTickDurationsMs(durations, ppb = 0) {
+  return roundTickDuration((durations || []).reduce((sum, value) => sum + masterTick(value), 0n), ppb);
 }
 
+// A signed tick count (bigint / safe integer / decimal string) -> ms.
+export function tickDurationMs(ticks, ppb = 0) {
+  let t;
+  if (typeof ticks === "bigint") t = ticks;
+  else if (typeof ticks === "number" && Number.isSafeInteger(ticks)) t = BigInt(ticks);
+  else if (typeof ticks === "string" && /^-?\d{1,20}$/.test(ticks)) t = BigInt(ticks);
+  else throw new TypeError("invalid tick count");
+  return roundTickDuration(t, ppb);
+}
+
+// Debounce windows compare raw ticks at the nominal rate; a ppm-level scale is irrelevant here.
 export function masterTickDistanceBelowMs(a, b, windowMs) {
   if (!Number.isInteger(windowMs) || windowMs < 0) return false;
   const delta = masterTick(a) - masterTick(b);

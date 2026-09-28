@@ -3,6 +3,7 @@ import { computed } from "vue";
 import { useTimingStore } from "../stores/timing";
 import { useSettingsStore } from "../stores/settings";
 import { MODES, MODE_LABEL } from "../lib/constants";
+import { fmtPpm } from "../lib/format";
 
 defineProps({ modelValue: { type: String, default: "" } });
 const emit = defineEmits(["update:modelValue"]);
@@ -51,7 +52,7 @@ function onTarget(e) {
       </div>
 
       <div v-if="timing.run" class="run-meta">
-        <span>{{ timing.run.note || "(no note)" }}</span>
+        <span>{{ timing.run.note || "(no note)" }}<span v-if="timing.run.calib" class="ppm">{{ fmtPpm(timing.run.calib.ppb) }}</span></span>
         <span class="badge" :class="timing.run.verification === 'verified' ? 'badge-success' : timing.run.verification === 'invalid' ? 'badge-danger' : 'badge-warning'">{{ timing.run.verification }}</span>
       </div>
     </div>
@@ -59,6 +60,11 @@ function onTarget(e) {
 </template>
 
 <style scoped>
+.ppm {
+  margin-left: 0.5rem;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+}
 .run-meta {
   display: flex;
   justify-content: space-between;

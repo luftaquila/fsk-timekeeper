@@ -10,7 +10,7 @@ import { createRun, evaluateRun, invalidateRun, closeRun, shouldInvalidateOnMast
 import { wirelessQuality, missingRoles as missingRolesOf } from "../lib/quality";
 import { encodeRun, decodeRun } from "../lib/run-codec";
 import { MODES } from "../lib/constants";
-import { masterTickDistanceBelowMs, masterTickDurationsMs } from "../lib/event-timing";
+import { masterTickDistanceBelowMs, masterTickDurationsMs, tickDurationMs } from "../lib/event-timing";
 import { CAPTURE_HEALTH } from "../lib/capture-integrity";
 import { msToClockStr, tickDeltaToMs } from "../lib/format";
 
@@ -37,13 +37,15 @@ export const useTimingStore = defineStore("timing", () => {
   const armed = computed(() => !!run.value?.armed);
   const fault = computed(() => run.value?.fault ?? null);
   const lightColor = computed(() => (!run.value ? "grey" : run.value.armed ? "green" : "red"));
-  const laps = computed(() => (run.value?.lapTicks || []).map((t) => masterTickDurationsMs([t])));
+  // HFXO correction frozen into the run (0 = nominal 16 MHz).
+  const ppb = computed(() => run.value?.calib?.ppb ?? 0);
+  const laps = computed(() => (run.value?.lapTicks || []).map((t) => masterTickDurationsMs([t], ppb.value)));
   // Laps derived from raw crossings (immediate, before verification).
   const rawLaps = computed(() => {
     const starts = live.crossings.filter((c) => c.role === "start");
     const out = [];
     for (let i = 1; i < starts.length; i++) {
-      out.push({ ms: tickDeltaToMs(starts[i].tick, starts[i - 1].tick), confirmed: starts[i].confirmed && starts[i - 1].confirmed });
+      out.push({ ms: tickDeltaToMs(starts[i].tick, starts[i - 1].tick, ppb.value), confirmed: starts[i].confirmed && starts[i - 1].confirmed });
     }
     return out;
   });
@@ -133,6 +135,7 @@ export const useTimingStore = defineStore("timing", () => {
         notyf.error(q.reasons[0].reason);
         return false;
       }
+      const calibration = device.ppsCalibration();
       const next = createRun({
         mode,
         note,
@@ -142,7 +145,16 @@ export const useTimingStore = defineStore("timing", () => {
         currentSensorBoot: (node) => device.telemetry[node]?.sensor_boot_id ?? null,
         lastSeq: cursorBefore,
         lapTarget: mode === "laps" ? settings.state.lapTarget : null,
+        calibration,
       });
+      // Absolute start time from the PPS anchor (UTC second of the last PPS edge + tick offset).
+      next.startedUtc = null;
+      if (calibration?.utc) {
+        const delta = BigInt(clock.master_tick) - BigInt(calibration.ppsTick);
+        if (delta >= 0n && delta < 5n * 16_000_000n) {
+          next.startedUtc = new Date(calibration.utc * 1000 + tickDurationMs(delta, calibration.ppb)).toISOString();
+        }
+      }
       resetLive();
       settings.rememberNote(note);
       setRun(next);
@@ -192,7 +204,7 @@ export const useTimingStore = defineStore("timing", () => {
     live.crossings.push({ key, node_id: row.node_id, role: source.role, tick: row.master_tick, ms: null, receivedAt: row.received_at, confirmed: false });
     live.crossings.sort((a, b) => (BigInt(a.tick) < BigInt(b.tick) ? -1 : BigInt(a.tick) > BigInt(b.tick) ? 1 : 0));
     const first = live.crossings.find((c) => c.role === "start");
-    for (const c of live.crossings) c.ms = first ? tickDeltaToMs(c.tick, first.tick) : null;
+    for (const c of live.crossings) c.ms = first ? tickDeltaToMs(c.tick, first.tick, ppb.value) : null;
   }
 
   function applyEvaluation(result) {
@@ -300,6 +312,9 @@ export const useTimingStore = defineStore("timing", () => {
     },
     get fault() {
       return fault.value;
+    },
+    get calib() {
+      return run.value?.calib ?? null;
     },
     get quality() {
       return qualityFor(useSettingsStore().state.mode);

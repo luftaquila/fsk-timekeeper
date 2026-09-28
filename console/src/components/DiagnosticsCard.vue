@@ -1,7 +1,7 @@
 <script setup>
 import { computed, ref, onMounted, onUnmounted } from "vue";
 import { useDeviceStore } from "../stores/device";
-import { fmtNum, fmtAgeMs } from "../lib/format";
+import { fmtNum, fmtAgeMs, fmtPpm } from "../lib/format";
 
 const device = useDeviceStore();
 const now = ref(Date.now());
@@ -43,8 +43,18 @@ function fmtVolt(mv) {
   return mv == null ? "—" : `${(mv / 1000).toFixed(3)} V`;
 }
 function clockDrift(r) {
-  if (isMaster(r)) return r.usb_ref_valid === 1 ? `${fmtNum(r.usb_ref_ppm, 0)} ppm (USB)` : "measuring";
+  if (isMaster(r)) {
+    const p = device.pps;
+    if (p?.valid === 1) return `${fmtPpm(p.ppb)} (GPS, ${p.span} s)`;
+    return r.usb_ref_valid === 1 ? `${fmtNum(r.usb_ref_ppm, 0)} ppm (USB)` : "measuring";
+  }
   return `${fmtNum(r.skew_ppm)} ppm`;
+}
+function gpsCell(r) {
+  if (!isMaster(r)) return "—";
+  const p = device.pps;
+  if (!p) return "—";
+  return p.fix ? `${p.sats} sats` : "no fix";
 }
 function timingHealth(r) {
   if (r.provisioned !== 1) return { state: "bad", label: "No key" };
@@ -86,7 +96,8 @@ function battTag(r) {
               <th class="tip" title="Key, HFXO, sync, capture and queue health combined">Timing</th>
               <th class="tip" title="Signal strength measured by the master (dBm)">RSSI</th>
               <th class="tip" title="Signal-to-noise ratio (dB)">SNR</th>
-              <th class="tip" title="Sensor: skew vs master. Master: HFXO vs USB SOF (diagnostic only)">Drift</th>
+              <th class="tip" title="Sensor: skew vs master. Master: HFXO vs GPS PPS (applied to results) or vs USB SOF (diagnostic only)">Drift</th>
+              <th class="tip" title="Master GNSS fix and satellites in use">GPS</th>
               <th class="tip" title="Beacons missed since boot (current consecutive gap)">Missed</th>
               <th class="tip" title="Event delivery latency (ms)">Latency</th>
               <th class="tip" title="nRF die temperature">Temp</th>
@@ -102,6 +113,7 @@ function battTag(r) {
               <td class="mono">{{ isMaster(r) ? "—" : `${fmtNum(r.rssi)} dBm` }}</td>
               <td class="mono">{{ isMaster(r) ? "—" : `${fmtNum(r.snr)} dB` }}</td>
               <td class="mono">{{ clockDrift(r) }}</td>
+              <td class="mono">{{ gpsCell(r) }}</td>
               <td class="mono">
                 <template v-if="isMaster(r)">—</template>
                 <template v-else>{{ r.rx_miss ?? 0 }}<span :class="{ gap: r.beacon_gap }"> ({{ r.beacon_gap ?? 0 }})</span></template>
