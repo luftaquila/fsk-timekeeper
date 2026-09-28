@@ -314,7 +314,7 @@ describe("pipeline with the fake master", () => {
     await device.disconnect();
   });
 
-  it("Stop needs the master clock: refused without one, falls back to the heartbeat when `T` fails", { timeout: 20000 }, async () => {
+  it("Stop needs the master's own clock answer: refused when `T` fails or the master is gone", { timeout: 20000 }, async () => {
     const { device, settings, timing } = await boot();
     const fake = await connectFake(device);
     const [a] = [...fake.sensors.keys()];
@@ -324,14 +324,18 @@ describe("pipeline with the fake master", () => {
     fake.crossing(a, { at: t0 + 400n * 16000n });
     await waitFor(() => timing.run.lapTicks.length === 1);
 
-    // `T` fails but heartbeats are fresh: the fence is the estimated current tick, never a past one.
+    // `T` unanswered: no PC-side estimate stands in — the run keeps running with its laps
     const realReadClock = device.readClock;
     device.readClock = () => Promise.reject(new Error("no reply"));
-    await sleep(500);
-    assert.equal(await timing.stop(), true, toasts.error.join(" | "));
-    assert.ok(BigInt(timing.run.stopTick) > t0 + 400n * 16000n, "fence lies after the last crossing");
-    assert.equal(timing.run.closed, false);
+    assert.equal(await timing.stop(), false);
+    assert.match(toasts.error.at(-1), /did not answer/);
+    assert.equal(timing.run.armed, true);
+    assert.equal(timing.run.stopTick, null);
+    assert.deepEqual(timing.laps, [400]);
     device.readClock = realReadClock;
+    await sleep(450);
+    assert.equal(await timing.stop(), true, toasts.error.join(" | ")); // the master answers again
+    assert.ok(BigInt(timing.run.stopTick) > t0 + 400n * 16000n);
     timing.reset();
 
     // no master at all: Stop is refused and the run stays armed
@@ -340,7 +344,7 @@ describe("pipeline with the fake master", () => {
     await waitFor(() => timing.live.crossings.length === 1);
     await device.disconnect();
     assert.equal(await timing.stop(), false);
-    assert.match(toasts.error.at(-1), /Reconnect the master/);
+    assert.match(toasts.error.at(-1), /not connected/);
     assert.equal(timing.run.armed, true);
     assert.equal(timing.run.closed, false);
   });

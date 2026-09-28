@@ -193,27 +193,30 @@ export const useTimingStore = defineStore("timing", () => {
   }
 
   // STOP: fence at the master's current tick. Crossings before it still count when they arrive
-  // late; the run closes once every sensor confirms its evidence through the fence. The fence
-  // comes from the master (`T`), or from its latest heartbeat when `T` fails; without either
-  // Stop is refused — a past tick would silently drop crossings still in flight.
+  // late; the run closes once every sensor confirms its evidence through the fence. Only the
+  // master's own answer (`T`) can be the fence: it is captured after the press, so nothing that
+  // crossed before Stop can fall outside it. Anything extrapolated on the PC (heartbeat + elapsed
+  // time, latest evidence) lags the master by the delivery delay and can fence out crossings
+  // already received — so without `T` Stop is refused and the run stays armed.
   async function stop() {
     const current = run.value;
     if (!current?.armed) return false;
     const device = useDeviceStore();
+    if (!device.connected) {
+      notyf.error("The master is not connected. Reconnect to stop, or Clear to discard the run.");
+      return false;
+    }
     let stopTick = null;
-    if (device.connected) {
-      try {
-        const clock = await device.readClock();
-        if (clock.master_boot_id === current.masterBootId) stopTick = BigInt(clock.master_tick);
-      } catch {
-        /* fall back to the heartbeat estimate below */
-      }
+    try {
+      const clock = await device.readClock();
+      if (clock.master_boot_id === current.masterBootId) stopTick = BigInt(clock.master_tick);
+    } catch {
+      /* refused below */
     }
     const latest = run.value;
     if (!latest || latest.runId !== current.runId || !latest.armed) return false;
-    if (stopTick == null && device.masterBootId === latest.masterBootId) stopTick = device.estimateTickNow();
     if (stopTick == null) {
-      notyf.error("The master clock is unavailable. Reconnect the master to stop, or Clear to discard the run.");
+      notyf.error("The master did not answer the clock request. Try Stop again, or Clear to discard the run.");
       return false;
     }
     applyEvaluation(evaluateRun(stopRun(latest, stopTick), eventLog.since(latest.cursor)));

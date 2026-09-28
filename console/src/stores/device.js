@@ -13,7 +13,6 @@ import { useTimingStore } from "./timing";
 
 const CONSOLE_LIMIT = 300;
 const PROVISION_TIMEOUT_MS = 3000;
-const HEARTBEAT_ESTIMATE_MAX_AGE_MS = 10000; // heartbeats are 1 Hz; older than this the link is gone
 
 export const useDeviceStore = defineStore("device", () => {
   const notyf = useNotification();
@@ -56,14 +55,6 @@ export const useDeviceStore = defineStore("device", () => {
   }
 
   // Wall-clock estimate of a master tick from the latest heartbeat (display only).
-  // Master tick "now", extrapolated from the latest heartbeat (1 Hz). Null when there is no
-  // fresh heartbeat; a few ms of PC/master drift over that window is immaterial for a fence.
-  function estimateTickNow(now = Date.now()) {
-    const hb = heartbeat.value;
-    if (!hb || now - hb.wallMs > HEARTBEAT_ESTIMATE_MAX_AGE_MS) return null;
-    return hb.tick + BigInt(Math.round((now - hb.wallMs) * Number(TICKS_PER_MS)));
-  }
-
   function tickToWallMs(tick) {
     const hb = heartbeat.value;
     if (!hb) return Date.now();
@@ -343,7 +334,6 @@ export const useDeviceStore = defineStore("device", () => {
     durableError,
     masterFresh,
     tickToWallMs,
-    estimateTickNow,
     connect,
     disconnect,
     transmitLine,
