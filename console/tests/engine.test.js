@@ -349,6 +349,32 @@ describe("evaluateRun — laps", () => {
     assert.equal(r.run.closed, true);
   });
 
+  it("a fault that certainly happened after Stop leaves the stopped run official", () => {
+    const log = lapsLog();
+    const run = start(log, "laps", LAPS);
+    for (const ms of [1000, 11000, 21000]) log.capture("A", ms);
+    const stopped = stopRun(run, tick(21500));
+    log.loss("A", 22000); // known capture time, after the fence
+    log.checkpoint("A", 23000);
+    const r = evaluateRun(stopped, log.since(run.cursor));
+    assert.equal(r.fault, null);
+    assert.equal(r.result, 20000);
+    assert.equal(r.run.verification, "verified");
+    assert.equal(r.run.closed, true);
+  });
+
+  it("a loss of unknown time after the last crossing still invalidates a stopped run", () => {
+    const log = lapsLog();
+    const run = start(log, "laps", LAPS);
+    for (const ms of [1000, 11000, 21000]) log.capture("A", ms);
+    const stopped = stopRun(run, tick(21500));
+    log.loss("A", 22000).flags = 95; // loss + time unknown: it may have crossed before the fence
+    log.checkpoint("A", 23000);
+    const r = evaluateRun(stopped, log.since(run.cursor));
+    assert.equal(r.fault?.node_id, "A");
+    assert.equal(r.run.verification, "invalid");
+  });
+
   it("stays pending and armed below the lap target", () => {
     const log = lapsLog();
     const run = start(log, "laps", LAPS, { lapTarget: 4 });

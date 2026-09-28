@@ -181,6 +181,10 @@ export function evaluateRun(run, rows, now = Date.now()) {
   }
   // A stopped run is official only once every source is confirmed through the stop tick.
   const stopConfirmed = stopTick != null && BigInt(verified.throughTick) >= stopTick;
+  // A fault that certainly happened after Stop cannot touch what was recorded before it. A
+  // session end (master timebase change, sensor reboot) still can: the fence can no longer be
+  // confirmed on a timebase that is gone.
+  const fault = verified.fault && stopTick != null && !verified.sessionEnded && BigInt(verified.faultTick) > stopTick ? null : verified.fault;
   let next = {
     ...run,
     lapTicks: laps,
@@ -193,13 +197,13 @@ export function evaluateRun(run, rows, now = Date.now()) {
     next.fault = null;
   }
   // A completed, verified interval before a later fault stays official.
-  if (!complete && (verified.fault || invalidDuration)) {
+  if (!complete && (fault || invalidDuration)) {
     next = invalidateRun(
       next,
-      [verified.fault || { node_id: null, reason: "The raw start→finish tick difference is not positive." }],
-      { awaitEvidence: !!verified.fault && !invalidDuration, kind: "measurement", now },
+      [fault || { node_id: null, reason: "The raw start→finish tick difference is not positive." }],
+      { awaitEvidence: !!fault && !invalidDuration, kind: "measurement", now },
     );
   }
   if (stopConfirmed && !next.closed) next = { ...next, closed: true };
-  return { run: next, accepted, laps, result, complete, invalidDuration, fault: verified.fault, throughTick: verified.throughTick };
+  return { run: next, accepted, laps, result, complete, invalidDuration, fault, throughTick: verified.throughTick };
 }

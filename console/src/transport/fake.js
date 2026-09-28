@@ -30,6 +30,7 @@ export function createFakeTransport({ onLine, onDisconnect }) {
   let masterClockFaulted = false;
   let cpTimer = null; // pending checkpoint request (coalesced until the next beacon)
   let cpRequests = 0; // `CP` commands received
+  let autoCheckpoint = true; // the master's own request after a capture/loss (tests switch it off for manual control)
   const sensors = new Map(); // id -> { boot, captureSeq, pendingCount, lastStatusAt, rssi, snr, batt }
 
   function nowTick() {
@@ -120,7 +121,7 @@ export function createFakeTransport({ onLine, onDisconnect }) {
     const tick = String(when);
     enqueue({ node: node.toUpperCase(), ev_seq: evSeq++ % 65536, tick, flags, rssi: s.rssi, snr: s.snr, master_boot: masterBoot, sensor_boot: s.boot, capture_seq: s.captureSeq, end_seq: s.captureSeq, end_tick: tick, sync_age: 300 });
     s.pendingCount++;
-    requestCheckpoint();
+    if (autoCheckpoint) requestCheckpoint();
     return tick;
   }
   function loss(node, n = 1) {
@@ -131,7 +132,7 @@ export function createFakeTransport({ onLine, onDisconnect }) {
     s.lastTick = s.lastTick != null && s.lastTick > at ? s.lastTick : at;
     const tick = String(at);
     enqueue({ node: node.toUpperCase(), ev_seq: evSeq++ % 65536, tick, flags: 31, rssi: s.rssi, snr: s.snr, master_boot: masterBoot, sensor_boot: s.boot, capture_seq: from, end_seq: s.captureSeq, end_tick: tick, sync_age: 300 });
-    requestCheckpoint();
+    if (autoCheckpoint) requestCheckpoint();
   }
   function rebootSensor(node) {
     const s = addSensor(node);
@@ -281,6 +282,10 @@ export function createFakeTransport({ onLine, onDisconnect }) {
     rebootMaster,
     setProvisioned(v) {
       provisioned = !!v;
+    },
+    // Off: no checkpoint request after a capture/loss (the `CP` command still works).
+    setAutoCheckpoint(v) {
+      autoCheckpoint = !!v;
     },
     // GPS scenario: { ppb, valid, fix, sats, span }
     setGps(patch) {

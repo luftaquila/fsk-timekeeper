@@ -56,9 +56,11 @@ async function boot({ keepStorage = false } = {}) {
 }
 
 // Connect the simulator and wait until its sensors reported and their first checkpoints are acked.
-async function connectFake(device) {
+// Checkpoints are under manual control unless a test turns the master's own requests back on.
+async function connectFake(device, { autoCheckpoint = false } = {}) {
   assert.equal(await device.connect({ kind: "fake" }), true);
   const fake = device.fakeTransport();
+  fake.setAutoCheckpoint(autoCheckpoint);
   await waitFor(() => device.identity && Object.keys(device.telemetry).length >= 3);
   await waitFor(() => fake.queueLength === 0 && device.stats.acks >= 2);
   return fake;
@@ -295,6 +297,52 @@ describe("pipeline with the fake master", () => {
     assert.equal(timing.run.result, 500);
     assert.equal(timing.run.verification, "verified");
     await device.disconnect();
+  });
+
+  it("a crossing makes the master request checkpoints, so a sprint completes on its own", { timeout: 20000 }, async () => {
+    const { device, settings, timing } = await boot();
+    const fake = await connectFake(device, { autoCheckpoint: true });
+    const [a, b] = [...fake.sensors.keys()];
+    settings.setMapping(a, { role: "start" });
+    settings.setMapping(b, { role: "finish" });
+    assert.equal(await timing.start("sprint", "auto"), true, toasts.error.join(" | "));
+    const s0 = BigInt(fake.crossing(a));
+    fake.crossing(b, { at: s0 + 700n * 16000n });
+    await waitFor(() => timing.run.closed);
+    assert.equal(timing.run.result, 700);
+    assert.equal(timing.run.verification, "verified");
+    await device.disconnect();
+  });
+
+  it("Stop needs the master clock: refused without one, falls back to the heartbeat when `T` fails", { timeout: 20000 }, async () => {
+    const { device, settings, timing } = await boot();
+    const fake = await connectFake(device);
+    const [a] = [...fake.sensors.keys()];
+    settings.setMapping(a, { role: "start" });
+    assert.equal(await timing.start("laps", "clock"), true, toasts.error.join(" | "));
+    const t0 = BigInt(fake.crossing(a));
+    fake.crossing(a, { at: t0 + 400n * 16000n });
+    await waitFor(() => timing.run.lapTicks.length === 1);
+
+    // `T` fails but heartbeats are fresh: the fence is the estimated current tick, never a past one.
+    const realReadClock = device.readClock;
+    device.readClock = () => Promise.reject(new Error("no reply"));
+    await sleep(500);
+    assert.equal(await timing.stop(), true, toasts.error.join(" | "));
+    assert.ok(BigInt(timing.run.stopTick) > t0 + 400n * 16000n, "fence lies after the last crossing");
+    assert.equal(timing.run.closed, false);
+    device.readClock = realReadClock;
+    timing.reset();
+
+    // no master at all: Stop is refused and the run stays armed
+    assert.equal(await timing.start("laps", "offline"), true, toasts.error.join(" | "));
+    fake.crossing(a);
+    await waitFor(() => timing.live.crossings.length === 1);
+    await device.disconnect();
+    assert.equal(await timing.stop(), false);
+    assert.match(toasts.error.at(-1), /Reconnect the master/);
+    assert.equal(timing.run.armed, true);
+    assert.equal(timing.run.closed, false);
   });
   it("freezes the GPS calibration at START and stamps the run with UTC", { timeout: 20000 }, async () => {
     const { device, settings, timing, history } = await boot();

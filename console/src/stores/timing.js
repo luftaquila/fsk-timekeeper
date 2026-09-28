@@ -192,19 +192,10 @@ export const useTimingStore = defineStore("timing", () => {
     }
   }
 
-  // Latest tick this run has evidence for (any row from its sensors under its master boot).
-  function latestEvidenceTick(current) {
-    let latest = BigInt(current.boundaryTick);
-    for (const row of eventLog.since(current.cursor)) {
-      if (row.master_boot_id !== current.masterBootId || !current.nodes[row.node_id]) continue;
-      const t = BigInt(row.master_tick);
-      if (t > latest) latest = t;
-    }
-    return latest;
-  }
-
   // STOP: fence at the master's current tick. Crossings before it still count when they arrive
-  // late; the run closes once every sensor confirms its evidence through the fence.
+  // late; the run closes once every sensor confirms its evidence through the fence. The fence
+  // comes from the master (`T`), or from its latest heartbeat when `T` fails; without either
+  // Stop is refused — a past tick would silently drop crossings still in flight.
   async function stop() {
     const current = run.value;
     if (!current?.armed) return false;
@@ -215,12 +206,16 @@ export const useTimingStore = defineStore("timing", () => {
         const clock = await device.readClock();
         if (clock.master_boot_id === current.masterBootId) stopTick = BigInt(clock.master_tick);
       } catch {
-        /* master unreachable: fence at the latest evidence instead */
+        /* fall back to the heartbeat estimate below */
       }
     }
     const latest = run.value;
     if (!latest || latest.runId !== current.runId || !latest.armed) return false;
-    if (stopTick == null) stopTick = latestEvidenceTick(latest);
+    if (stopTick == null && device.masterBootId === latest.masterBootId) stopTick = device.estimateTickNow();
+    if (stopTick == null) {
+      notyf.error("The master clock is unavailable. Reconnect the master to stop, or Clear to discard the run.");
+      return false;
+    }
     applyEvaluation(evaluateRun(stopRun(latest, stopTick), eventLog.since(latest.cursor)));
     if (run.value && !run.value.closed) requestCheckpointsUntilClosed(latest.runId);
     return true;

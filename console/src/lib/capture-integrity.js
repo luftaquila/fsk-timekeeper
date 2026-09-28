@@ -101,9 +101,12 @@ export function verifyCaptures(run, rows) {
   const events = captures
     .filter((row) => tick(row) <= through && (faultTick == null || tick(row) < faultTick))
     .sort((a, b) => (tick(a) < tick(b) ? -1 : tick(a) > tick(b) ? 1 : a.node_id.localeCompare(b.node_id)));
+  const faultStands = sessionEnded || (through != null && faultTick != null && through >= faultTick);
   return {
     events,
     throughTick: String(through ?? boundary - 1n),
-    fault: sessionEnded || (through != null && faultTick != null && through >= faultTick) ? fault : null,
+    fault: faultStands ? fault : null,
+    faultTick: faultStands ? String(faultTick) : null,
+    sessionEnded, // master timebase change or sensor reboot: the run's timebase no longer exists
   };
 }
