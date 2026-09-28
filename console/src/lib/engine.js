@@ -7,7 +7,9 @@
  *   nodes: { [node_id]: { boot, seq, role } },   // capture frontier at START
  *   cursor: number,                              // eventLog seq; evidence = rows with seq > cursor
  *   lapTarget: number|null,                      // laps: auto-stop after this many laps
+ *   debounceMs: number,                          // sensor debounce window frozen at START
  *   calib: null | { ppb, ppsTick, utc, fix, sats, span },  // GPS PPS calibration frozen at START
+ *   stopTick: string|null,                       // STOP: master tick at Stop; crossings up to it still count
  *   armed: boolean,                              // light green
  *   closed: boolean,                             // no more evidence accepted
  *   verification: "pending" | "verified" | "invalid",
@@ -18,7 +20,7 @@
  */
 import { verifyCaptures, CAPTURE_HEALTH, WIRELESS_PROTOCOL_VERSION } from "./capture-integrity";
 import { masterTickDelta, masterTickDeltaMs, masterTickDurationsMs, masterTickDistanceBelowMs } from "./event-timing";
-import { WIRELESS_STATUS_MAX_AGE_MS } from "./constants";
+import { WIRELESS_STATUS_MAX_AGE_MS, DEFAULT_DEBOUNCE_MS } from "./constants";
 
 export class EngineError extends Error {
   constructor(code, message, node = null) {
@@ -45,6 +47,7 @@ export function createRun({
   currentSensorBoot,
   lastSeq,
   lapTarget = null,
+  debounceMs = DEFAULT_DEBOUNCE_MS,
   calibration = null,
   now = Date.now(),
   statusMaxAgeMs = WIRELESS_STATUS_MAX_AGE_MS,
@@ -76,7 +79,9 @@ export function createRun({
     nodes,
     cursor,
     lapTarget: mode === "laps" && Number.isInteger(lapTarget) && lapTarget > 0 ? lapTarget : null,
+    debounceMs: Number.isInteger(debounceMs) && debounceMs >= 0 ? debounceMs : DEFAULT_DEBOUNCE_MS,
     calib: calibration && Number.isInteger(calibration.ppb) ? { ...calibration } : null,
+    stopTick: null,
     armed: true,
     closed: false,
     verification: "pending",
@@ -118,19 +123,29 @@ export function closeRun(run) {
   return { ...run, armed: false, closed: true };
 }
 
-// Master reboot while armed ends the run (evidence may still confirm an earlier interval).
+// STOP. Disarms at the master's stop tick: crossings captured before it still count even if
+// they arrive later, crossings after it are ignored, and the run closes once every source is
+// confirmed through the stop tick (a new START or Clear ends it regardless).
+export function stopRun(run, stopTick) {
+  return { ...run, armed: false, stopTick: String(stopTick) };
+}
+
+// Master reboot before the run closed ends it: the old timebase's evidence can no longer arrive.
 export function shouldInvalidateOnMasterBoot(run, masterBootId) {
-  return !!run && run.armed && !run.closed && masterBootId != null && run.masterBootId !== masterBootId;
+  return !!run && !run.closed && masterBootId != null && run.masterBootId !== masterBootId;
 }
 
 // Evaluate one run against every stored row since its cursor. Pure: returns the next run
-// plus the accepted (debounced) crossings for display.
-export function evaluateRun(run, rows, debounceMs, now = Date.now()) {
+// plus the accepted crossings for display, debounced with the window frozen in the run so a
+// re-evaluation (new evidence, restart) never regroups crossings it already accepted.
+export function evaluateRun(run, rows, now = Date.now()) {
   const verified = verifyCaptures(run, rows);
+  const stopTick = run.stopTick != null ? BigInt(run.stopTick) : null;
   const debounce = {};
   const accepted = verified.events.filter((ev) => {
+    if (stopTick != null && BigInt(ev.master_tick) > stopTick) return false; // crossed after Stop
     const last = debounce[ev.node_id];
-    if (last != null && masterTickDistanceBelowMs(ev.master_tick, last, debounceMs)) return false;
+    if (last != null && masterTickDistanceBelowMs(ev.master_tick, last, run.debounceMs)) return false;
     debounce[ev.node_id] = ev.master_tick;
     return true;
   });
@@ -164,11 +179,13 @@ export function evaluateRun(run, rows, debounceMs, now = Date.now()) {
       }
     }
   }
+  // A stopped run is official only once every source is confirmed through the stop tick.
+  const stopConfirmed = stopTick != null && BigInt(verified.throughTick) >= stopTick;
   let next = {
     ...run,
     lapTicks: laps,
     result,
-    verification: !complete && run.fault ? "invalid" : result == null ? "pending" : "verified",
+    verification: !complete && run.fault ? "invalid" : result == null || (!complete && stopTick != null && !stopConfirmed) ? "pending" : "verified",
   };
   if (complete) {
     next.armed = false;
@@ -183,5 +200,6 @@ export function evaluateRun(run, rows, debounceMs, now = Date.now()) {
       { awaitEvidence: !!verified.fault && !invalidDuration, kind: "measurement", now },
     );
   }
+  if (stopConfirmed && !next.closed) next = { ...next, closed: true };
   return { run: next, accepted, laps, result, complete, invalidDuration, fault: verified.fault, throughTick: verified.throughTick };
 }

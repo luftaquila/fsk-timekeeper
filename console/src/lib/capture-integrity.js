@@ -5,7 +5,7 @@ export const CAPTURE_HEALTH = 15;
 export const CAPTURE_LOSS = 16;
 export const CAPTURE_CHECKPOINT = 32;
 export const CAPTURE_TIME_UNKNOWN = 64;
-export const WIRELESS_PROTOCOL_VERSION = 9;
+export const WIRELESS_PROTOCOL_VERSION = 10; // 10: beacons carry a checkpoint request (`CP`)
 const distance = (seq, baseline) => (seq - baseline) >>> 0;
 const tick = (row) => BigInt(row.master_tick);
 
@@ -85,7 +85,12 @@ export function verifyCaptures(run, rows) {
           const from = unknown ? (confirmed > boundary ? confirmed : boundary) : at < boundary ? boundary : at;
           if (pendingFault == null || from < pendingFault) pendingFault = from;
         }
-      } else if (!loss && at >= boundary) captures.push({ ...row, role: source.role });
+      } else if (!loss) {
+        // A consecutive healthy capture proves this stream complete through its own tick (nothing
+        // can sit between consecutive seqs); a pending loss still waits for the checkpoint to settle.
+        if (pendingFault == null && at > confirmed) confirmed = at;
+        if (at >= boundary) captures.push({ ...row, role: source.role });
+      }
     }
     if (events.some((row) => row.sensor_boot_id !== source.boot && (row.flags & CAPTURE_CHECKPOINT) && tick(row) >= boundary)) {
       sessionEnded = true;

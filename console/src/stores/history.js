@@ -56,6 +56,7 @@ export const useHistoryStore = defineStore("history", () => {
       result: null,
       laps: [],
       lapTarget: run.lapTarget ?? null,
+      debounceMs: run.debounceMs ?? null,
       ppb: run.calib?.ppb ?? null,
       gps: run.calib ? { fix: run.calib.fix, sats: run.calib.sats, span: run.calib.span } : null,
       startedUtc: run.startedUtc ?? null,
@@ -114,7 +115,7 @@ export const useHistoryStore = defineStore("history", () => {
   }
 
   function exportCsv(mode = null) {
-    const headers = ["id", "date", "started_utc", "mode", "note", "result_ms", "result", "laps_ms", "lap_target", "hfxo_ppb", "verification", "master_boot_id", "boundary_tick"];
+    const headers = ["id", "date", "started_utc", "mode", "note", "result_ms", "result", "laps_ms", "lap_target", "debounce_ms", "hfxo_ppb", "verification", "master_boot_id", "boundary_tick"];
     const data = filtered(mode).map((r) => [
       r.id,
       new Date(r.createdAt).toISOString(),
@@ -125,6 +126,7 @@ export const useHistoryStore = defineStore("history", () => {
       r.result != null ? formatLapMs(r.result) : "",
       (r.laps || []).join(" "),
       r.lapTarget ?? "",
+      r.debounceMs ?? "",
       r.ppb ?? "",
       r.verification,
       r.masterBootId,

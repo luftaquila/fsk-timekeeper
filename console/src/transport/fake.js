@@ -2,12 +2,14 @@
  *
  * Models what matters to the host: a 16-slot event queue whose head is re-sent every
  * 100 ms until an exactly matching `C`, `H` every second, `D 0` every 5 beacons, a
- * per-sensor `D` + checkpoint every 5 s, `T` replies, `K`/`?ID`/`?STATUS`/`PING`.
+ * per-sensor `D` + checkpoint every 5 s, checkpoints on demand (every sensor one beacon
+ * period after a capture/loss or a `CP`), `T` replies, `K`/`?ID`/`?STATUS`/`PING`.
  * Scenario helpers inject crossings, losses, reboots and a master clock fault.
  */
 const TICKS_PER_MS = 16000n;
 const QUEUE_LEN = 16;
 const RETRY_MS = 100;
+const BEACON_MS = 1000; // a checkpoint request rides the next beacon
 
 function rnd32() {
   return Math.floor(Math.random() * 0xffffffff);
@@ -26,6 +28,8 @@ export function createFakeTransport({ onLine, onDisconnect }) {
   let timers = [];
   let queueOverflow = 0;
   let masterClockFaulted = false;
+  let cpTimer = null; // pending checkpoint request (coalesced until the next beacon)
+  let cpRequests = 0; // `CP` commands received
   const sensors = new Map(); // id -> { boot, captureSeq, pendingCount, lastStatusAt, rssi, snr, batt }
 
   function nowTick() {
@@ -95,6 +99,18 @@ export function createFakeTransport({ onLine, onDisconnect }) {
     const tick = String(s.lastTick != null && s.lastTick >= at ? s.lastTick + TICKS_PER_MS : at);
     enqueue({ node, ev_seq: evSeq++ % 65536, tick, flags: 47, rssi: s.rssi, snr: s.snr, master_boot: masterBoot, sensor_boot: s.boot, capture_seq: s.captureSeq, end_seq: s.captureSeq, end_tick: tick, sync_age: 300 });
   }
+  // Checkpoint on demand: the master raises a request after any capture/loss it queues and on
+  // `CP`; every sensor answers on the next beacon (the real sensor waits for its own acks first —
+  // here the queue already preserves that order).
+  function requestCheckpoint() {
+    if (cpTimer || !open) return;
+    cpTimer = setTimeout(() => {
+      cpTimer = null;
+      if (!open) return;
+      for (const node of sensors.keys()) checkpoint(node);
+    }, BEACON_MS);
+  }
+
   // Returns the capture tick (string); `at` pins it exactly instead of now + offsetMs.
   function crossing(node, { offsetMs = 0, flags = 15, at = null } = {}) {
     const s = addSensor(node);
@@ -104,6 +120,7 @@ export function createFakeTransport({ onLine, onDisconnect }) {
     const tick = String(when);
     enqueue({ node: node.toUpperCase(), ev_seq: evSeq++ % 65536, tick, flags, rssi: s.rssi, snr: s.snr, master_boot: masterBoot, sensor_boot: s.boot, capture_seq: s.captureSeq, end_seq: s.captureSeq, end_tick: tick, sync_age: 300 });
     s.pendingCount++;
+    requestCheckpoint();
     return tick;
   }
   function loss(node, n = 1) {
@@ -114,6 +131,7 @@ export function createFakeTransport({ onLine, onDisconnect }) {
     s.lastTick = s.lastTick != null && s.lastTick > at ? s.lastTick : at;
     const tick = String(at);
     enqueue({ node: node.toUpperCase(), ev_seq: evSeq++ % 65536, tick, flags: 31, rssi: s.rssi, snr: s.snr, master_boot: masterBoot, sensor_boot: s.boot, capture_seq: from, end_seq: s.captureSeq, end_tick: tick, sync_age: 300 });
+    requestCheckpoint();
   }
   function rebootSensor(node) {
     const s = addSensor(node);
@@ -152,6 +170,14 @@ export function createFakeTransport({ onLine, onDisconnect }) {
         break;
       case "PING":
         emit("A PING OK");
+        break;
+      case "CP":
+        cpRequests++;
+        if (masterClockFaulted) emit("X clock");
+        else {
+          requestCheckpoint();
+          emit("A CP OK");
+        }
         break;
       case "K":
         if (/^[0-9a-fA-F]{64}$/.test(t[1] || "")) {
@@ -220,6 +246,8 @@ export function createFakeTransport({ onLine, onDisconnect }) {
     open = false;
     for (const t of timers) clearInterval(t);
     timers = [];
+    if (cpTimer) clearTimeout(cpTimer);
+    cpTimer = null;
   }
 
   function write(line) {
@@ -264,6 +292,9 @@ export function createFakeTransport({ onLine, onDisconnect }) {
     },
     get queueLength() {
       return queue.length;
+    },
+    get cpRequests() {
+      return cpRequests;
     },
   };
 }

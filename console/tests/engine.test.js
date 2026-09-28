@@ -1,6 +1,6 @@
 import { describe, it } from "vitest";
 import assert from "node:assert/strict";
-import { createRun, evaluateRun, invalidateRun, closeRun, shouldInvalidateOnMasterBoot, EngineError } from "../src/lib/engine.js";
+import { createRun, evaluateRun, invalidateRun, closeRun, stopRun, shouldInvalidateOnMasterBoot, EngineError } from "../src/lib/engine.js";
 
 const MS = 16000n;
 const T0 = 1_000_000_000n; // boundary tick
@@ -54,7 +54,7 @@ function makeLog() {
   return api;
 }
 
-function start(log, mode, mappings, { now = NOW, boot = 100, lapTarget = null } = {}) {
+function start(log, mode, mappings, { now = NOW, boot = 100, lapTarget = null, debounceMs = 300 } = {}) {
   return createRun({
     mode,
     note: "car 7",
@@ -64,6 +64,7 @@ function start(log, mode, mappings, { now = NOW, boot = 100, lapTarget = null } 
     currentSensorBoot: () => boot,
     lastSeq: log.rows.length,
     lapTarget,
+    debounceMs,
     now,
   });
 }
@@ -106,6 +107,14 @@ describe("createRun", () => {
     assert.equal(start(sprintLog(), "sprint", SPRINT, { lapTarget: 4 }).lapTarget, null);
   });
 
+  it("freezes the debounce window into the run", () => {
+    assert.equal(start(sprintLog(), "sprint", SPRINT, { debounceMs: 1000 }).debounceMs, 1000);
+    assert.equal(start(sprintLog(), "sprint", SPRINT, { debounceMs: 0 }).debounceMs, 0);
+    assert.equal(start(sprintLog(), "sprint", SPRINT, { debounceMs: undefined }).debounceMs, 300);
+    assert.equal(start(sprintLog(), "sprint", SPRINT, { debounceMs: -1 }).debounceMs, 300);
+    assert.equal(start(sprintLog(), "sprint", SPRINT, { debounceMs: 2.5 }).debounceMs, 300);
+  });
+
   it("freezes the GPS calibration into the run and applies it to results", () => {
     const calibration = { ppb: 100000, ppsTick: String(T0 - 1000n), utc: 1727500000, fix: 1, sats: 9, span: 64 };
     const log = sprintLog();
@@ -118,8 +127,8 @@ describe("createRun", () => {
     log.capture("B", 61000);
     log.checkpoint("A", 62000);
     log.checkpoint("B", 62000);
-    assert.equal(evaluateRun(run, log.since(run.cursor), 300).result, 59994);
-    assert.equal(evaluateRun({ ...run, calib: null }, log.since(run.cursor), 300).result, 60000);
+    assert.equal(evaluateRun(run, log.since(run.cursor)).result, 59994);
+    assert.equal(evaluateRun({ ...run, calib: null }, log.since(run.cursor)).result, 60000);
     assert.equal(start(sprintLog(), "sprint", SPRINT).calib, null);
   });
 
@@ -145,12 +154,12 @@ describe("evaluateRun — sprint", () => {
     const run = start(log, "sprint", SPRINT);
     log.capture("A", 1000);
     log.capture("B", 61000);
-    let r = evaluateRun(run, log.since(run.cursor), 300);
+    let r = evaluateRun(run, log.since(run.cursor));
     assert.equal(r.result, null);
     assert.equal(r.run.verification, "pending");
     log.checkpoint("A", 62000);
     log.checkpoint("B", 62000);
-    r = evaluateRun(run, log.since(run.cursor), 300);
+    r = evaluateRun(run, log.since(run.cursor));
     assert.equal(r.result, 60000);
     assert.equal(r.complete, true);
     assert.equal(r.run.verification, "verified");
@@ -170,7 +179,7 @@ describe("evaluateRun — sprint", () => {
     log.rows.push({ ...b, seq: log.rows.length + 1, master_tick: tick(700), end_tick: tick(700), master_boot_id: 2 });
     log.checkpoint("A", 1000);
     log.checkpoint("B", 1000);
-    const r = evaluateRun(run, log.since(run.cursor), 300);
+    const r = evaluateRun(run, log.since(run.cursor));
     assert.equal(r.result, 400);
     assert.deepEqual(r.accepted.map((e) => e.node_id), ["A", "B"]);
     // A checkpoint from another master session cannot confirm anything either.
@@ -180,7 +189,7 @@ describe("evaluateRun — sprint", () => {
     log2.capture("B", 900);
     log2.checkpoint("A", 1000, { master_boot_id: 2 });
     log2.checkpoint("B", 1000, { master_boot_id: 2 });
-    assert.equal(evaluateRun(run2, log2.since(run2.cursor), 300).result, null);
+    assert.equal(evaluateRun(run2, log2.since(run2.cursor)).result, null);
   });
 
   it("accepts a finish that arrives before the start (order by capture tick, not arrival)", () => {
@@ -190,7 +199,7 @@ describe("evaluateRun — sprint", () => {
     log.capture("A", 1000);
     log.checkpoint("A", 6000);
     log.checkpoint("B", 6000);
-    assert.equal(evaluateRun(run, log.since(run.cursor), 300).result, 4000);
+    assert.equal(evaluateRun(run, log.since(run.cursor)).result, 4000);
   });
 
   it("only the first interval counts; later crossings are ignored", () => {
@@ -202,7 +211,7 @@ describe("evaluateRun — sprint", () => {
     log.capture("B", 9000);
     log.checkpoint("A", 10000);
     log.checkpoint("B", 10000);
-    const r = evaluateRun(run, log.since(run.cursor), 300);
+    const r = evaluateRun(run, log.since(run.cursor));
     assert.equal(r.result, 2000);
     assert.equal(r.accepted.length, 4);
   });
@@ -214,7 +223,7 @@ describe("evaluateRun — sprint", () => {
     log.capture("A", 1000);
     log.checkpoint("A", 2000);
     log.checkpoint("B", 2000);
-    const r = evaluateRun(run, log.since(run.cursor), 300);
+    const r = evaluateRun(run, log.since(run.cursor));
     assert.equal(r.invalidDuration, true);
     assert.equal(r.run.verification, "invalid");
     assert.equal(r.run.closed, true);
@@ -232,11 +241,15 @@ describe("evaluateRun — sprint", () => {
     log.capture("B", 3299); // 299 ms later: dropped at 300 ms window
     log.checkpoint("A", 4000);
     log.checkpoint("B", 4000);
-    const r = evaluateRun(run, log.since(run.cursor), 300);
+    const r = evaluateRun(run, log.since(run.cursor));
     assert.equal(r.accepted.length, 2);
     assert.equal(r.result, 2000);
-    const r0 = evaluateRun(run, log.since(run.cursor), 0);
+    // The window is the run's own: the same evidence under a 0 ms run keeps every edge.
+    const r0 = evaluateRun({ ...run, debounceMs: 0 }, log.since(run.cursor));
     assert.equal(r0.accepted.length, 5);
+    const r1 = evaluateRun({ ...run, debounceMs: 1000 }, log.since(run.cursor));
+    assert.equal(r1.accepted.length, 2);
+    assert.equal(r1.result, 2000);
   });
 
   it("a capture loss inside the run invalidates it while awaiting evidence", () => {
@@ -246,7 +259,7 @@ describe("evaluateRun — sprint", () => {
     log.loss("B", 2000);
     log.checkpoint("A", 3000);
     log.checkpoint("B", 3000);
-    const r = evaluateRun(run, log.since(run.cursor), 300);
+    const r = evaluateRun(run, log.since(run.cursor));
     assert.equal(r.fault.node_id, "B");
     assert.equal(r.run.verification, "invalid");
     assert.equal(r.run.closed, false); // awaitEvidence
@@ -258,14 +271,14 @@ describe("evaluateRun — sprint", () => {
     const run = start(log, "sprint", SPRINT);
     log.capture("A", 1000);
     log.rows.push({ seq: log.rows.length + 1, node_id: "0", ev_seq: 9, master_tick: tick(1500), end_tick: tick(1500), flags: 16, master_boot_id: 1, sensor_boot_id: 1, capture_seq: 0, end_seq: 0, sync_age_ms: 0, received_at: NOW });
-    let r = evaluateRun(run, log.since(run.cursor), 300);
+    let r = evaluateRun(run, log.since(run.cursor));
     assert.equal(r.fault.node_id, "0");
     assert.equal(r.run.verification, "invalid");
 
     const log2 = sprintLog();
     const run2 = start(log2, "sprint", SPRINT);
     log2.checkpoint("B", 500, { sensor_boot_id: 101 });
-    r = evaluateRun(run2, log2.since(run2.cursor), 300);
+    r = evaluateRun(run2, log2.since(run2.cursor));
     assert.equal(r.fault.node_id, "B");
     assert.match(r.fault.reason, /rebooted/);
   });
@@ -277,7 +290,7 @@ describe("evaluateRun — laps", () => {
     const run = start(log, "laps", LAPS);
     for (const ms of [1000, 16000, 31000, 46000]) log.capture("A", ms);
     log.checkpoint("A", 47000);
-    const r = evaluateRun(run, log.since(run.cursor), 300);
+    const r = evaluateRun(run, log.since(run.cursor));
     assert.equal(r.laps.length, 3);
     assert.equal(r.result, 45000);
     assert.equal(r.complete, false);
@@ -295,7 +308,7 @@ describe("evaluateRun — laps", () => {
     const run = start(log, "laps", LAPS, { lapTarget: 4 });
     for (const ms of [1000, 6000, 11500, 16500, 21000, 26000, 31000]) log.capture("A", ms);
     log.checkpoint("A", 32000);
-    const r = evaluateRun(run, log.since(run.cursor), 300);
+    const r = evaluateRun(run, log.since(run.cursor));
     assert.deepEqual(r.laps.map(Number), [5000 * 16000, 5500 * 16000, 5000 * 16000, 4500 * 16000]);
     assert.equal(r.result, 20000);
     assert.equal(r.complete, true);
@@ -304,12 +317,44 @@ describe("evaluateRun — laps", () => {
     assert.equal(r.run.verification, "verified");
   });
 
+  it("counts a lap as soon as its crossings arrive in sequence — no checkpoint needed for one sensor", () => {
+    const log = lapsLog();
+    const run = start(log, "laps", LAPS);
+    for (const ms of [1000, 11000, 21000]) log.capture("A", ms);
+    const r = evaluateRun(run, log.since(run.cursor));
+    assert.equal(r.laps.length, 2);
+    assert.equal(r.result, 20000);
+    assert.equal(r.run.verification, "verified");
+    assert.equal(r.throughTick, tick(21000));
+  });
+
+  it("Stop fences at the stop tick and closes once the sensor confirms through it", () => {
+    const log = lapsLog();
+    const run = start(log, "laps", LAPS);
+    for (const ms of [1000, 11000, 21000]) log.capture("A", ms);
+    const stopped = stopRun(run, tick(25000));
+    assert.equal(stopped.armed, false);
+    assert.equal(stopped.closed, false);
+    let r = evaluateRun(stopped, log.since(run.cursor));
+    assert.equal(r.result, 20000); // every received lap stays
+    assert.equal(r.run.verification, "pending"); // the stretch 21000..25000 is not confirmed yet
+    assert.equal(r.run.closed, false);
+    log.capture("A", 24000); // captured before Stop, delivered after: counts
+    log.capture("A", 26000); // after Stop: ignored
+    log.checkpoint("A", 27000);
+    r = evaluateRun(stopped, log.since(run.cursor));
+    assert.deepEqual(r.laps.map((t) => Number(t / MS)), [10000, 10000, 3000]);
+    assert.equal(r.result, 23000);
+    assert.equal(r.run.verification, "verified");
+    assert.equal(r.run.closed, true);
+  });
+
   it("stays pending and armed below the lap target", () => {
     const log = lapsLog();
     const run = start(log, "laps", LAPS, { lapTarget: 4 });
     for (const ms of [1000, 6000, 11000]) log.capture("A", ms);
     log.checkpoint("A", 12000);
-    const r = evaluateRun(run, log.since(run.cursor), 300);
+    const r = evaluateRun(run, log.since(run.cursor));
     assert.equal(r.laps.length, 2);
     assert.equal(r.result, 10000); // running sum is shown, but not final
     assert.equal(r.complete, false);
@@ -321,12 +366,12 @@ describe("evaluateRun — laps", () => {
     const log = makeLog();
     log.checkpoint("A", -100);
     log.checkpoint("B", -100);
-    const run = start(log, "laps", [{ node_id: "A", role: "start" }, { node_id: "B", role: "start" }]);
+    const run = start(log, "laps", [{ node_id: "A", role: "start" }, { node_id: "B", role: "start" }], { debounceMs: 0 });
     log.capture("A", 1000);
     log.capture("B", 1000);
     log.checkpoint("A", 2000);
     log.checkpoint("B", 2000);
-    const r = evaluateRun(run, log.since(run.cursor), 0);
+    const r = evaluateRun(run, log.since(run.cursor));
     assert.equal(r.invalidDuration, true);
     assert.equal(r.run.verification, "invalid");
     assert.equal(r.run.closed, true);
@@ -334,11 +379,11 @@ describe("evaluateRun — laps", () => {
 
   it("equal ticks on one sensor are a capture-order fault, caught before the lap math", () => {
     const log = lapsLog();
-    const run = start(log, "laps", LAPS);
+    const run = start(log, "laps", LAPS, { debounceMs: 0 });
     log.capture("A", 1000);
     log.capture("A", 1000);
     log.checkpoint("A", 2000);
-    const r = evaluateRun(run, log.since(run.cursor), 0);
+    const r = evaluateRun(run, log.since(run.cursor));
     assert.equal(r.invalidDuration, false);
     assert.equal(r.fault?.node_id, "A");
     assert.equal(r.run.verification, "invalid");
@@ -360,7 +405,8 @@ describe("run state helpers", () => {
     const run = { armed: true, closed: false, masterBootId: 1 };
     assert.equal(shouldInvalidateOnMasterBoot(run, 2), true);
     assert.equal(shouldInvalidateOnMasterBoot(run, 1), false);
-    assert.equal(shouldInvalidateOnMasterBoot({ ...run, armed: false }, 2), false);
+    assert.equal(shouldInvalidateOnMasterBoot({ ...run, armed: false }, 2), true); // stopped, awaiting evidence
+    assert.equal(shouldInvalidateOnMasterBoot({ ...run, armed: false, closed: true }, 2), false);
     assert.equal(shouldInvalidateOnMasterBoot(null, 2), false);
   });
 });

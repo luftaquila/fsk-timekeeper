@@ -194,6 +194,12 @@ export const useDeviceStore = defineStore("device", () => {
     return clock.read();
   }
 
+  // Ask the master to have every synced sensor checkpoint now (the next beacons carry the request).
+  function requestCheckpoint() {
+    if (!transport?.connected) return Promise.resolve(false);
+    return transmitLine("CP");
+  }
+
   // Calibration to freeze into a run: only a valid, fresh PPS estimate counts. null = nominal.
   function ppsCalibration(now = Date.now()) {
     const p = pps.value;
@@ -332,6 +338,7 @@ export const useDeviceStore = defineStore("device", () => {
     disconnect,
     transmitLine,
     readClock,
+    requestCheckpoint,
     ppsCalibration,
     provisionKey,
     enterBootloader,

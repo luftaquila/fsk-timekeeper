@@ -149,11 +149,43 @@ describe("pipeline with the fake master", () => {
     assert.ok(Math.abs(timing.run.result - 20000) <= 5, `laps ${timing.run.result}`);
     assert.equal(timing.run.fault, null);
     assert.equal(timing.lightColor, "red");
-    assert.equal(timing.rawLaps.length, 5); // raw list still shows every crossing
+    assert.equal(timing.rawLaps.length, 4); // the run closed at lap 4; the sixth crossing is not shown
     await waitFor(() => history.rows[0].verification === "verified");
     assert.equal(history.rows[0].lapTarget, 4);
     assert.equal(history.rows[0].laps.length, 4);
     await device.disconnect();
+  });
+
+  it("freezes the debounce at START — a later setting change or a restart never regroups crossings", { timeout: 20000 }, async () => {
+    const { device, settings, timing, history } = await boot();
+    const fake = await connectFake(device);
+    const [a] = [...fake.sensors.keys()];
+    settings.setMapping(a, { role: "start" });
+    settings.setDebounceMs(300);
+    assert.equal(await timing.start("laps", "db"), true, toasts.error.join(" | "));
+    assert.equal(timing.run.debounceMs, 300);
+    const t0 = BigInt(fake.crossing(a));
+    for (const ms of [200, 1000, 1200]) fake.crossing(a, { at: t0 + BigInt(ms) * 16000n }); // 200 / 1200 bounce inside 300 ms
+    fake.checkpoint(a);
+    await waitFor(() => timing.run.verification === "verified" && timing.run.lapTicks.length === 1);
+    assert.deepEqual(timing.laps, [1000]);
+
+    settings.setDebounceMs(2000); // next START only
+    fake.crossing(a, { at: t0 + 3000n * 16000n });
+    fake.checkpoint(a);
+    await waitFor(() => timing.run.lapTicks.length === 2);
+    assert.deepEqual(timing.laps, [1000, 2000]); // a 2000 ms window would have merged the 1000 ms crossing away
+    assert.equal(timing.run.debounceMs, 300);
+    assert.equal(settings.state.debounceMs, 2000);
+    await waitFor(() => history.rows[0].laps.length === 2);
+    assert.equal(history.rows[0].debounceMs, 300);
+    await device.disconnect();
+
+    // restart: the restored run re-evaluates with its own window, not the current setting
+    const again = await boot({ keepStorage: true });
+    assert.equal(again.settings.state.debounceMs, 2000);
+    assert.equal(again.timing.run.debounceMs, 300);
+    assert.deepEqual(again.timing.laps, [1000, 2000]);
   });
 
   it("laps without a target accumulates until Stop", { timeout: 20000 }, async () => {
@@ -164,16 +196,24 @@ describe("pipeline with the fake master", () => {
     settings.setLapTarget("");
     assert.equal(await timing.start("laps", "en"), true, toasts.error.join(" | "));
     assert.equal(timing.run.lapTarget, null);
-    for (let i = 0; i < 4; i++) fake.crossing(a, { offsetMs: i * 15000 });
-    fake.checkpoint(a);
-    await waitFor(() => timing.run.result != null, 6000);
+    const t0 = BigInt(fake.crossing(a));
+    for (const ms of [400, 800, 1200]) fake.crossing(a, { at: t0 + BigInt(ms) * 16000n }); // > 300 ms debounce
+    await waitFor(() => timing.run.lapTicks.length === 3, 6000); // consecutive crossings count without a checkpoint
     assert.equal(timing.run.closed, false);
     assert.equal(timing.run.armed, true);
-    assert.ok(Math.abs(timing.run.result - 45000) <= 5, `laps ${timing.run.result}`);
+    assert.equal(timing.run.result, 1200);
     assert.equal(timing.rawLaps.length, 3);
-    timing.stop();
-    assert.equal(timing.run.closed, true);
+    await sleep(1300); // the master clock moves past every crossing
+    assert.equal(await timing.stop(), true);
+    assert.equal(timing.run.armed, false);
     assert.equal(timing.lightColor, "red");
+    assert.equal(timing.run.result, 1200);
+    assert.equal(timing.run.closed, false); // stop tick not confirmed by the sensor yet
+    assert.equal(timing.run.verification, "pending");
+    fake.checkpoint(a);
+    await waitFor(() => timing.run.closed);
+    assert.equal(timing.run.verification, "verified");
+    assert.equal(timing.run.result, 1200);
     timing.reset();
     assert.equal(timing.run, null);
     assert.equal(timing.lightColor, "grey");
@@ -208,7 +248,52 @@ describe("pipeline with the fake master", () => {
     assert.equal(await timing.start("sprint"), false);
     assert.match(toasts.error.at(-1), /No finish sensor is mapped/);
     assert.equal(await timing.start("laps"), true, toasts.error.join(" | "));
-    timing.stop();
+    await timing.stop();
+    await device.disconnect();
+  });
+
+  it("Stop before the checkpoint keeps every received crossing and closes once the sensors confirm", { timeout: 20000 }, async () => {
+    const { device, settings, timing, history } = await boot();
+    const fake = await connectFake(device);
+    const [a, b] = [...fake.sensors.keys()];
+    settings.setMapping(a, { role: "start" });
+    settings.setMapping(b, { role: "finish" });
+
+    // laps: two laps received, Stop pressed before any checkpoint
+    assert.equal(await timing.start("laps", "two laps"), true, toasts.error.join(" | "));
+    const t0 = BigInt(fake.crossing(a));
+    fake.crossing(a, { at: t0 + 400n * 16000n });
+    fake.crossing(a, { at: t0 + 800n * 16000n });
+    await waitFor(() => timing.run.lapTicks.length === 2);
+    assert.deepEqual(timing.laps, [400, 400]);
+    await sleep(900);
+    const cpBefore = fake.cpRequests;
+    assert.equal(await timing.stop(), true);
+    assert.equal(timing.run.result, 800); // nothing dropped
+    assert.equal(timing.run.verification, "pending");
+    assert.equal(timing.run.closed, false);
+    // Stop asks the master for checkpoints (`CP`); the sensors answer on the next beacon.
+    await waitFor(() => fake.cpRequests > cpBefore);
+    await waitFor(() => timing.run.closed);
+    assert.equal(timing.run.result, 800);
+    assert.equal(timing.run.verification, "verified");
+    await waitFor(() => history.rows[0].verification === "verified");
+    assert.equal(history.rows[0].result, 800);
+    timing.reset();
+
+    // sprint: finish received, Stop pressed before the start sensor confirmed past it; the
+    // finish event itself made the master request checkpoints, so the sprint completes.
+    assert.equal(await timing.start("sprint", "early stop"), true, toasts.error.join(" | "));
+    const s0 = BigInt(fake.crossing(a));
+    fake.crossing(b, { at: s0 + 500n * 16000n });
+    await waitFor(() => timing.live.crossings.length === 2);
+    assert.equal(timing.run.result, null);
+    await sleep(550);
+    assert.equal(await timing.stop(), true);
+    assert.equal(timing.run.closed, false);
+    await waitFor(() => timing.run.closed);
+    assert.equal(timing.run.result, 500);
+    assert.equal(timing.run.verification, "verified");
     await device.disconnect();
   });
   it("freezes the GPS calibration at START and stamps the run with UTC", { timeout: 20000 }, async () => {
