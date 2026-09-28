@@ -312,6 +312,7 @@ static pu_cmd_t classify(const char *s)
     if (!strcmp(s, "?ID")) { return PU_CMD_ID; }
     if (!strcmp(s, "?STATUS")) { return PU_CMD_STATUS; }
     if (!strcmp(s, "PING")) { return PU_CMD_PING; }
+    if (!strcmp(s, "CP")) { return PU_CMD_CHECKPOINT; }
     if (s[0] == 'K' && s[1] == ' ') { return parse_key(s + 2) ? PU_CMD_SETKEY : PU_CMD_BAD; }
     if (s[0] == 'C' && s[1] == ' ') { return parse_event_ack(s) ? PU_CMD_EVENT_ACK : PU_CMD_BAD; }
     if (s[0] == 'T' && s[1] == ' ' && strlen(s + 2) == 32u) {

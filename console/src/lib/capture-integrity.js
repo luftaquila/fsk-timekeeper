@@ -5,7 +5,7 @@ export const CAPTURE_HEALTH = 15;
 export const CAPTURE_LOSS = 16;
 export const CAPTURE_CHECKPOINT = 32;
 export const CAPTURE_TIME_UNKNOWN = 64;
-export const WIRELESS_PROTOCOL_VERSION = 9;
+export const WIRELESS_PROTOCOL_VERSION = 10; // 10: beacons carry a checkpoint request (`CP`)
 const distance = (seq, baseline) => (seq - baseline) >>> 0;
 const tick = (row) => BigInt(row.master_tick);
 
@@ -85,7 +85,12 @@ export function verifyCaptures(run, rows) {
           const from = unknown ? (confirmed > boundary ? confirmed : boundary) : at < boundary ? boundary : at;
           if (pendingFault == null || from < pendingFault) pendingFault = from;
         }
-      } else if (!loss && at >= boundary) captures.push({ ...row, role: source.role });
+      } else if (!loss) {
+        // A consecutive healthy capture proves this stream complete through its own tick (nothing
+        // can sit between consecutive seqs); a pending loss still waits for the checkpoint to settle.
+        if (pendingFault == null && at > confirmed) confirmed = at;
+        if (at >= boundary) captures.push({ ...row, role: source.role });
+      }
     }
     if (events.some((row) => row.sensor_boot_id !== source.boot && (row.flags & CAPTURE_CHECKPOINT) && tick(row) >= boundary)) {
       sessionEnded = true;
@@ -96,9 +101,12 @@ export function verifyCaptures(run, rows) {
   const events = captures
     .filter((row) => tick(row) <= through && (faultTick == null || tick(row) < faultTick))
     .sort((a, b) => (tick(a) < tick(b) ? -1 : tick(a) > tick(b) ? 1 : a.node_id.localeCompare(b.node_id)));
+  const faultStands = sessionEnded || (through != null && faultTick != null && through >= faultTick);
   return {
     events,
     throughTick: String(through ?? boundary - 1n),
-    fault: sessionEnded || (through != null && faultTick != null && through >= faultTick) ? fault : null,
+    fault: faultStands ? fault : null,
+    faultTick: faultStands ? String(faultTick) : null,
+    sessionEnded, // master timebase change or sensor reboot: the run's timebase no longer exists
   };
 }

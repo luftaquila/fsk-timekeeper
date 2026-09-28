@@ -24,12 +24,33 @@ const capture = (node, seq, tick, extra = {}) => ({
 });
 const checkpoint = (node, seq, tick) => capture(node, seq, tick, { flags: 47 });
 
-test("delayed and reordered captures verify only after every source confirms its prefix", () => {
+test("a consecutive capture confirms its own stream through its tick; the other source still gates later ticks", () => {
   const rows = [capture("b", 1, 200), checkpoint("b", 1, 250), capture("a", 1, 150)];
-  assert.equal(verifyCaptures(run, rows).events.length, 0);
+  // a's start at 150 is complete on its own (seq 1 follows the START frontier); b's finish at 200
+  // waits until a is confirmed past 200.
+  const early = verifyCaptures(run, rows);
+  assert.deepEqual(early.events.map((row) => row.master_tick), ["150"]);
+  assert.equal(early.throughTick, "150");
   const verified = verifyCaptures(run, [...rows, checkpoint("a", 1, 250)]);
   assert.deepEqual(verified.events.map((row) => row.master_tick), ["150", "200"]);
   assert.equal(verified.fault, null);
+});
+
+test("captures alone confirm a single stream; a pending loss holds confirmation for the checkpoint", () => {
+  const solo = { ...run, nodes: { a: { boot: 2, seq: 0, role: "start" } } };
+  const rows = [capture("a", 1, 150), capture("a", 2, 300), capture("a", 3, 450)];
+  const clean = verifyCaptures(solo, rows);
+  assert.deepEqual(clean.events.map((row) => row.master_tick), ["150", "300", "450"]);
+  assert.equal(clean.throughTick, "450");
+  // A lost seq 2 leaves the stream unconfirmed past 150 until a checkpoint settles the loss.
+  const lossy = [capture("a", 1, 150), capture("a", 2, 300, { flags: 31 }), capture("a", 3, 450)];
+  const held = verifyCaptures(solo, lossy);
+  assert.equal(held.throughTick, "150");
+  assert.deepEqual(held.events.map((row) => row.master_tick), ["150"]);
+  assert.equal(held.fault, null);
+  const settled = verifyCaptures(solo, [...lossy, checkpoint("a", 3, 500)]);
+  assert.equal(settled.fault?.node_id, "a");
+  assert.deepEqual(settled.events.map((row) => row.master_tick), ["150"]);
 });
 
 test("a missing middle crossing stays pending until it is delivered", () => {

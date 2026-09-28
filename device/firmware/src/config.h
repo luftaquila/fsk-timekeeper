@@ -83,6 +83,15 @@
 #define STATUS_GAP_GUARD_MS 200u  /* earliest offset after a beacon RxDone for STATUS TX — clears the beacon air + best-effort beacon delay */
 #define STATUS_GAP_SPAN_MS  500u  /* width of the hash-chosen offset window; GUARD+SPAN (=700) < ~1000 ms beacon gap → STATUS air ends well before the next beacon */
 
+/* Checkpoint on demand (DESIGN §2.8 item 4). A beacon carries cp_req, a request id;
+ * every synced sensor answers each id once with an immediate checkpoint (after its
+ * own pending events are acked), so the PC can close a stopped run or a finished
+ * sprint within ~1 s instead of waiting for the STATUS_PERIOD_S checkpoint. The
+ * master raises a new id whenever it queues a sensor capture/loss event or the PC
+ * sends `CP`, and repeats it on this many consecutive beacons so a sensor that
+ * misses one beacon still hears it. */
+#define CP_REQ_BEACONS 2u
+
 /* Listen-before-talk (DESIGN §2.8) — KR920 coexistence. Before every transmit the
  * node runs a LoRa CAD (radio_lbt_clear → SX1262 scanChannel) and transmits only
  * if no preamble is detected; this is the channel check the pre-LBT firmware

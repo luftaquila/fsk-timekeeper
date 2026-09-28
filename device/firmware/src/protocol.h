@@ -37,7 +37,7 @@
 #define PKT_TYPE_ACK      0x03u
 #define PKT_TYPE_STATUS   0x04u
 
-#define PROTO_VER   9u  /* source sequence, loss ranges, and reliable checkpoints */
+#define PROTO_VER   10u /* 9 = source sequence, loss ranges, reliable checkpoints; 10 = beacon checkpoint request */
 
 /* Type byte = (PROTO_VER << 4) | PKT_TYPE_*. Both nibbles are authenticated as
  * AEAD associated data and the type half feeds the nonce. PROTO_VER must stay <= 15. */
@@ -66,6 +66,8 @@
 typedef struct __attribute__((packed)) {
     uint8_t  seq;        /* beacon sequence (wraps at 256) */
     uint64_t m_tx_prev;  /* master TxDone tick of beacon (seq-1) */
+    uint8_t  cp_req;     /* checkpoint request id: 0 = none; else every synced sensor answers each
+                          * id once with an immediate checkpoint (config.h CP_REQ_BEACONS, §2.8) */
 } beacon_pl_t;
 
 /* Sensor -> master. ev_master_t = event tick already mapped to master time.
@@ -133,7 +135,7 @@ typedef struct __attribute__((packed)) {
 /* Sealed wire length for a given header length + plaintext payload length. */
 #define SEC_WIRE_LEN(hdr, pl) ((hdr) + (int)(pl) + SEC_MAC_LEN)
 
-#define WIRE_BEACON   SEC_WIRE_LEN(SEC_HDR_DL, sizeof(beacon_pl_t))  /* 33 */
+#define WIRE_BEACON   SEC_WIRE_LEN(SEC_HDR_DL, sizeof(beacon_pl_t))  /* 34 */
 #define WIRE_EVENT    SEC_WIRE_LEN(SEC_HDR_UL, sizeof(event_pl_t))
 #define WIRE_ACK      SEC_WIRE_LEN(SEC_HDR_DL, sizeof(ack_pl_t))
 #define WIRE_STATUS   SEC_WIRE_LEN(SEC_HDR_UL, sizeof(status_pl_t))

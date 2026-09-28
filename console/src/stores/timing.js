@@ -6,7 +6,7 @@ import { useDeviceStore } from "./device";
 import { useSettingsStore } from "./settings";
 import { useHistoryStore } from "./history";
 import * as eventLog from "../lib/eventLog";
-import { createRun, evaluateRun, invalidateRun, closeRun, shouldInvalidateOnMasterBoot, runTouchedBy, EngineError } from "../lib/engine";
+import { createRun, evaluateRun, invalidateRun, stopRun, shouldInvalidateOnMasterBoot, runTouchedBy, EngineError } from "../lib/engine";
 import { wirelessQuality, missingRoles as missingRolesOf } from "../lib/quality";
 import { encodeRun, decodeRun } from "../lib/run-codec";
 import { MODES } from "../lib/constants";
@@ -15,6 +15,7 @@ import { CAPTURE_HEALTH } from "../lib/capture-integrity";
 import { msToClockStr, tickDeltaToMs } from "../lib/format";
 
 const KEY_RUN = "tk.run.v2";
+const CP_RETRY_MS = 2000; // re-ask for checkpoints while a stopped run waits (a sensor may miss the beacons)
 
 function makeLive() {
   return {
@@ -33,6 +34,7 @@ export const useTimingStore = defineStore("timing", () => {
   const run = ref(null);
   const live = reactive(makeLive());
   const starting = ref(false);
+  let cpTimer = null; // checkpoint requests for a stopped run awaiting confirmation
 
   const armed = computed(() => !!run.value?.armed);
   const fault = computed(() => run.value?.fault ?? null);
@@ -97,6 +99,23 @@ export const useTimingStore = defineStore("timing", () => {
     Object.assign(live, makeLive());
   }
 
+  // A stopped run closes when every sensor confirms through the stop tick; ask the master for
+  // checkpoints now and every CP_RETRY_MS until it does (Stop itself makes no radio event).
+  function stopCheckpointRequests() {
+    if (cpTimer) clearInterval(cpTimer);
+    cpTimer = null;
+  }
+  function requestCheckpointsUntilClosed(runId) {
+    stopCheckpointRequests();
+    const ask = () => {
+      const current = run.value;
+      if (!current || current.runId !== runId || current.closed || current.stopTick == null) return stopCheckpointRequests();
+      useDeviceStore().requestCheckpoint();
+    };
+    ask();
+    cpTimer = setInterval(ask, CP_RETRY_MS);
+  }
+
   function qualityFor(mode, now = Date.now()) {
     const device = useDeviceStore();
     const settings = useSettingsStore();
@@ -145,6 +164,7 @@ export const useTimingStore = defineStore("timing", () => {
         currentSensorBoot: (node) => device.telemetry[node]?.sensor_boot_id ?? null,
         lastSeq: cursorBefore,
         lapTarget: mode === "laps" ? settings.state.lapTarget : null,
+        debounceMs: settings.state.debounceMs,
         calibration,
       });
       // Absolute start time from the PPS anchor (UTC second of the last PPS edge + tick offset).
@@ -155,6 +175,7 @@ export const useTimingStore = defineStore("timing", () => {
           next.startedUtc = new Date(calibration.utc * 1000 + tickDurationMs(delta, calibration.ppb)).toISOString();
         }
       }
+      stopCheckpointRequests();
       resetLive();
       settings.rememberNote(note);
       setRun(next);
@@ -171,16 +192,40 @@ export const useTimingStore = defineStore("timing", () => {
     }
   }
 
-  function stop() {
-    if (!run.value) return;
-    const next = closeRun(run.value);
-    stopClock();
-    if (next.result != null) live.clockDisplay = msToClockStr(next.result);
-    setRun(next);
-    useHistoryStore().upsert(next, { throughSeq: eventLog.getLastSeq() });
+  // STOP: fence at the master's current tick. Crossings before it still count when they arrive
+  // late; the run closes once every sensor confirms its evidence through the fence. Only the
+  // master's own answer (`T`) can be the fence: it is captured after the press, so nothing that
+  // crossed before Stop can fall outside it. Anything extrapolated on the PC (heartbeat + elapsed
+  // time, latest evidence) lags the master by the delivery delay and can fence out crossings
+  // already received — so without `T` Stop is refused and the run stays armed.
+  async function stop() {
+    const current = run.value;
+    if (!current?.armed) return false;
+    const device = useDeviceStore();
+    if (!device.connected) {
+      notyf.error("The master is not connected. Reconnect to stop, or Clear to discard the run.");
+      return false;
+    }
+    let stopTick = null;
+    try {
+      const clock = await device.readClock();
+      if (clock.master_boot_id === current.masterBootId) stopTick = BigInt(clock.master_tick);
+    } catch {
+      /* refused below */
+    }
+    const latest = run.value;
+    if (!latest || latest.runId !== current.runId || !latest.armed) return false;
+    if (stopTick == null) {
+      notyf.error("The master did not answer the clock request. Try Stop again, or Clear to discard the run.");
+      return false;
+    }
+    applyEvaluation(evaluateRun(stopRun(latest, stopTick), eventLog.since(latest.cursor)));
+    if (run.value && !run.value.closed) requestCheckpointsUntilClosed(latest.runId);
+    return true;
   }
 
   function reset() {
+    stopCheckpointRequests();
     resetLive();
     setRun(null);
   }
@@ -193,7 +238,7 @@ export const useTimingStore = defineStore("timing", () => {
     if (!source) return;
     if (BigInt(row.master_tick) < BigInt(current.boundaryTick)) return;
     const last = live.lastRawTick[row.node_id];
-    if (last != null && masterTickDistanceBelowMs(row.master_tick, last, useSettingsStore().state.debounceMs)) return;
+    if (last != null && masterTickDistanceBelowMs(row.master_tick, last, current.debounceMs)) return;
     live.lastRawTick[row.node_id] = row.master_tick;
     const key = `${row.node_id}:${row.master_tick}`;
     if (live.crossings.some((c) => c.key === key)) return;
@@ -213,7 +258,7 @@ export const useTimingStore = defineStore("timing", () => {
     live.throughTick = result.throughTick;
     const confirmed = new Set(result.accepted.map((e) => `${e.node_id}:${e.master_tick}`));
     for (const c of live.crossings) c.confirmed = confirmed.has(c.key);
-    if (result.complete || next.closed) {
+    if (result.complete || next.closed || !next.armed) {
       stopClock();
       if (next.result != null) live.clockDisplay = msToClockStr(next.result);
     } else if (next.result != null && live.startedAt == null) {
@@ -221,6 +266,7 @@ export const useTimingStore = defineStore("timing", () => {
     }
     const before = run.value;
     setRun(next);
+    if (next.closed) stopCheckpointRequests();
     const changed =
       !before ||
       before.result !== next.result ||
@@ -238,7 +284,7 @@ export const useTimingStore = defineStore("timing", () => {
     if (!rows.length || !current || current.closed) return;
     for (const row of rows) noteRawCrossing(row);
     if (!runTouchedBy(current, rows)) return;
-    applyEvaluation(evaluateRun(current, eventLog.since(current.cursor), useSettingsStore().state.debounceMs));
+    applyEvaluation(evaluateRun(current, eventLog.since(current.cursor)));
   }
 
   // Telemetry changed: an armed run whose quality degraded goes back to pending.
@@ -270,7 +316,9 @@ export const useTimingStore = defineStore("timing", () => {
     stopClock();
     live.startedAt = null;
     if (current.result != null) live.clockDisplay = msToClockStr(current.result);
-    if (!current.closed && rows.length) applyEvaluation(evaluateRun(current, rows, useSettingsStore().state.debounceMs));
+    if (!current.closed && rows.length) applyEvaluation(evaluateRun(current, rows));
+    const restored = run.value;
+    if (restored && !restored.closed && restored.stopTick != null) requestCheckpointsUntilClosed(restored.runId);
   }
 
   const source = {

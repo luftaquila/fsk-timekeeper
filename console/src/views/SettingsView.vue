@@ -1,5 +1,6 @@
 <script setup>
 import { useSettingsStore } from "../stores/settings";
+import { useTimingStore } from "../stores/timing";
 import BridgeCard from "../components/BridgeCard.vue";
 import MappingCard from "../components/MappingCard.vue";
 import DiagnosticsCard from "../components/DiagnosticsCard.vue";
@@ -9,6 +10,7 @@ import SerialConsole from "../components/SerialConsole.vue";
 import SimulatorCard from "../components/SimulatorCard.vue";
 
 const settings = useSettingsStore();
+const timing = useTimingStore();
 const isDev = import.meta.env.DEV;
 
 function digitsOnly(e) {
@@ -29,7 +31,7 @@ function onDebounce(e) {
         <div class="card-header"><h3>⏱️ Sensor debounce</h3></div>
         <div class="card-body">
           <div class="debounce-row">
-            <input type="text" inputmode="numeric" class="form-input debounce-input" :value="settings.state.debounceMs" @input="digitsOnly" @change="onDebounce" />
+            <input type="text" inputmode="numeric" class="form-input debounce-input" :value="settings.state.debounceMs" :disabled="timing.armed" @input="digitsOnly" @change="onDebounce" />
             <span class="unit">ms</span>
           </div>
         </div>
