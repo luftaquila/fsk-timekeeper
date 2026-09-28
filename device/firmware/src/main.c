@@ -249,6 +249,7 @@ static void run_sensor(int st)
     event_pl_t loss = {0};
     int loss_pending = 0;
     uint32_t checkpoint_ms = board_millis() - STATUS_PERIOD_S * 1000u;
+    uint8_t cp_pending = 0, cp_answered = 0; /* beacon checkpoint request: id awaiting our answer / last id answered */
 
     int64_t off_hist[OFF_HIST];
     uint64_t lrx_hist[OFF_HIST];
@@ -324,6 +325,7 @@ static void run_sensor(int st)
                     hist_n = 0; hist_i = 0;
                     cur_skew = 0; skew_valid = 0; sync_ref_tick = 0;
                     beacon_gap = 0;
+                    cp_pending = 0; cp_answered = 0;
                 } else if (have_prev) {
                     if (b.seq == (uint8_t)(prev_seq + 1u)) {
                         cur_off = b.m_tx_prev + T_AIR_REF_TICKS - prev_l_rx;
@@ -356,6 +358,8 @@ static void run_sensor(int st)
                         beacon_gap = miss;
                     }
                 }
+                /* Checkpoint on demand: answer each request id once (config.h CP_REQ_BEACONS). */
+                if (b.cp_req != 0u && b.cp_req != cp_answered) { cp_pending = b.cp_req; }
                 prev_l_rx = l_rx;
                 prev_seq = b.seq;
                 have_prev = 1;
@@ -420,8 +424,10 @@ static void run_sensor(int st)
             p->first_ms = p->retry_ms = board_millis();
             pending_head = (pending_head + 1u) % SENSOR_EVENT_QUEUE_LEN; pending_n++;
         }
+        /* Checkpoint: periodic, or on request from a beacon (cp_pending) — only once our
+         * own events are acked, so the checkpoint follows the capture it was asked for. */
         if (!pending_n && !loss_pending && timing_ready &&
-            (uint32_t)(board_millis() - checkpoint_ms) >= STATUS_PERIOD_S * 1000u) {
+            (cp_pending || (uint32_t)(board_millis() - checkpoint_ms) >= STATUS_PERIOD_S * 1000u)) {
             uint64_t at;
             uint32_t seq_at;
             if (capture_sensor_checkpoint(&at, &seq_at) &&
@@ -435,6 +441,7 @@ static void run_sensor(int st)
                 p->first_ms = p->retry_ms = board_millis();
                 pending_head = (pending_head + 1u) % SENSOR_EVENT_QUEUE_LEN; pending_n++;
                 checkpoint_ms = board_millis();
+                if (cp_pending) { cp_answered = cp_pending; cp_pending = 0; }
             }
         }
         if (pending_n) {
@@ -737,6 +744,18 @@ static int master_clock_check(void)
     return 0;
 }
 
+/* Checkpoint on demand (config.h CP_REQ_BEACONS): the next g_cp_left beacons carry
+ * g_cp_id so every synced sensor checkpoints once. Raised when a fresh sensor
+ * capture/loss event is queued for the host and when the PC sends `CP`. */
+static uint8_t g_cp_id;
+static unsigned g_cp_left;
+
+static void master_request_checkpoint(void)
+{
+    g_cp_id = (uint8_t)(g_cp_id % 255u + 1u); /* 1..255, never the "no request" 0 */
+    g_cp_left = CP_REQ_BEACONS;
+}
+
 static void run_master(int st)
 {
     for (unsigned i = 0; i < MAX_NODES; i++) { g_node[i].last_state = -1; }
@@ -793,6 +812,11 @@ static void run_master(int st)
                 if (st != 0) { pu_emit_err("clock"); break; }
                 pu_emit_clock(pu_clock_token(), capture_now64(), sec_boot_id());
                 break;
+            case PU_CMD_CHECKPOINT:
+                if (st != 0) { pu_emit_err("clock"); break; } /* no beacons without a timebase */
+                master_request_checkpoint();
+                pu_emit_ack("CP");
+                break;
             case PU_CMD_BAD:
                 pu_emit_err("badcmd");
                 break;
@@ -832,6 +856,8 @@ static void run_master(int st)
             beacon_pl_t b;
             b.seq = seq;
             b.m_tx_prev = m_tx_last;
+            b.cp_req = g_cp_left ? g_cp_id : 0u;
+            if (g_cp_left) { g_cp_left--; }
             uint8_t tx[WIRE_BEACON];
             int wlen = sec_seal(tx, sizeof(tx), PKT_TYPE_BEACON, NODE_MASTER, &b, sizeof(b));
             /* Best-effort LBT before the beacon (KR920): sense the channel and, if
@@ -937,7 +963,12 @@ static void run_master(int st)
             /* The radio ACK is legal only after the event is resident in the
              * master's host-acknowledged queue. USB output is retried from that
              * queue until the server confirms the exact event key. */
+            int fresh = !master_event_queued(m.node_id, e.ev_seq, e.ev_master_t, m.boot_id);
             if (!master_event_enqueue(ns->id, &e, m.boot_id, rssi, snr)) { continue; }
+            /* A new capture/loss asks every sensor to checkpoint on the next beacons,
+             * so the PC can confirm the other sensors' silence through this event's
+             * tick within ~1 s (a retransmit of a queued event does not re-ask). */
+            if (fresh && !(e.flags & EVENT_CHECKPOINT)) { master_request_checkpoint(); }
             ack_pl_t a;
             a.node_id = m.node_id;
             a.ev_seq = e.ev_seq;

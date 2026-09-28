@@ -30,6 +30,7 @@
  *     ?ID | ?STATUS | PING | K <64-hex>
  *     C <0|node8hex> <ev_seq> <tmaster_tick> <master_boot_id> <sensor_boot_id> (server commit ACK)
  *     T <32-hex token> (fresh master capture request)
+ *     CP (checkpoint request: the next beacons ask every synced sensor to checkpoint now)
  */
 #ifndef PROTO_USB_H
 #define PROTO_USB_H
@@ -77,6 +78,7 @@ typedef enum {
     PU_CMD_SETKEY,   /* K <64-hex>: write the 32-byte fleet key (see pu_setkey) */
     PU_CMD_EVENT_ACK,/* C <node> <seq> <tick> <master_boot> <sensor_boot>: host committed this event */
     PU_CMD_CLOCK,    /* T <32-hex token>: capture a fresh arm boundary */
+    PU_CMD_CHECKPOINT, /* CP: ask every synced sensor for an immediate checkpoint */
     PU_CMD_BAD,      /* a full line was parsed but unrecognised */
 } pu_cmd_t;
 
