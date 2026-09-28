@@ -19,6 +19,7 @@ Wireless LoRa timing instrument for Formula Student Korea dynamic events.
 * Firmware
   * Requires: `arm-none-eabi-gcc` (with newlib-nano), `make`, `python3`
   * Build: `make -C device/firmware`
+  * Test: `make -C device/firmware test`
 * Console
   * Requires: Node.js 22
   * Build: `cd console && npm ci && npm run build:single`

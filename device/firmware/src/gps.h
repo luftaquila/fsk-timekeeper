@@ -16,7 +16,7 @@ typedef struct {
     uint64_t pps_tick;  /* TIMER1 tick of the latest PPS edge (0 = none yet) */
     uint32_t utc_s;     /* UTC of that edge, Unix seconds (0 = unknown / no fix) */
     int32_t  ppb;       /* HFXO error, parts per billion, + = timebase fast (0 when invalid) */
-    uint8_t  pps_valid; /* 1 = ppb backed by >= PPS_MIN_SPAN_S s of gated edges under a valid fix, fresh, on HFXO */
+    uint8_t  pps_valid; /* 1 = gated window + fresh well-formed RMC A + HFXO; NOT a PPS accuracy certificate */
     uint8_t  fix;       /* GGA fix quality (0 = none) */
     uint8_t  sats;      /* GGA satellites used */
     uint8_t  span_s;    /* seconds in the estimation window (0 when invalid) */

@@ -86,14 +86,29 @@ static uint64_t s_pps_last_tick;
 static uint32_t s_pps_last_ms;
 static int s_pps_have;
 
-/* Only edges produced while the receiver reports a valid fix (RMC status A) enter the
- * window: without one the module may keep pulsing from its own TCXO (holdover / not yet
- * fixed), which is stable enough to pass the deviation gate yet is not a UTC reference.
- * The window restarts on the first edge after the fix returns. */
+/* RMC A is a conservative navigation-health prerequisite, NOT a PPS lock or
+ * frequency-accuracy flag. V does not prove the timepulse is wrong; this receiver
+ * integration has no independent timing-validity indication with which to admit
+ * it. Never keep qualifying edges from a cached A after UART reception stops.
+ * The interval gate rejects outliers, but cannot certify an SI-second reference. */
 static int s_nav_valid;
+static uint32_t s_rmc_last_ms;
+
+static int reference_ready(uint32_t now_ms)
+{
+    if (s_nav_valid && (uint32_t)(now_ms - s_rmc_last_ms) >= GPS_RMC_STALE_MS) {
+        s_nav_valid = 0;
+    }
+    if (!s_nav_valid || !board_hfclk_xtal()) {
+        s_pps_count = 0;
+        return 0;
+    }
+    return 1;
+}
 
 static void pps_feed(uint64_t tick, uint32_t now_ms)
 {
+    int ready = reference_ready(now_ms);
     if (s_pps_have) {
         int64_t d = (int64_t)(tick - s_pps_last_tick) - (int64_t)TICKS_PER_S;
         if (d > PPS_MAX_DEV_TICKS || d < -PPS_MAX_DEV_TICKS) { s_pps_count = 0; }
@@ -104,7 +119,7 @@ static void pps_feed(uint64_t tick, uint32_t now_ms)
     s_pps_ring[s_pps_w] = tick;
     s_pps_w = (uint8_t)((s_pps_w + 1u) % PPS_RING);
     if (s_pps_count < PPS_RING) { s_pps_count++; }
-    if (!s_nav_valid) { s_pps_count = 0; } /* edge kept for the UTC association only */
+    if (!ready) { s_pps_count = 0; } /* retain the edge, not a calibration sample */
 }
 
 /* ppb = err * 1e9 / (n * 16e6) = err * 125 / (2 n); |err| <= 64 * 3200 so no overflow. */
@@ -144,6 +159,29 @@ static unsigned num2(const char *s) { return (unsigned)((s[0] - '0') * 10 + (s[1
 
 static int digits2(const char *s) { return s[0] >= '0' && s[0] <= '9' && s[1] >= '0' && s[1] <= '9'; }
 
+/* Validate the complete fields before accessing fixed offsets. A checksum-valid
+ * but truncated/ill-formed A sentence must not renew the navigation lease. */
+static int rmc_datetime_valid(const char *time, const char *date)
+{
+    size_t nt = strlen(time);
+    if (nt < 6u || strlen(date) != 6u ||
+        !digits2(time) || !digits2(time + 2) || !digits2(time + 4) ||
+        !digits2(date) || !digits2(date + 2) || !digits2(date + 4)) return 0;
+    if (nt > 6u) {
+        if (time[6] != '.' || nt == 7u) return 0;
+        for (size_t i = 7; i < nt; i++) if (time[i] < '0' || time[i] > '9') return 0;
+    }
+    /* A leap-second transition needs a new calibration window; it is not a
+     * normal civil second that civil_to_epoch can represent unambiguously. */
+    if (num2(time) > 23u || num2(time + 2) > 59u || num2(time + 4) > 59u) return 0;
+    unsigned month = num2(date + 2), day = num2(date), year = 2000u + num2(date + 4);
+    static const uint8_t days[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    if (month < 1u || month > 12u || day < 1u) return 0;
+    unsigned limit = days[month - 1u];
+    if (month == 2u && year % 4u == 0u) limit++;
+    return day <= limit;
+}
+
 /* Proleptic Gregorian civil date -> Unix seconds (days_from_civil, H. Hinnant). */
 static uint32_t civil_to_epoch(int y, int m, int d, unsigned hh, unsigned mm, unsigned ss)
 {
@@ -160,16 +198,21 @@ static uint32_t civil_to_epoch(int y, int m, int d, unsigned hh, unsigned mm, un
  * on the PPS edge that opened this second. */
 static void parse_rmc(char *f[], unsigned nf)
 {
-    int fixed = nf >= 3 && f[2][0] == 'A';
-    /* Fix lost, or regained: the PPS edges around the transition are not a UTC reference
-     * (holdover, phase re-alignment), so the estimation window starts over. */
-    if (fixed != s_nav_valid) { s_pps_count = 0; }
+    uint32_t now = board_millis();
+    /* Expire BEFORE refreshing: an A arriving after a gap cannot revive samples
+     * accumulated without fresh receiver status, even if no report was requested. */
+    reference_ready(now);
+    int fixed = nf >= 10 && !strcmp(f[2], "A") && rmc_datetime_valid(f[1], f[9]);
+    /* Discard transition-adjacent samples conservatively: PPS phase may realign
+     * on reacquisition. Do not assume every A/V change implies a phase step. */
+    if (!fixed || fixed != s_nav_valid) { s_pps_count = 0; }
     s_nav_valid = fixed;
-    if (nf < 10 || !digits2(f[1]) || !digits2(f[1] + 2) || !digits2(f[1] + 4) ||
-        !digits2(f[9]) || !digits2(f[9] + 2) || !digits2(f[9] + 4) || !fixed) {
+    if (!fixed) {
         s_rmc_valid = 0;
+        s_assoc_utc = 0;
         return;
     }
+    s_rmc_last_ms = now;
     s_rmc_utc = civil_to_epoch(2000 + (int)num2(f[9] + 4), (int)num2(f[9] + 2), (int)num2(f[9]),
                                num2(f[1]), num2(f[1] + 2), num2(f[1] + 4));
     s_rmc_valid = 1;
@@ -267,6 +310,7 @@ void gps_init(void)
 void gps_poll(void)
 {
     uint32_t now = board_millis();
+    reference_ready(now);
     uint64_t tick;
     if (capture_pps_get(&tick)) { pps_feed(tick, now); }
 
@@ -289,12 +333,12 @@ void gps_report(gps_report_t *out)
     uint32_t now = board_millis();
     int32_t ppb = 0;
     uint8_t span = 0;
-    int valid = s_nav_valid &&
-                pps_estimate(&ppb, &span) &&
-                (uint32_t)(now - s_pps_last_ms) < PPS_STALE_MS &&
-                board_hfclk_xtal();
+    int ready = reference_ready(now);
+    if (!s_pps_have || (uint32_t)(now - s_pps_last_ms) >= PPS_STALE_MS) s_pps_count = 0;
+    int valid = ready && pps_estimate(&ppb, &span);
     out->pps_tick = s_pps_have ? s_pps_last_tick : 0;
-    out->utc_s = (s_pps_have && s_assoc_tick == s_pps_last_tick) ? s_assoc_utc : 0;
+    out->utc_s = (ready && s_pps_have && (uint32_t)(now - s_pps_last_ms) < PPS_STALE_MS &&
+                  s_assoc_tick == s_pps_last_tick) ? s_assoc_utc : 0;
     out->ppb = valid ? ppb : 0;
     out->pps_valid = (uint8_t)(valid ? 1u : 0u);
     out->fix = s_fix;

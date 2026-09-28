@@ -149,15 +149,18 @@
 
 /* GPS PPS calibration (master). Consecutive PPS edges must be one nominal second
  * apart within PPS_MAX_DEV_PPM (3200 ticks): a missed pulse, a glitch or an RC-
- * fallback clock fails the gate and restarts the window. Per-edge noise is ~30 ns
- * PPS jitter ⊕ 62.5 ns capture quantisation ≈ 0.56 tick, so a span of N seconds
- * resolves ≈ 50/N ppb; the trailing window is capped at PPS_MAX_SPAN_S so the
- * estimate follows crystal temperature drift within about a minute. The estimate
- * is reported on the P line and applied by the console — wire ticks stay raw. */
+ * fallback clock fails the gate and restarts the window. Neither this relative
+ * period gate nor RMC A certifies the reference's frequency accuracy. RMC A is
+ * only a conservative, expiring qualification until the exact receiver's PPS
+ * lock/holdover contract is established. The trailing window is capped at
+ * PPS_MAX_SPAN_S; loss of qualification discards it rather than reusing it on
+ * recovery. The estimate is reported on P and applied by the console; wire ticks
+ * stay raw. PPS phase relative to UTC is not needed for frequency calibration. */
 #define PPS_MAX_DEV_PPM     200u
 #define PPS_MIN_SPAN_S      8u
 #define PPS_MAX_SPAN_S      64u
 #define PPS_STALE_MS        2500u  /* no PPS edge for this long -> estimate reported invalid */
+#define GPS_RMC_STALE_MS    2500u  /* no well-formed RMC A for this long -> discard the calibration window */
 #define GPS_RMC_LAG_MAX_MS  900u   /* an RMC completed within this after a PPS edge carries that edge's UTC */
 #define GPS_CFG_RESEND_MS   10000u /* $PCAS03 (GGA+RMC only; volatile in the module) re-sent at most this often */
 

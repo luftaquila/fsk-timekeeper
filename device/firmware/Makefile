@@ -5,6 +5,7 @@
 #   make distclean       remove build/ and vendor/
 #   FW_VERSION=1.2.3 make   version reported on the USB `I` line (CI passes the release tag)
 #   NODE_DEBUG=1 make       print chip id / role over USB once per second (testing only)
+#   make test              host GPS regression tests (C11 compiler, no ARM deps)
 #
 # One binary for every board: the role is chosen at runtime (master when a PC
 # enumerates the USB device, sensor otherwise; src/main.c). The fleet key is not
@@ -97,7 +98,7 @@ $(APP_OBJ):  WARN := -Wall -Wextra
 $(VEND_OBJ): WARN := -w
 
 # ---- targets -----------------------------------------------------------------
-.PHONY: all build deps clean distclean
+.PHONY: all build deps test clean distclean
 
 # Dependencies are cloned first, then make re-reads this file so the RadioLib
 # source glob sees them.
@@ -105,6 +106,9 @@ all: deps
 	@$(MAKE) --no-print-directory build
 
 build: $(BUILD)/$(TARGET).uf2 $(BUILD)/$(TARGET).hex $(BUILD)/$(TARGET).bin
+
+test:
+	@$(MAKE) --no-print-directory -C tests test
 
 deps: $(NRFX) $(CMSIS) $(RADIOLIB) $(TINYUSB) $(MONOCYPHER)
 
