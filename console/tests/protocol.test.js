@@ -1,6 +1,6 @@
 import { describe, it } from "vitest";
 import assert from "node:assert/strict";
-import { parseLine, validateEvent, normalizeTelemetry, eventKey, formatAck, isHexKey } from "../src/lib/protocol.js";
+import { parseLine, validateEvent, normalizeTelemetry, normalizePps, eventKey, formatAck, isHexKey } from "../src/lib/protocol.js";
 
 // Literal lines in the shape proto_usb.c emits.
 const E_LINE = "E 0D2243B0 1234 123456789012345678 15 -91.50 9.25 3735928559 305419896 42 42 123456789012345678 120";
@@ -116,6 +116,19 @@ describe("normalizeTelemetry", () => {
     assert.equal(t.sync_age_ms, 0);
     assert.equal(t.last_seen_at, 5);
     assert.equal(normalizeTelemetry({ node_id: "" }), null);
+  });
+});
+
+describe("P line (GPS/PPS)", () => {
+  it("parses and normalises the GPS report", () => {
+    const msg = parseLine("P 123456789012345678 1727500000 12345 1 1 9 64");
+    assert.equal(msg.type, "P");
+    const p = normalizePps(msg.pps, 5000);
+    assert.deepEqual(p, { tick: "123456789012345678", utc: 1727500000, ppb: 12345, valid: 1, fix: 1, sats: 9, span: 64, at: 5000 });
+    const noFix = normalizePps(parseLine("P 0 0 0 0 0 0 0").pps, 1);
+    assert.equal(noFix.utc, null);
+    assert.equal(noFix.valid, 0);
+    assert.equal(normalizePps(parseLine("P x 0 0 0 0 0 0").pps, 1), null);
   });
 });
 

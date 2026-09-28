@@ -28,6 +28,7 @@
 #include "meas.h"
 #include "secure.h"
 #include "keystore.h"
+#include "gps.h"
 
 #define TICKS_PER_MS 16000u /* TIMER1 is 16 MHz */
 #define OFF_HIST     8u     /* offset ring depth for the skew estimate */
@@ -770,6 +771,11 @@ static void run_master(int st)
                              board_hfclk_xtal(), st == 0 ? 0 : UINT16_MAX,
                              0, 0, (uint16_t)g_event_count, g_event_backpressure,
                              usb_clock.valid, usb_clock.ppm, 0, sec_boot_id());
+                if (st == 0) {
+                    gps_report_t g;
+                    gps_report(&g);
+                    pu_emit_pps(g.pps_tick, g.utc_s, g.ppb, g.pps_valid, g.fix, g.sats, g.span_s);
+                }
                 pu_emit_ack("STATUS");
                 break;
             }
@@ -816,6 +822,7 @@ static void run_master(int st)
         capture_now64();
         if (!master_clock_check()) { master_event_pump(); continue; }
         usb_clock_poll(&usb_clock);
+        gps_poll();
 
         uint32_t now = board_millis();
         if ((uint32_t)(now - last) >= 1000u) {
@@ -871,6 +878,14 @@ static void run_master(int st)
                              usb_clock.valid, usb_clock.ppm, 0, sec_boot_id());
             }
             continue;
+        }
+
+        /* GPS report (~1 Hz) — never in the beacon iteration above, so it cannot
+         * share a CDC TX FIFO window with the H/D burst (usb_write is all-or-nothing). */
+        if (gps_report_due()) {
+            gps_report_t g;
+            gps_report(&g);
+            pu_emit_pps(g.pps_tick, g.utc_s, g.ppb, g.pps_valid, g.fix, g.sats, g.span_s);
         }
 
         float rssi = 0, snr = 0;
@@ -987,7 +1002,11 @@ int main(void)
         st = radio_begin(node_freq_mhz());
         if (st == 0) {
             capture_init();
-            if (master) { capture_usb_sof_enable(); }
+            if (master) {
+                capture_usb_sof_enable();
+                capture_pps_enable(); /* SENSOR capture channel -> GPS PPS */
+                gps_init();
+            }
         }
     }
 

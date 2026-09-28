@@ -21,6 +21,10 @@ void board_init(void);
  * timing and event capture must fail closed when this is false. */
 int board_hfclk_xtal(void);
 
+/* Non-zero once UICR.NFCPINS.PROTECT is cleared, i.e. P0.09/P0.10 (GPS PPS/TXD)
+ * are plain GPIO. board_init() clears it on a board's first boot and resets. */
+int board_nfc_pins_gpio(void);
+
 /* EXT_POWER gate (P0.13) — enables the 12V boost / sensor & light rails. */
 void board_ext_power_on(void);
 void board_ext_power_off(void);

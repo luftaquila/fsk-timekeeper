@@ -20,8 +20,10 @@
 
 #define DIO1_PIN (PIN_LORA_DIO1 % 32u) /* 6 */
 #define DIO1_PRT (PIN_LORA_DIO1 / 32u) /* 1 */
-#define SENS_PIN (PIN_SENSOR_IN % 32u) /* 11 */
+#define SENS_PIN (PIN_SENSOR_IN % 32u) /* 13 */
 #define SENS_PRT (PIN_SENSOR_IN / 32u) /* 1 */
+#define PPS_PIN  (PIN_GPS_PPS % 32u)   /* 9 */
+#define PPS_PRT  (PIN_GPS_PPS / 32u)   /* 0 */
 
 static volatile uint32_t s_sensor_queue[SENSOR_QUEUE_LEN];
 static volatile uint32_t s_sensor_seq_queue[SENSOR_QUEUE_LEN];
@@ -168,6 +170,35 @@ int capture_sensor_checkpoint(uint64_t *tick, uint32_t *seq)
 uint16_t capture_sensor_overflow(void)
 {
     return s_sensor_overflow;
+}
+
+/* Master only. TIMER1 has no spare CC register, but the SENSOR channel (GPIOTE
+ * ch1 -> PPI ch1 -> CC[2]) is idle in the master role, so re-aim it at the GPS
+ * PPS pin: rising edge (the ATGM336H aligns it to the UTC second), no ISR — a
+ * 1 Hz edge is polled from the main loop like DIO1. The IN1 interrupt is cleared
+ * first so the sensor ISR ring never sees PPS edges. Pull-down: an unpopulated
+ * GPS yields no edges. */
+void capture_pps_enable(void)
+{
+    NRF_GPIOTE->INTENCLR = (1UL << (GPIOTE_INTENCLR_IN0_Pos + CAP_GPIOTE_SENS));
+    NRF_GPIOTE->CONFIG[CAP_GPIOTE_SENS] = 0;
+    gpio_cfg_input_pulldown(PIN_GPS_PPS);
+    NRF_GPIOTE->CONFIG[CAP_GPIOTE_SENS] =
+        ((uint32_t)GPIOTE_CONFIG_MODE_Event       << GPIOTE_CONFIG_MODE_Pos)     |
+        ((uint32_t)PPS_PIN                        << GPIOTE_CONFIG_PSEL_Pos)     |
+        ((uint32_t)PPS_PRT                        << GPIOTE_CONFIG_PORT_Pos)     |
+        ((uint32_t)GPIOTE_CONFIG_POLARITY_LoToHi  << GPIOTE_CONFIG_POLARITY_Pos);
+    NRF_GPIOTE->EVENTS_IN[CAP_GPIOTE_SENS] = 0;
+}
+
+int capture_pps_get(uint64_t *tick)
+{
+    if (NRF_GPIOTE->EVENTS_IN[CAP_GPIOTE_SENS] == 0) {
+        return 0;
+    }
+    NRF_GPIOTE->EVENTS_IN[CAP_GPIOTE_SENS] = 0;
+    *tick = widen(NRF_TIMER1->CC[CAP_CC_SENS]);
+    return 1;
 }
 
 void capture_usb_sof_enable(void)

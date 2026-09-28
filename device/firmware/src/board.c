@@ -77,8 +77,45 @@ uint32_t board_millis(void)
     return (uint32_t)(elapsed / 1000u);
 }
 
+/* P0.09/P0.10 are the NFC antenna pins until UICR.NFCPINS.PROTECT is cleared
+ * (factory default = NFC, with a clamp diode between the two pins). The GPS PPS
+ * and TXD lines sit on them, so clear the bit once, on a board's first boot:
+ * NVMC write-enable, clear the bit (flash writes only clear bits, and the factory
+ * word is erased so one write is within spec), read back, then reset so the new
+ * UICR takes effect. Readback-guarded — a failed write cannot loop the board
+ * through resets, it just boots without GPS. App DFU never erases UICR, so this
+ * runs once per board. Runs in both roles (harmless on a sensor). Must precede
+ * every other peripheral/pin setup. */
+static void nvmc_wait(void)
+{
+    while (NRF_NVMC->READY == NVMC_READY_READY_Busy) { /* CPU stalls during op */ }
+}
+
+static void nfc_pins_as_gpio(void)
+{
+    if ((NRF_UICR->NFCPINS & UICR_NFCPINS_PROTECT_Msk) == 0) {
+        return;
+    }
+    NRF_NVMC->CONFIG = (NVMC_CONFIG_WEN_Wen << NVMC_CONFIG_WEN_Pos);
+    nvmc_wait();
+    NRF_UICR->NFCPINS = NRF_UICR->NFCPINS & ~UICR_NFCPINS_PROTECT_Msk;
+    nvmc_wait();
+    NRF_NVMC->CONFIG = (NVMC_CONFIG_WEN_Ren << NVMC_CONFIG_WEN_Pos);
+    nvmc_wait();
+    if ((NRF_UICR->NFCPINS & UICR_NFCPINS_PROTECT_Msk) == 0) {
+        NVIC_SystemReset();
+    }
+}
+
+int board_nfc_pins_gpio(void)
+{
+    return (NRF_UICR->NFCPINS & UICR_NFCPINS_PROTECT_Msk) == 0;
+}
+
 void board_init(void)
 {
+    nfc_pins_as_gpio();
+
     SCB->VTOR = APP_VECTOR_BASE;
 
     hfclk_init();

@@ -174,6 +174,23 @@ void pu_emit_diag(uint32_t node_id, int is_master,
     usb_write(line);
 }
 
+void pu_emit_pps(uint64_t pps_tick, uint32_t utc_s, int32_t ppb, int pps_valid,
+                 uint8_t fix, uint8_t sats, uint8_t span_s)
+{
+    char line[80];
+    lb_t b; lb_init(&b, line, sizeof(line));
+    lb_str(&b, "P ");
+    lb_u64(&b, pps_tick);
+    lb_ch(&b, ' '); lb_u32(&b, utc_s);
+    lb_ch(&b, ' '); lb_i32(&b, ppb);
+    lb_ch(&b, ' '); lb_u32(&b, (uint32_t)(pps_valid ? 1u : 0u));
+    lb_ch(&b, ' '); lb_u32(&b, fix);
+    lb_ch(&b, ' '); lb_u32(&b, sats);
+    lb_ch(&b, ' '); lb_u32(&b, span_s);
+    lb_finish(&b);
+    usb_write(line);
+}
+
 void pu_emit_clock(const char *token, uint64_t tick, uint32_t master_boot_id)
 {
     char line[80];

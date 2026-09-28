@@ -4,7 +4,7 @@ import { ref, reactive, computed } from "vue";
 import { useNotification } from "../composables/useNotification";
 import { createSerialTransport, isSerialSupported } from "../transport/serial";
 import { createFakeTransport } from "../transport/fake";
-import { parseLine, validateEvent, normalizeTelemetry, formatAck, isHexKey, NODE_MASTER } from "../lib/protocol";
+import { parseLine, validateEvent, normalizeTelemetry, normalizePps, formatAck, isHexKey, NODE_MASTER } from "../lib/protocol";
 import { createWirelessClock } from "../lib/wireless-clock";
 import { WIRELESS_STATUS_MAX_AGE_MS, USB_PRODUCT } from "../lib/constants";
 import { MASTER_TICKS_PER_MS as TICKS_PER_MS } from "../lib/event-timing";
@@ -26,6 +26,7 @@ export const useDeviceStore = defineStore("device", () => {
   const heartbeat = ref(null); // { tick: bigint, wallMs, uptimeMs, beaconSeq, nseen }
   const telemetry = reactive({}); // node_id -> normalized telemetry
   const masterBootId = ref(null);
+  const pps = ref(null); // latest GPS/PPS report (P line), see protocol.normalizePps
   const unprovisioned = ref(false);
   const lastError = ref(null);
   const dropped = reactive({ count: 0, reasons: {} });
@@ -83,7 +84,7 @@ export const useDeviceStore = defineStore("device", () => {
     stats.lines++;
     const msg = parseLine(raw);
     if (!msg) return;
-    if (msg.type !== "H" || consoleLines.value.length < CONSOLE_LIMIT) pushConsole("rx", raw.trim());
+    if ((msg.type !== "H" && msg.type !== "P") || consoleLines.value.length < CONSOLE_LIMIT) pushConsole("rx", raw.trim());
     const timing = useTimingStore();
     switch (msg.type) {
       case "I":
@@ -104,6 +105,7 @@ export const useDeviceStore = defineStore("device", () => {
         if (t.node_id === NODE_MASTER) {
           if (t.provisioned === 1) unprovisioned.value = false;
           if (t.master_boot_id != null) {
+            if (masterBootId.value != null && masterBootId.value !== t.master_boot_id) pps.value = null;
             masterBootId.value = t.master_boot_id;
             timing.onMasterBoot(t.master_boot_id);
           }
@@ -118,6 +120,12 @@ export const useDeviceStore = defineStore("device", () => {
         clock.accept({ request_id: msg.requestId, master_tick: msg.masterTick, master_boot_id: msg.masterBootId });
         if (Number.isInteger(msg.masterBootId)) masterBootId.value = msg.masterBootId;
         break;
+      case "P": {
+        const p = normalizePps(msg.pps, now);
+        if (p) pps.value = p;
+        else drop("pps");
+        break;
+      }
       case "A":
         if (msg.cmd === "K" && provisionPending) resolveProvision("ok");
         break;
@@ -186,6 +194,13 @@ export const useDeviceStore = defineStore("device", () => {
     return clock.read();
   }
 
+  // Calibration to freeze into a run: only a valid, fresh PPS estimate counts. null = nominal.
+  function ppsCalibration(now = Date.now()) {
+    const p = pps.value;
+    if (!p || p.valid !== 1 || now - p.at > 3000) return null;
+    return { ppb: p.ppb, ppsTick: p.tick, utc: p.utc, fix: p.fix, sats: p.sats, span: p.span };
+  }
+
   /* Screen Wake Lock: keep the bridge tab awake while connected. */
   async function acquireWakeLock() {
     try {
@@ -221,6 +236,7 @@ export const useDeviceStore = defineStore("device", () => {
     dfuInProgress.value = false;
     identityOk.value = false;
     heartbeat.value = null;
+    pps.value = null;
     releaseWakeLock();
     clock.close("The master was disconnected.");
     if (provisionPending) resolveProvision("timeout");
@@ -301,6 +317,7 @@ export const useDeviceStore = defineStore("device", () => {
     heartbeat,
     telemetry,
     masterBootId,
+    pps,
     unprovisioned,
     lastError,
     dropped,
@@ -315,6 +332,7 @@ export const useDeviceStore = defineStore("device", () => {
     disconnect,
     transmitLine,
     readClock,
+    ppsCalibration,
     provisionKey,
     enterBootloader,
     fakeTransport,

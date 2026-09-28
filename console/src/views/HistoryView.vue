@@ -3,7 +3,7 @@ import { ref, computed } from "vue";
 import { useHistoryStore } from "../stores/history";
 import { useNotification } from "../composables/useNotification";
 import { MODES, MODE_LABEL } from "../lib/constants";
-import { msToClockStr, fmtDateTime } from "../lib/format";
+import { msToClockStr, fmtDateTime, fmtPpm } from "../lib/format";
 
 const history = useHistoryStore();
 const notyf = useNotification();
@@ -54,6 +54,7 @@ async function clearAll() {
           <thead>
             <tr>
               <th>Date</th>
+              <th class="nowrap">Start (UTC)</th>
               <th>Mode</th>
               <th>Note</th>
               <th>Result</th>
@@ -65,6 +66,7 @@ async function clearAll() {
           <tbody>
             <tr v-for="r in rows" :key="r.id">
               <td class="mono nowrap">{{ fmtDateTime(r.createdAt) }}</td>
+              <td class="mono nowrap" :title="r.ppb != null ? `HFXO ${fmtPpm(r.ppb)} (GPS)` : 'nominal 16 MHz'">{{ r.startedUtc ? r.startedUtc.slice(11, 19) + "Z" : "—" }}</td>
               <td>{{ MODE_LABEL[r.mode] || r.mode }}</td>
               <td>{{ r.note || "—" }}</td>
               <td class="mono nowrap strong">{{ r.result != null ? msToClockStr(r.result) : "—" }}</td>

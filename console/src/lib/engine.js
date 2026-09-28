@@ -7,6 +7,7 @@
  *   nodes: { [node_id]: { boot, seq, role } },   // capture frontier at START
  *   cursor: number,                              // eventLog seq; evidence = rows with seq > cursor
  *   lapTarget: number|null,                      // laps: auto-stop after this many laps
+ *   calib: null | { ppb, ppsTick, utc, fix, sats, span },  // GPS PPS calibration frozen at START
  *   armed: boolean,                              // light green
  *   closed: boolean,                             // no more evidence accepted
  *   verification: "pending" | "verified" | "invalid",
@@ -44,6 +45,7 @@ export function createRun({
   currentSensorBoot,
   lastSeq,
   lapTarget = null,
+  calibration = null,
   now = Date.now(),
   statusMaxAgeMs = WIRELESS_STATUS_MAX_AGE_MS,
 }) {
@@ -74,6 +76,7 @@ export function createRun({
     nodes,
     cursor,
     lapTarget: mode === "laps" && Number.isInteger(lapTarget) && lapTarget > 0 ? lapTarget : null,
+    calib: calibration && Number.isInteger(calibration.ppb) ? { ...calibration } : null,
     armed: true,
     closed: false,
     verification: "pending",
@@ -135,6 +138,7 @@ export function evaluateRun(run, rows, debounceMs, now = Date.now()) {
   let complete = false;
   let invalidDuration = false;
   const laps = [];
+  const ppb = run.calib?.ppb ?? 0;
   if (run.mode === "laps") {
     const crossings = accepted.filter((ev) => ev.role === "start");
     for (let i = 1; i < crossings.length; i++) {
@@ -146,7 +150,7 @@ export function evaluateRun(run, rows, debounceMs, now = Date.now()) {
       }
       laps.push(duration);
     }
-    if (laps.length) result = masterTickDurationsMs(laps);
+    if (laps.length) result = masterTickDurationsMs(laps, ppb);
     complete = !!run.lapTarget && laps.length >= run.lapTarget;
   } else {
     const start = accepted.find((ev) => ev.role === "start");
@@ -155,7 +159,7 @@ export function evaluateRun(run, rows, debounceMs, now = Date.now()) {
       const duration = masterTickDelta(finish.master_tick, start.master_tick);
       invalidDuration = duration <= 0n;
       if (!invalidDuration) {
-        result = masterTickDeltaMs(finish.master_tick, start.master_tick);
+        result = masterTickDeltaMs(finish.master_tick, start.master_tick, ppb);
         complete = true;
       }
     }

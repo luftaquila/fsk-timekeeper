@@ -30,6 +30,12 @@ int capture_sensor_checkpoint(uint64_t *tick, uint32_t *seq);
 /* Lifetime diagnostic only; loss ranges carry the affected capture boundaries. */
 uint16_t capture_sensor_overflow(void);
 
+/* Master-only GPS PPS capture. Re-targets the (idle) SENSOR capture channel at
+ * PIN_GPS_PPS, rising edge; capture_pps_get() polls the latched edge and widens it
+ * to 64 bits. Main loop only (like capture_dio1_get). */
+void capture_pps_enable(void);
+int capture_pps_get(uint64_t *tick);
+
 /* Master-only USB clock monitor. PPI captures each USBD SOF into a spare TIMER1
  * CC register; samples are diagnostic and never alter the event timebase. */
 void capture_usb_sof_enable(void);

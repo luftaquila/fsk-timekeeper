@@ -1,6 +1,6 @@
 /* Results history (IndexedDB `results` store, memory fallback) + CSV/JSON export. */
 import { defineStore } from "pinia";
-import { ref } from "vue";
+import { ref, toRaw } from "vue";
 import * as eventLog from "../lib/eventLog";
 import { getAll, put, remove, clear } from "../lib/idb";
 import { MODE_LABEL } from "../lib/constants";
@@ -29,7 +29,8 @@ export const useHistoryStore = defineStore("history", () => {
   }
 
   function lapsMs(run) {
-    return (run.lapTicks || []).map((t) => masterTickDurationsMs([t]));
+    const ppb = run.calib?.ppb ?? 0;
+    return (run.lapTicks || []).map((t) => masterTickDurationsMs([t], ppb));
   }
 
   async function save(row) {
@@ -55,6 +56,9 @@ export const useHistoryStore = defineStore("history", () => {
       result: null,
       laps: [],
       lapTarget: run.lapTarget ?? null,
+      ppb: run.calib?.ppb ?? null,
+      gps: run.calib ? { fix: run.calib.fix, sats: run.calib.sats, span: run.calib.span } : null,
+      startedUtc: run.startedUtc ?? null,
       verification: run.verification,
       boundaryTick: run.boundaryTick,
       masterBootId: run.masterBootId,
@@ -70,8 +74,9 @@ export const useHistoryStore = defineStore("history", () => {
   // Called whenever the engine changes a run.
   async function upsert(run, { throughSeq = null } = {}) {
     const existing = rows.value.find((r) => r.runId === run.runId);
-    const row = existing ? { ...existing } : null;
-    if (!row) return null;
+    if (!existing) return null;
+    // Copy the raw object: a reactive proxy (nested `gps`) cannot be structured-cloned into IndexedDB.
+    const row = { ...toRaw(existing) };
     row.note = run.note || row.note;
     row.result = run.result;
     row.laps = lapsMs(run);
@@ -109,16 +114,18 @@ export const useHistoryStore = defineStore("history", () => {
   }
 
   function exportCsv(mode = null) {
-    const headers = ["id", "date", "mode", "note", "result_ms", "result", "laps_ms", "lap_target", "verification", "master_boot_id", "boundary_tick"];
+    const headers = ["id", "date", "started_utc", "mode", "note", "result_ms", "result", "laps_ms", "lap_target", "hfxo_ppb", "verification", "master_boot_id", "boundary_tick"];
     const data = filtered(mode).map((r) => [
       r.id,
       new Date(r.createdAt).toISOString(),
+      r.startedUtc ?? "",
       MODE_LABEL[r.mode] || r.mode,
       r.note,
       r.result ?? "",
       r.result != null ? formatLapMs(r.result) : "",
       (r.laps || []).join(" "),
       r.lapTarget ?? "",
+      r.ppb ?? "",
       r.verification,
       r.masterBootId,
       r.boundaryTick,

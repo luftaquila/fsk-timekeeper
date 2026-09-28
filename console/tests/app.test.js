@@ -120,6 +120,7 @@ describe("app under jsdom", () => {
     await waitFor(() => timing.run.verification === "verified");
     await flushPromises();
     assert.match(wrapper.text(), /official/);
+    assert.match(wrapper.text(), /GPS-calibrated [+−]\d+\.\d\d ppm/);
     assert.ok(wrapper.find(".traffic-light.red").exists(), "red light after completion");
 
     await router.push("/history");
