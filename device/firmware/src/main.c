@@ -222,15 +222,21 @@ static void master_stopped(mp_state_t *power, int radio_up)
     }
 }
 
+/* Identity and the fault that rebooted us, before the radio comes up: a bring-up
+ * that hangs must not keep the cause from the host. */
+static void master_hello(void)
+{
+    pu_emit_identity(node_devid_hi(), node_devid_lo(), 1, fault_reset_reason());
+    uint32_t pc, lr, cfsr;
+    const char *cause;
+    if (fault_take_report(&pc, &lr, &cause, &cfsr)) { pu_emit_fault(pc, lr, cause, cfsr); }
+}
+
 static void run_master(int st)
 {
     mq_init(&g_queue);
     g_hfxo_stops = board_hfxo_stops();
     if (st == 0) { mac_master_init(&g_mac, &g_queue); }
-    pu_emit_identity(node_devid_hi(), node_devid_lo(), 1, fault_reset_reason());
-    uint32_t pc, lr, cfsr;
-    const char *cause;
-    if (fault_take_report(&pc, &lr, &cause, &cfsr)) { pu_emit_fault(pc, lr, cause, cfsr); }
 
     mp_state_t power = MP_RUN;
     retry_t retry;
@@ -324,6 +330,7 @@ int main(void)
     usb_init();
 
     int master = role_decide_master();
+    if (master) { master_hello(); }
 
     /* USB may have started HFXO while the role was being resolved: check the
      * clock source only now. */
