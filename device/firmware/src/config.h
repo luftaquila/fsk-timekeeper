@@ -19,8 +19,6 @@
 #define PIN_LORA_BUSY  PIN(1, 0)
 #define PIN_LORA_DIO1  PIN(1, 6)  /* GPIOTE capture (Tx/RxDone) — port 1 */
 #define PIN_LORA_NRST  PIN(0, 11) /* radio reset (NOT the board RST pin) */
-#define PIN_LORA_TXEN  PIN(1, 4)  /* RF switch TX enable */
-#define PIN_LORA_RXEN  PIN(0, 24) /* RF switch RX enable */
 
 /* Sensor input (BA2M NPN open-collector, falling edge) — sensor role */
 #define PIN_SENSOR_IN  PIN(1, 13) /* GPIOTE capture (falling) — port 1 */

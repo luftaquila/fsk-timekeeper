@@ -3586,8 +3586,16 @@
 		(uuid "4a387a88-7a10-4ebf-8208-439254b3ccad")
 	)
 	(no_connect
+		(at 48.26 99.06)
+		(uuid "4d0f5b62-7244-4fb3-a671-d8dc7b96edee")
+	)
+	(no_connect
 		(at 67.31 106.68)
 		(uuid "59656cb9-a403-4afa-b49d-b99394233df1")
+	)
+	(no_connect
+		(at 132.08 81.28)
+		(uuid "74816864-e3de-4b8f-8b2b-d90c610dcd48")
 	)
 	(no_connect
 		(at 86.36 83.82)
@@ -3596,6 +3604,10 @@
 	(no_connect
 		(at 212.09 121.92)
 		(uuid "ab1512c2-8434-4526-92e3-a38601586be7")
+	)
+	(no_connect
+		(at 48.26 91.44)
+		(uuid "b6402e7f-0893-4e03-9f5d-2639f1334e5e")
 	)
 	(no_connect
 		(at 132.08 76.2)
@@ -3608,6 +3620,10 @@
 	(no_connect
 		(at 132.08 86.36)
 		(uuid "be261197-d51c-45c0-92b1-c274746e3a86")
+	)
+	(no_connect
+		(at 132.08 93.98)
+		(uuid "cc0b77ec-92eb-47a1-aafd-aaba04560b91")
 	)
 	(no_connect
 		(at 64.77 106.68)
@@ -4031,16 +4047,6 @@
 		)
 		(uuid "4a7d4d08-c47b-4b61-9397-96fdc846489a")
 	)
-	(label "TXEN"
-		(at 48.26 99.06 180)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify right bottom)
-		)
-		(uuid "539c7606-e483-46b8-8877-f8adfbff812e")
-	)
 	(label "SENSE"
 		(at 80.01 127 0)
 		(effects
@@ -4060,16 +4066,6 @@
 			(justify right bottom)
 		)
 		(uuid "7ea008cc-886c-4551-acda-df6c880a7655")
-	)
-	(label "RXEN"
-		(at 48.26 91.44 180)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify right bottom)
-		)
-		(uuid "9c1ae60e-0c13-45a8-9c7e-d787f710c19a")
 	)
 	(label "SCK"
 		(at 48.26 88.9 180)
@@ -4131,16 +4127,6 @@
 		)
 		(uuid "af459890-fe6f-4236-9640-75b192b9121b")
 	)
-	(label "TXEN"
-		(at 132.08 81.28 0)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left bottom)
-		)
-		(uuid "b63a9d95-7715-4513-821c-0ca2efc9138e")
-	)
 	(label "SENSOR"
 		(at 57.15 127 180)
 		(effects
@@ -4170,16 +4156,6 @@
 			(justify right bottom)
 		)
 		(uuid "c66a8a35-f233-4922-b677-06a7911cfcf1")
-	)
-	(label "RXEN"
-		(at 132.08 93.98 0)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left bottom)
-		)
-		(uuid "e10d59e3-c437-4102-9f96-708c712ddc1e")
 	)
 	(label "NSS"
 		(at 111.76 88.9 180)
