@@ -61,6 +61,7 @@ export function createRun({
   debounceMs = DEFAULT_DEBOUNCE_MS,
   gpsAtStart = null,
   startedUtc = null,
+  durable = true,
   now = Date.now(),
   statusMaxAgeMs = WIRELESS_STATUS_MAX_AGE_MS,
 }) {
@@ -106,7 +107,7 @@ export function createRun({
     startedUtc,
     startedAt: now,
     historyId: null,
-    durable: true,
+    durable,
   };
 }
 
@@ -268,7 +269,8 @@ export function evaluateRun(run, rows, { now = Date.now() } = {}) {
 
   const laps = [];
   if (run.mode === "laps") {
-    for (let i = 1; i < starts.length; i++) {
+    const end = run.lapTarget ? Math.min(starts.length, run.lapTarget + 1) : starts.length; // crossings past the target are no laps
+    for (let i = 1; i < end; i++) {
       laps.push({ startTick: String(starts[i - 1].tick), endTick: String(starts[i].tick), confirmed: starts[i].tick <= startRole.certain });
     }
   }

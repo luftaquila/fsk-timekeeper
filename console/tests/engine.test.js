@@ -346,6 +346,16 @@ describe("dependency intervals and holes", () => {
     assert.equal(r.run.finishTick, tick(3000));
   });
 
+  it("laps stop at the target, whatever crossings follow in the same evidence", () => {
+    const log = lapsLog();
+    const run = start(log, "laps", LAPS, { lapTarget: 2 });
+    for (const ms of [1000, 5000, 9000, 13000, 17000]) log.capture("A", ms);
+    const r = ev(run, log);
+    assert.equal(r.run.verification, "verified");
+    assert.equal(r.run.crossingTicks.length, 3);
+    assert.equal(r.laps.length, 2);
+  });
+
   it("one silent sensor keeps its role unconfirmed", () => {
     const log = makeLog();
     log.checkpoint("A", -100);

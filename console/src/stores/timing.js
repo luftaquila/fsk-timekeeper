@@ -207,6 +207,7 @@ export const useTimingStore = defineStore("timing", () => {
         debounceMs: settings.state.debounceMs,
         gpsAtStart: device.gpsReport(),
         startedUtc: utcMs != null ? new Date(utcMs).toISOString() : null,
+        durable: device.durable,
       });
       stopCheckpointRequests();
       cancelFreeze();
