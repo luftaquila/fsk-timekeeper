@@ -1,11 +1,13 @@
-/* Fault-reboot bookkeeping (fault.c, built with FAULT_HOST_TEST) and the master
- * USB power policy (power.c). */
+/* Fault-reboot bookkeeping (fault.c, built with FAULT_HOST_TEST), the radio
+ * hang check (hang_guard.h) and the master USB power policy (power.c). */
 #include <assert.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
 #include "../src/config.h"
 #include "../src/fault.h"
+#include "../src/hang_guard.h"
 #include "../src/power.h"
 #include "../src/proto_usb.h"
 
@@ -54,6 +56,30 @@ static void fault_reboots(void)
     printf("PASS fault_reboots\n");
 }
 
+static void hang_check(void)
+{
+    hang_guard_t g;
+    hang_guard_reset(&g);
+    /* BUSY waits that end: BUSY drops, an SPI transfer or a new radio call */
+    assert(!hang_guard_poll(&g, 1, 100, RADIO_HANG_MS));
+    assert(!hang_guard_poll(&g, 1, 100 + RADIO_HANG_MS - 1u, RADIO_HANG_MS));
+    assert(!hang_guard_poll(&g, 0, 100 + RADIO_HANG_MS, RADIO_HANG_MS));
+    assert(!hang_guard_poll(&g, 1, 5000, RADIO_HANG_MS));
+    hang_guard_reset(&g);
+    assert(!hang_guard_poll(&g, 1, 5000 + RADIO_HANG_MS, RADIO_HANG_MS)); /* times from here */
+    /* BUSY high through a whole limit: the radio hung */
+    assert(!hang_guard_poll(&g, 1, 6000 + RADIO_HANG_MS - 1u, RADIO_HANG_MS));
+    assert(hang_guard_poll(&g, 1, 6000 + RADIO_HANG_MS, RADIO_HANG_MS));
+    /* across the millis wrap */
+    hang_guard_reset(&g);
+    assert(!hang_guard_poll(&g, 1, UINT32_MAX - 9u, RADIO_HANG_MS));
+    assert(!hang_guard_poll(&g, 1, RADIO_HANG_MS - 11u, RADIO_HANG_MS));
+    assert(hang_guard_poll(&g, 1, RADIO_HANG_MS - 10u, RADIO_HANG_MS));
+    /* every bounded wait is far shorter than the limit */
+    assert(RADIO_SPI_TIMEOUT_MS * 4u < RADIO_HANG_MS && RADIO_PROBE_MS + RADIO_SPI_TIMEOUT_MS < RADIO_HANG_MS);
+    printf("PASS hang_check\n");
+}
+
 static void power_policy(void)
 {
     mp_state_t s = MP_RUN;
@@ -67,6 +93,7 @@ static void power_policy(void)
 int main(void)
 {
     fault_reboots();
+    hang_check();
     power_policy();
     return 0;
 }

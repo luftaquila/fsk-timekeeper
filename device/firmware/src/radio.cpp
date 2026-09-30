@@ -13,7 +13,7 @@ extern "C" {
 }
 
 /* Statically allocated; hardware init happens in radio_begin(). */
-static NrfHal hal(PIN_LORA_SCK, PIN_LORA_MISO, PIN_LORA_MOSI);
+static NrfHal hal(PIN_LORA_SCK, PIN_LORA_MISO, PIN_LORA_MOSI, PIN_LORA_BUSY);
 static Module mod(&hal, PIN_LORA_NSS, PIN_LORA_DIO1, PIN_LORA_NRST, PIN_LORA_BUSY);
 static SX1262 radio(&mod);
 
@@ -63,6 +63,7 @@ extern "C" int radio_begin(void)
      * board; each attempt resets the radio again. */
     int16_t state = RADIOLIB_ERR_CHIP_NOT_FOUND;
     for (int attempt = 0; attempt < 5; attempt++) {
+        hal.restartHangCheck();
         if (!radio_answers()) {
             continue;
         }
@@ -86,6 +87,7 @@ extern "C" int radio_begin(void)
 
 extern "C" int radio_transmit(const uint8_t *data, int len)
 {
+    hal.restartHangCheck();
     int16_t state = track(radio.transmit(data, (size_t)len));
     if (state != RADIOLIB_ERR_NONE) { el_note(EL_TX_FAIL); }
     return state;
@@ -93,6 +95,7 @@ extern "C" int radio_transmit(const uint8_t *data, int len)
 
 extern "C" int radio_start_rx(void)
 {
+    hal.restartHangCheck();
     int16_t state = track(radio.startReceive(RADIOLIB_SX126X_RX_TIMEOUT_INF, RX_IRQ_FLAGS,
                                              RADIOLIB_IRQ_RX_DEFAULT_MASK, 0));
     if (state != RADIOLIB_ERR_NONE) { el_note(EL_RX_FAIL); }
@@ -101,11 +104,13 @@ extern "C" int radio_start_rx(void)
 
 extern "C" int radio_standby(void)
 {
+    hal.restartHangCheck();
     return track(radio.standby());
 }
 
 extern "C" int radio_receive(uint8_t *buf, int maxlen, float *rssi, float *snr)
 {
+    hal.restartHangCheck();
     if (gpio_read(PIN_LORA_DIO1) == 0) {
         return 0;
     }
@@ -127,6 +132,7 @@ extern "C" int radio_receive(uint8_t *buf, int maxlen, float *rssi, float *snr)
 
 extern "C" int radio_rx_settle(uint32_t header_wait_ms, uint32_t max_ms)
 {
+    hal.restartHangCheck();
     uint32_t t0 = board_millis();
     for (;;) {
         if (gpio_read(PIN_LORA_DIO1)) {
@@ -152,6 +158,7 @@ extern "C" int radio_rx_settle(uint32_t header_wait_ms, uint32_t max_ms)
  * it still transmits and receives, so only this sees it. */
 extern "C" int radio_cad(void)
 {
+    hal.restartHangCheck();
     if (track(radio.startChannelScan()) != RADIOLIB_ERR_NONE) {
         el_note(EL_CAD_TIMEOUT);
         s_cad_fail++;

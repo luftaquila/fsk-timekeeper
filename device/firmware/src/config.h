@@ -114,6 +114,9 @@
 /* After NRST the chip must answer its version string within this before a
  * begin() is tried; begin() on a silent radio would block ~10 s. */
 #define RADIO_PROBE_MS             100u
+/* One radio call spinning on BUSY this long with no SPI transfer is a hung radio
+ * (two RadioLib waits have no timeout): record it as a fault and reboot. */
+#define RADIO_HANG_MS              1000u
 
 /* Fault handlers reboot; after more than FAULT_REBOOT_MAX consecutive fault
  * reboots the board halts with a fast LED blink. The count clears after
