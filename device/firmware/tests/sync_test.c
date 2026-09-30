@@ -210,6 +210,35 @@ static void hold_limit(void)
     printf("PASS hold_limit\n");
 }
 
+/* Interpolation needs anchors that agree with a plausible crystal rate. */
+static void interpolation_rate(void)
+{
+    const uint64_t dl = 20u * 16000000u; /* anchors 20 s apart, around a beacon gap */
+    const struct { int64_t dev_ticks; int ok; } cases[] = {
+        { (int64_t)(dl * 90u / 1000000u), 1 },    /* +90 ppm: two crystals near their limits */
+        { -(int64_t)(dl * 90u / 1000000u), 1 },
+        { (int64_t)(dl * 110u / 1000000u), 0 },   /* +110 ppm: an anchor is wrong */
+        { -(int64_t)(dl * 110u / 1000000u), 0 },
+        { -(int64_t)dl - 16000000, 0 },           /* master time ran backwards */
+    };
+    for (unsigned i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        sync_t s;
+        sync_init(&s);
+        s.before.have = 1; s.before.local = 1000000000u; s.before.off = 4242u;
+        s.cur.have = 1;    s.cur.local = s.before.local + dl;
+        s.cur.off = s.before.off + (uint64_t)cases[i].dev_ticks; /* master advanced dl + dev */
+        uint64_t master;
+        uint8_t flags;
+        int r = sync_stamp(&s, s.before.local + dl / 4u, 1, &master, &flags);
+        assert(r == (cases[i].ok ? SYNC_STAMPED : SYNC_UNKNOWN));
+        if (cases[i].ok) {
+            int64_t want = (int64_t)(s.before.off + s.before.local + dl / 4u) + cases[i].dev_ticks / 4;
+            assert((int64_t)master - want >= -1 && (int64_t)master - want <= 1);
+        }
+    }
+    printf("PASS interpolation_rate\n");
+}
+
 static void invalid_inputs(void)
 {
     sync_t s;
@@ -236,6 +265,7 @@ int main(void)
     characterization();
     stamping_and_hold();
     hold_limit();
+    interpolation_rate();
     invalid_inputs();
     return 0;
 }

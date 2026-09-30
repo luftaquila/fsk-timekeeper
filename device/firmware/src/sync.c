@@ -5,6 +5,9 @@
 #include "config.h"
 #include "protocol.h"
 
+/* Capture quantization and radio IRQ jitter of two anchors, in ticks (1 us). */
+#define ANCHOR_JITTER_TICKS 16u
+
 void sync_init(sync_t *s)
 {
     memset(s, 0, sizeof(*s));
@@ -120,7 +123,10 @@ int sync_stamp(const sync_t *s, uint64_t local, int xtal, uint64_t *master, uint
     uint64_t m1 = s->before.off + s->before.local;
     uint64_t m2 = s->cur.off + s->cur.local;
     uint64_t dm = m2 - m1;
-    if (dm > 2u * dl) { return SYNC_UNKNOWN; } /* not a plausible rate: anchors disagree */
+    /* The two crystals run within SKEW_CLAMP_PPM of each other, as the skew check
+     * demands on the normal path; anchors implying another rate disagree. */
+    uint64_t dev = dm > dl ? dm - dl : dl - dm;
+    if (dev > dl * (uint64_t)SKEW_CLAMP_PPM / 1000000u + ANCHOR_JITTER_TICKS) { return SYNC_UNKNOWN; }
     uint64_t de = local - s->before.local;
     *master = m1 + (de * dm + dl / 2u) / dl;
     *flags = HEALTH_EVENT_REQUIRED | EVENT_INTERPOLATED;
