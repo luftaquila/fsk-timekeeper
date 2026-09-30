@@ -19,8 +19,6 @@
 #define PIN_LORA_BUSY  PIN(1, 0)
 #define PIN_LORA_DIO1  PIN(1, 6)  /* GPIOTE capture (Tx/RxDone) — port 1 */
 #define PIN_LORA_NRST  PIN(0, 11) /* radio reset (NOT the board RST pin) */
-#define PIN_LORA_TXEN  PIN(1, 4)  /* RF switch TX enable */
-#define PIN_LORA_RXEN  PIN(0, 24) /* RF switch RX enable */
 
 /* Sensor input (BA2M NPN open-collector, falling edge) — sensor role */
 #define PIN_SENSOR_IN  PIN(1, 13) /* GPIOTE capture (falling) — port 1 */
@@ -55,9 +53,10 @@
  * BEACON_PERIOD_MS on a TIMER1 grid. Sensor k owns slot k, which starts
  * SLOT_OFFSET_MS + k * SLOT_LEN_MS after the beacon RxDone; an uplink is ~77 ms
  * on air, and the last slot ends ~390 ms before the next beacon starts.
- * The radio leaves standby on its RC oscillator, so every RX, TX and CAD first
- * waits 5 ms for the TCXO: a CAD ends ~8 ms into the slot, and a TX let through
- * at SLOT_LATE_MS goes on air ~7 ms later (SPI + TCXO), ending by ~99 ms. */
+ * Standby keeps the TCXO running (radio.cpp), so RX and CAD start without its
+ * 5 ms wait. A CAD may still end on the RC oscillator, so the budget keeps that
+ * wait before a TX: one let through at SLOT_LATE_MS goes on air at most ~7 ms
+ * later (SPI + TCXO) and ends by ~99 ms. */
 #define BEACON_PERIOD_MS   1000u
 #define SLOT_OFFSET_MS     50u
 #define SLOT_LEN_MS        100u
@@ -65,7 +64,7 @@
 #define BEACON_LBT_MAX_MS  50u  /* re-sense a busy channel this long, then send the beacon anyway */
 #define RX_DRAIN_MAX_MS    100u /* longest wait for a reception in progress before a CAD */
 #define RX_HEADER_WAIT_MS  12u  /* a preamble without a header after this long is noise */
-#define CAD_TIMEOUT_MS     10u  /* a CAD takes ~7.5 ms: TCXO start + 4 symbols at SF7/BW250 */
+#define CAD_TIMEOUT_MS     10u  /* a CAD takes ~2.5 ms (4 symbols at SF7/BW250), ~7.5 ms after a TCXO start */
 
 /* Periodic checkpoint + diagnostics: in the beacon whose seq % this == slot % this. */
 #define CHECKPOINT_PERIOD_BEACONS 5u
@@ -108,12 +107,18 @@
 #define RADIO_NORESP_RESET         3u
 #define BEACON_LOSS_RESET_MS       10000u
 #define RADIO_RESET_BACKOFF_MAX_MS 60000u
+/* A radio that fails to come up at boot is retried after this, doubling up to
+ * RADIO_RESET_BACKOFF_MAX_MS: one bad start must not silence a board. */
+#define RADIO_BOOT_RETRY_MS        1000u
 /* BUSY wait per SX1262 command. Legitimate waits are a few ms (TCXO start 5 ms,
  * calibration); RadioLib's 1 s default stalls the main loop on a dead radio. */
 #define RADIO_SPI_TIMEOUT_MS       50u
 /* After NRST the chip must answer its version string within this before a
  * begin() is tried; begin() on a silent radio would block ~10 s. */
 #define RADIO_PROBE_MS             100u
+/* One radio call spinning on BUSY this long with no SPI transfer is a hung radio
+ * (two RadioLib waits have no timeout): record it as a fault and reboot. */
+#define RADIO_HANG_MS              1000u
 
 /* Fault handlers reboot; after more than FAULT_REBOOT_MAX consecutive fault
  * reboots the board halts with a fast LED blink. The count clears after

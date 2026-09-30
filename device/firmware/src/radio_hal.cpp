@@ -4,14 +4,19 @@
 #include "gpio.h"
 #include "board.h"
 #include "errlog.h"
+#include "fault.h"
+
+extern "C" {
+#include "config.h"
+}
 
 /* A 1 MHz transfer of the largest SX1262 command (~260 B) takes ~2 ms. */
 #define SPI_TRANSFER_MAX_US 10000u
 
-NrfHal::NrfHal(uint32_t sck, uint32_t miso, uint32_t mosi)
+NrfHal::NrfHal(uint32_t sck, uint32_t miso, uint32_t mosi, uint32_t busy)
     : RadioLibHal(NRFHAL_INPUT, NRFHAL_OUTPUT, NRFHAL_LOW, NRFHAL_HIGH,
                   NRFHAL_RISING, NRFHAL_FALLING),
-      _sck(sck), _miso(miso), _mosi(mosi), _spiTimeout(false)
+      _sck(sck), _miso(miso), _mosi(mosi), _busy(busy), _spiTimeout(false), _hang()
 {
 }
 
@@ -89,6 +94,21 @@ long NrfHal::pulseIn(uint32_t, uint32_t, RadioLibTime_t)
     return 0; /* unused by SX126x */
 }
 
+/* Called on every turn of RadioLib's BUSY loops. Bounded waits end within
+ * RADIO_SPI_TIMEOUT_MS; BUSY high for RADIO_HANG_MS means a loop without a
+ * timeout will never end. PC = the waiting RadioLib code. */
+void NrfHal::yield(void)
+{
+    if (hang_guard_poll(&_hang, gpio_read(_busy) != 0u, board_millis(), RADIO_HANG_MS)) {
+        fault_hang((uint32_t)__builtin_return_address(0), FAULT_CAUSE_RADIO);
+    }
+}
+
+void NrfHal::restartHangCheck(void)
+{
+    hang_guard_reset(&_hang);
+}
+
 void NrfHal::spiBegin(void)
 {
     /* Also runs again on every radio reset: PSEL may only change while SPIM is
@@ -114,6 +134,7 @@ void NrfHal::spiBeginTransaction(void) {}
 
 void NrfHal::spiTransfer(uint8_t* out, size_t len, uint8_t* in)
 {
+    hang_guard_reset(&_hang); /* the radio is taking commands */
     if (len == 0) {
         return;
     }

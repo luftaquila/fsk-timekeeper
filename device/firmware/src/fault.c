@@ -123,7 +123,7 @@ uint8_t fault_reset_reason(void)
 
 int fault_take_report(uint32_t *pc, uint32_t *lr, const char **cause, uint32_t *cfsr)
 {
-    static const char *const k_cause[] = { "?", "hard", "mem", "bus", "usage", "irq" };
+    static const char *const k_cause[] = { "?", "hard", "mem", "bus", "usage", "irq", "radio" };
     if (!s_report) { return 0; }
     s_report = 0;
     *pc = s_seen.pc;
@@ -139,6 +139,13 @@ void fault_service(uint32_t uptime_ms)
     s_stable = 1;
     s_rec.count = 0;
     s_rec.check = rec_check(&s_rec);
+}
+
+void fault_hang(uint32_t pc, uint32_t cause)
+{
+    __disable_irq();
+    if (fault_note(&s_rec, pc, 0u, 0u, cause)) { halt_blink(); }
+    NVIC_SystemReset();
 }
 
 /* frame = the exception stack frame (r0 r1 r2 r3 r12 lr pc xpsr). For an

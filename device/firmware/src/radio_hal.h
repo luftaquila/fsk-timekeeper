@@ -1,10 +1,13 @@
 /* RadioLib hardware abstraction for the nRF52840, bare metal: gpio.h pins, raw
  * SPIM0, and board_micros()/board_millis() for time. RadioLib polls DIO1
- * itself, so attachInterrupt/pulseIn are stubs. Main-loop context only. */
+ * itself, so attachInterrupt/pulseIn are stubs; yield() is the hang check of
+ * its BUSY loops. Main-loop context only. */
 #ifndef RADIO_HAL_H
 #define RADIO_HAL_H
 
 #include <RadioLib.h>
+
+#include "hang_guard.h"
 
 /* GPIO mode/level constants handed to the RadioLibHal base. */
 #define NRFHAL_INPUT   0x00u
@@ -16,7 +19,7 @@
 
 class NrfHal : public RadioLibHal {
   public:
-    NrfHal(uint32_t sck, uint32_t miso, uint32_t mosi);
+    NrfHal(uint32_t sck, uint32_t miso, uint32_t mosi, uint32_t busy);
 
     void init() override;
     void term() override;
@@ -33,6 +36,7 @@ class NrfHal : public RadioLibHal {
     RadioLibTime_t millis() override;
     RadioLibTime_t micros() override;
     long pulseIn(uint32_t pin, uint32_t state, RadioLibTime_t timeout) override;
+    void yield() override;
 
     void spiBegin() override;
     void spiBeginTransaction() override;
@@ -43,11 +47,16 @@ class NrfHal : public RadioLibHal {
     /* True once after an SPIM transfer did not finish in time. */
     bool takeSpiTimeout();
 
+    /* A new radio call: its BUSY waits are timed afresh (hang_guard.h). */
+    void restartHangCheck();
+
   private:
     uint32_t _sck;
     uint32_t _miso;
     uint32_t _mosi;
+    uint32_t _busy;
     bool _spiTimeout;
+    hang_guard_t _hang;
 };
 
 #endif /* RADIO_HAL_H */

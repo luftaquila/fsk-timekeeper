@@ -13,7 +13,7 @@ extern "C" {
 }
 
 /* Statically allocated; hardware init happens in radio_begin(). */
-static NrfHal hal(PIN_LORA_SCK, PIN_LORA_MISO, PIN_LORA_MOSI);
+static NrfHal hal(PIN_LORA_SCK, PIN_LORA_MISO, PIN_LORA_MOSI, PIN_LORA_BUSY);
 static Module mod(&hal, PIN_LORA_NSS, PIN_LORA_DIO1, PIN_LORA_NRST, PIN_LORA_BUSY);
 static SX1262 radio(&mod);
 
@@ -38,6 +38,27 @@ static int16_t track(int16_t state)
     return state;
 }
 
+/* SX126x ReadRegister frame: opcode, 16-bit address, a status byte, then the data.
+ * RadioLib's Module switches to this framing only inside begin(), so the probe
+ * sends it itself. */
+static bool read_version(char version[16])
+{
+    uint32_t t0 = board_millis();
+    while (gpio_read(PIN_LORA_BUSY)) {
+        if ((uint32_t)(board_millis() - t0) >= RADIO_SPI_TIMEOUT_MS) { return false; }
+    }
+    uint8_t out[4 + 16] = { RADIOLIB_SX126X_CMD_READ_REGISTER,
+                            (uint8_t)(RADIOLIB_SX126X_REG_VERSION_STRING >> 8),
+                            (uint8_t)(RADIOLIB_SX126X_REG_VERSION_STRING & 0xFFu),
+                            RADIOLIB_SX126X_CMD_NOP };
+    uint8_t in[sizeof(out)] = { 0 };
+    gpio_clear(PIN_LORA_NSS);
+    hal.spiTransfer(out, sizeof(out), in);
+    gpio_set(PIN_LORA_NSS);
+    memcpy(version, &in[4], 16);
+    return true;
+}
+
 /* Pulse NRST and wait for the version string: a radio that never answers would
  * keep begin() in findChip (10 resets, each retrying standby for 1 s). */
 static bool radio_answers(void)
@@ -48,12 +69,23 @@ static bool radio_answers(void)
     uint32_t t0 = board_millis();
     for (;;) {
         char version[16] = { 0 };
-        mod.SPIreadRegisterBurst(RADIOLIB_SX126X_REG_VERSION_STRING, sizeof(version),
-                                 reinterpret_cast<uint8_t *>(version));
-        if (strncmp(version, RADIOLIB_SX1262_CHIP_TYPE, 6) == 0) { return true; }
+        if (read_version(version) && strncmp(version, RADIOLIB_SX1262_CHIP_TYPE, 6) == 0) { return true; }
         if ((uint32_t)(board_millis() - t0) >= RADIO_PROBE_MS) { return false; }
         board_delay_ms(1);
     }
+}
+
+/* Keep the TCXO running in standby, and fall back to that standby after RX and
+ * TX: RX and CAD then start without the 5 ms TCXO wait. */
+static int16_t standby_on_tcxo(void)
+{
+    radio.standbyXOSC = true;
+    const uint8_t fallback = RADIOLIB_SX126X_RX_TX_FALLBACK_MODE_STDBY_XOSC;
+    int16_t state = mod.SPIwriteStream(RADIOLIB_SX126X_CMD_SET_RX_TX_FALLBACK_MODE, &fallback, 1);
+    if (state == RADIOLIB_ERR_NONE) {
+        state = radio.standby();
+    }
+    return state;
 }
 
 extern "C" int radio_begin(void)
@@ -63,12 +95,21 @@ extern "C" int radio_begin(void)
      * board; each attempt resets the radio again. */
     int16_t state = RADIOLIB_ERR_CHIP_NOT_FOUND;
     for (int attempt = 0; attempt < 5; attempt++) {
+        hal.restartHangCheck();
         if (!radio_answers()) {
             continue;
         }
+        /* begin() runs on the RC standby: the TCXO answers to DIO3 only once
+         * begin() has reset the chip and configured it. begin() also makes
+         * DIO2 drive the RF switch; the Ra-01SH ties TXEN to DIO2 and leaves
+         * RXEN open, so neither pin is wired. */
+        radio.standbyXOSC = false;
         state = radio.begin(LORA_FREQ_MHZ, LORA_BW_KHZ, LORA_SF, LORA_CR,
                             LORA_SYNCWORD, LORA_POWER_DBM, LORA_PREAMBLE,
                             LORA_TCXO_V, false);
+        if (state == RADIOLIB_ERR_NONE) {
+            state = standby_on_tcxo();
+        }
         if (state == RADIOLIB_ERR_NONE) {
             break;
         }
@@ -79,13 +120,12 @@ extern "C" int radio_begin(void)
     }
     s_noresp = 0;
     s_cad_fail = 0;
-    /* Ra-01SH RF switch (TXEN/RXEN) — required for any TX/RX (DESIGN §3/§8). */
-    radio.setRfSwitchPins(PIN_LORA_RXEN, PIN_LORA_TXEN);
     return RADIOLIB_ERR_NONE;
 }
 
 extern "C" int radio_transmit(const uint8_t *data, int len)
 {
+    hal.restartHangCheck();
     int16_t state = track(radio.transmit(data, (size_t)len));
     if (state != RADIOLIB_ERR_NONE) { el_note(EL_TX_FAIL); }
     return state;
@@ -93,6 +133,7 @@ extern "C" int radio_transmit(const uint8_t *data, int len)
 
 extern "C" int radio_start_rx(void)
 {
+    hal.restartHangCheck();
     int16_t state = track(radio.startReceive(RADIOLIB_SX126X_RX_TIMEOUT_INF, RX_IRQ_FLAGS,
                                              RADIOLIB_IRQ_RX_DEFAULT_MASK, 0));
     if (state != RADIOLIB_ERR_NONE) { el_note(EL_RX_FAIL); }
@@ -101,15 +142,24 @@ extern "C" int radio_start_rx(void)
 
 extern "C" int radio_standby(void)
 {
-    return track(radio.standby());
+    hal.restartHangCheck();
+    return track(radio.standby(RADIOLIB_SX126X_STANDBY_RC)); /* parked: the TCXO stops too */
 }
 
 extern "C" int radio_receive(uint8_t *buf, int maxlen, float *rssi, float *snr)
 {
+    hal.restartHangCheck();
     if (gpio_read(PIN_LORA_DIO1) == 0) {
         return 0;
     }
     size_t len = radio.getPacketLength();
+    /* A failed length read gives 0, and readData(buf, 0) takes the whole packet
+     * whatever its size. */
+    if (len == 0) {
+        radio_start_rx();
+        el_note(EL_RX_FAIL);
+        return -1;
+    }
     if (len > (size_t)maxlen) {
         len = (size_t)maxlen;
     }
@@ -127,6 +177,7 @@ extern "C" int radio_receive(uint8_t *buf, int maxlen, float *rssi, float *snr)
 
 extern "C" int radio_rx_settle(uint32_t header_wait_ms, uint32_t max_ms)
 {
+    hal.restartHangCheck();
     uint32_t t0 = board_millis();
     for (;;) {
         if (gpio_read(PIN_LORA_DIO1)) {
@@ -152,6 +203,7 @@ extern "C" int radio_rx_settle(uint32_t header_wait_ms, uint32_t max_ms)
  * it still transmits and receives, so only this sees it. */
 extern "C" int radio_cad(void)
 {
+    hal.restartHangCheck();
     if (track(radio.startChannelScan()) != RADIOLIB_ERR_NONE) {
         el_note(EL_CAD_TIMEOUT);
         s_cad_fail++;
