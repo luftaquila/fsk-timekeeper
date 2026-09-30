@@ -3,7 +3,8 @@
  *
  * Edges of one segment are exactly one GPS second apart per unit of n. Neighbouring segments
  * are bridged when the whole seconds between them are known (UTC, or tick rounding within an
- * hour); otherwise they belong to separate islands. Ticks outside PPS coverage are
+ * hour) and the ticks fit that many seconds of a plausible crystal; otherwise they belong to
+ * separate islands. Ticks outside PPS coverage are
  * extrapolated with the nearest segment's measured frequency; islands meet at the midpoint of
  * their gap. A boot without qualified edges is converted at the nominal 16 MHz.
  */
@@ -12,6 +13,7 @@ import { MASTER_TICKS_PER_S } from "./event-timing";
 const F_NOMINAL = MASTER_TICKS_PER_S;
 const WINDOW_S = 64n; // edges used for an extrapolation frequency
 const BRIDGE_MAX_TICKS = 3600n * F_NOMINAL;
+const BRIDGE_PPM_DIV = 5000n; // 200 ppm, the firmware's gate between qualified PPS edges
 
 function gcd(a, b) {
   if (a < 0n) a = -a;
@@ -60,7 +62,11 @@ function utcBase(seg) {
   return null;
 }
 
-// Whole GPS seconds between the last edge of a and the first edge of b, or null.
+const abs = (v) => (v < 0n ? -v : v);
+
+// Whole GPS seconds between the last edge of a and the first edge of b, or null. The ticks
+// between them must be k seconds within the PPS gate's 200 ppm: edges that disagree more (a
+// PPS phase step on reacquisition, say) are not bridged, and the gap is extrapolated.
 function bridgeSeconds(a, b) {
   const L = a.edges[a.edges.length - 1];
   const F = b.edges[0];
@@ -68,16 +74,17 @@ function bridgeSeconds(a, b) {
   if (dt <= 0n) return null;
   const ua = utcBase(a);
   const ub = utcBase(b);
+  let k = null;
   if (ua != null && ub != null) {
-    const k = ub + F.n - (ua + L.n);
-    const err = k * F_NOMINAL - dt;
-    if (k >= 1n && (err < 0n ? -err : err) <= F_NOMINAL / 2n + dt / 1000n) return k;
+    const byUtc = ub + F.n - (ua + L.n);
+    if (byUtc >= 1n && abs(byUtc * F_NOMINAL - dt) <= F_NOMINAL / 2n + dt / 1000n) k = byUtc;
   }
-  if (dt <= BRIDGE_MAX_TICKS) {
-    const k = roundHalfUp(q(dt, F_NOMINAL));
-    return k >= 1n ? k : null;
+  if (k == null && dt <= BRIDGE_MAX_TICKS) {
+    const rounded = roundHalfUp(q(dt, F_NOMINAL));
+    if (rounded >= 1n) k = rounded;
   }
-  return null;
+  if (k == null || abs(k * F_NOMINAL - dt) > (k * F_NOMINAL) / BRIDGE_PPM_DIV) return null;
+  return k;
 }
 
 // Ticks per second measured over at most WINDOW_S seconds at one end of a segment.
@@ -150,28 +157,28 @@ function lastAtOrBefore(edges, tick) {
   return found;
 }
 
-// T(tick) in GPS seconds, with how it was obtained.
+// T(tick) in GPS seconds, with how it was obtained and the island it was taken from.
 export function timeAt(timeline, tickValue) {
   const tick = toBig(tickValue);
   const edges = timeline.edges;
-  if (!edges.length) return { t: q(tick, F_NOMINAL), how: "nominal", extrapTicks: null };
+  if (!edges.length) return { t: q(tick, F_NOMINAL), how: "nominal", extrapTicks: null, island: null };
   const i = lastAtOrBefore(edges, tick);
-  if (i >= 0 && edges[i].tick === tick) return { t: edges[i].t, how: "interp", extrapTicks: null };
-  const forward = (e) => ({ t: add(e.t, div(q(tick - e.tick), segmentFrequency(timeline.segs[e.seg], true))), how: "extrap", extrapTicks: tick - e.tick });
-  const backward = (e) => ({ t: sub(e.t, div(q(e.tick - tick), segmentFrequency(timeline.segs[e.seg], false))), how: "extrap", extrapTicks: e.tick - tick });
+  if (i >= 0 && edges[i].tick === tick) return { t: edges[i].t, how: "interp", extrapTicks: null, island: edges[i].island };
+  const forward = (e) => ({ t: add(e.t, div(q(tick - e.tick), segmentFrequency(timeline.segs[e.seg], true))), how: "extrap", extrapTicks: tick - e.tick, island: e.island });
+  const backward = (e) => ({ t: sub(e.t, div(q(e.tick - tick), segmentFrequency(timeline.segs[e.seg], false))), how: "extrap", extrapTicks: e.tick - tick, island: e.island });
   if (i < 0) return backward(edges[0]);
   if (i === edges.length - 1) return forward(edges[i]);
   const a = edges[i];
   const b = edges[i + 1];
   if (a.island === b.island) {
     const t = add(a.t, div(mul(q(tick - a.tick), sub(b.t, a.t)), q(b.tick - a.tick)));
-    return { t, how: a.seg === b.seg ? "interp" : "bridge", extrapTicks: null };
+    return { t, how: a.seg === b.seg ? "interp" : "bridge", extrapTicks: null, island: a.island };
   }
   return 2n * tick <= a.tick + b.tick ? forward(a) : backward(b);
 }
 
-function toPoint({ t, how, extrapTicks }) {
-  return { num: String(t.n), den: String(t.d), how, extrapTicks: extrapTicks == null ? null : String(extrapTicks) };
+function toPoint({ t, how, extrapTicks, island }) {
+  return { num: String(t.n), den: String(t.d), how, extrapTicks: extrapTicks == null ? null : String(extrapTicks), island };
 }
 
 function pointTime(point) {
@@ -198,7 +205,10 @@ export function calibrationPoints(source, ticks) {
 export function pointsMethod(points, ticks = null) {
   const list = (ticks ? ticks.map((t) => points?.[String(t)]) : Object.values(points || {})).filter(Boolean);
   if (!list.length || list.some((p) => p.how === "nominal")) return "nominal";
-  return list.some((p) => p.how === "extrap") ? "gps-extrapolated" : "gps";
+  if (list.some((p) => p.how === "extrap")) return "gps-extrapolated";
+  // Two islands are joined only by extrapolation across the gap between them.
+  const islands = new Set(list.map((p) => p.island).filter((v) => v != null));
+  return islands.size > 1 ? "gps-extrapolated" : "gps";
 }
 
 // (T(b) − T(a)) in ns, rounded half up; null when a point is missing.

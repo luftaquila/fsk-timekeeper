@@ -75,6 +75,25 @@ describe("PPS timeline", () => {
     }
   });
 
+  it("does not bridge edges that disagree with the crystal (a PPS phase step between segments)", () => {
+    const osc = oscillator({ b: 0 });
+    const step = BigInt(F / 20); // the second segment's pulses come 50 ms late
+    const first = edgesOf(osc, range(0, 20), { seg: 1 });
+    const second = edgesOf(osc, range(40, 60), { seg: 2, n0: 0 }).map((e) => ({ ...e, tick: String(BigInt(e.tick) + step) }));
+    for (const utc of [true, false]) {
+      const edges = [...first, ...second].map((e) => (utc ? e : { ...e, utc: null }));
+      const timeline = buildTimeline(edges);
+      assert.equal(timeline.segs[1].island, 1);
+      assert.equal(timeAt(timeline, osc(30.25)).how, "extrap");
+      // across the gap the crystal counts, not the stepped PPS
+      const a = osc(5);
+      const b = osc(55);
+      const points = calibrationPoints(edges, [a, b]);
+      assert.ok(Math.abs(Number(durationNs(points, a, b)) - 50e9) < 1000, `${durationNs(points, a, b)}`);
+      assert.equal(pointsMethod(points), "gps-extrapolated");
+    }
+  });
+
   it("extrapolates past the last edge with the nearest segment's frequency", () => {
     const osc = oscillator({ a: 50e-6, b: 0 });
     const edges = edgesOf(osc, range(0, 100));
