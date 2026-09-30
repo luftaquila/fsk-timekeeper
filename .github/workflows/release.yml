@@ -21,7 +21,10 @@ jobs:
     uses: ./.github/workflows/3d.yml
   build-html:
     uses: ./.github/workflows/web-bundle.yml
+  # The console refuses a master of another protocol version, so it is only
+  # deployed once the firmware and console tests of this release pass.
   deploy-web:
+    needs: [build-firmware, build-html]
     uses: ./.github/workflows/web.yml
   release:
     name: release
