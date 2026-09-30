@@ -55,9 +55,10 @@
  * BEACON_PERIOD_MS on a TIMER1 grid. Sensor k owns slot k, which starts
  * SLOT_OFFSET_MS + k * SLOT_LEN_MS after the beacon RxDone; an uplink is ~77 ms
  * on air, and the last slot ends ~390 ms before the next beacon starts.
- * The radio leaves standby on its RC oscillator, so every RX, TX and CAD first
- * waits 5 ms for the TCXO: a CAD ends ~8 ms into the slot, and a TX let through
- * at SLOT_LATE_MS goes on air ~7 ms later (SPI + TCXO), ending by ~99 ms. */
+ * Standby keeps the TCXO running (radio.cpp), so RX and CAD start without its
+ * 5 ms wait. A CAD may still end on the RC oscillator, so the budget keeps that
+ * wait before a TX: one let through at SLOT_LATE_MS goes on air at most ~7 ms
+ * later (SPI + TCXO) and ends by ~99 ms. */
 #define BEACON_PERIOD_MS   1000u
 #define SLOT_OFFSET_MS     50u
 #define SLOT_LEN_MS        100u
@@ -65,7 +66,7 @@
 #define BEACON_LBT_MAX_MS  50u  /* re-sense a busy channel this long, then send the beacon anyway */
 #define RX_DRAIN_MAX_MS    100u /* longest wait for a reception in progress before a CAD */
 #define RX_HEADER_WAIT_MS  12u  /* a preamble without a header after this long is noise */
-#define CAD_TIMEOUT_MS     10u  /* a CAD takes ~7.5 ms: TCXO start + 4 symbols at SF7/BW250 */
+#define CAD_TIMEOUT_MS     10u  /* a CAD takes ~2.5 ms (4 symbols at SF7/BW250), ~7.5 ms after a TCXO start */
 
 /* Periodic checkpoint + diagnostics: in the beacon whose seq % this == slot % this. */
 #define CHECKPOINT_PERIOD_BEACONS 5u

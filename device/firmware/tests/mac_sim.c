@@ -34,8 +34,8 @@
 #define REC_MAX     20000
 #define EDGE_MAX    20000
 #define STEP_US     200u
-/* The radio leaves standby on the RC oscillator, so RX, TX and CAD each wait
- * for the TCXO first (RadioLib setTCXO default delay). */
+/* Worst case: RX, TX and CAD each wait for the TCXO first (RadioLib setTCXO
+ * default delay). Standby on the TCXO (radio.cpp) saves some of these waits. */
 #define TCXO_US     5000u
 #define CAD_US      2560u   /* 4 symbols at SF7/BW250 */
 #define TX_SETUP_US 7000u   /* SPI (~1.5 ms at 1 MHz: packet, params) + TCXO + PA ramp */

@@ -56,6 +56,19 @@ static bool radio_answers(void)
     }
 }
 
+/* Keep the TCXO running in standby, and fall back to that standby after RX and
+ * TX: RX and CAD then start without the 5 ms TCXO wait. */
+static int16_t standby_on_tcxo(void)
+{
+    radio.standbyXOSC = true;
+    const uint8_t fallback = RADIOLIB_SX126X_RX_TX_FALLBACK_MODE_STDBY_XOSC;
+    int16_t state = mod.SPIwriteStream(RADIOLIB_SX126X_CMD_SET_RX_TX_FALLBACK_MODE, &fallback, 1);
+    if (state == RADIOLIB_ERR_NONE) {
+        state = radio.standby();
+    }
+    return state;
+}
+
 extern "C" int radio_begin(void)
 {
     mod.spiConfig.timeout = RADIO_SPI_TIMEOUT_MS;
@@ -67,9 +80,15 @@ extern "C" int radio_begin(void)
         if (!radio_answers()) {
             continue;
         }
+        /* begin() runs on the RC standby: the TCXO answers to DIO3 only once
+         * begin() has reset the chip and configured it. */
+        radio.standbyXOSC = false;
         state = radio.begin(LORA_FREQ_MHZ, LORA_BW_KHZ, LORA_SF, LORA_CR,
                             LORA_SYNCWORD, LORA_POWER_DBM, LORA_PREAMBLE,
                             LORA_TCXO_V, false);
+        if (state == RADIOLIB_ERR_NONE) {
+            state = standby_on_tcxo();
+        }
         if (state == RADIOLIB_ERR_NONE) {
             break;
         }
