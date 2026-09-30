@@ -2,11 +2,17 @@
 
 Wireless LoRa timing instrument for Formula Student Korea dynamic events.
 
-* One USB master, up to six battery-powered sensors, one 921.3 MHz channel (KR920)
+* One USB master, up to five battery-powered sensors (two in practice), one 921.3 MHz channel (KR920)
 * Two modes: start → finish, laps (optional auto-stop)
 * Console: one HTML file, Chrome / Edge (Web Serial)
   * https://luftaquila.github.io/fsk-timekeeper/
   * `fsk-timekeeper-console.html` from the [latest release](https://github.com/luftaquila/fsk-timekeeper/releases/latest)
+
+## Usage notes
+
+* The master is the board plugged into the console PC, and it must stay plugged in. Unplugged, it stops all radio activity; plugged back in, it starts a new session and any open run ends.
+* Update the console and the firmware of every board together. The console refuses a master that reports another protocol version and says why.
+* Flashing with several boards plugged in: `./flash.sh --serial <chip id>` (Windows: `.\flash.ps1 -Serial <chip id>`, not yet tested on Windows). The chip id is the 16-hex device id the console shows for the board.
 
 > [!NOTE]
 > Assembly, usage and troubleshooting guides will follow.
