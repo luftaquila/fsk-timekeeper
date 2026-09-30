@@ -103,10 +103,9 @@ static int nvmc_wait(void)
     return 0;
 }
 
-/* P0.09/P0.10 (GPS PPS/TXD) are NFC pins until UICR.NFCPINS.PROTECT is cleared.
- * Clear it once on a board's first boot, verify, and reset so it takes effect;
- * a failed write boots without GPS instead of looping. App DFU never erases UICR.
- * Must precede every other pin setup. */
+/* P0.09/P0.10 (GPS PPS/TXD) are NFC pins until UICR.NFCPINS.PROTECT is cleared: clear it
+ * once, verify and reset (a failed write boots without GPS, no loop). App DFU never erases
+ * UICR. Must precede every other pin setup. */
 static void nfc_pins_as_gpio(void)
 {
     if ((NRF_UICR->NFCPINS & UICR_NFCPINS_PROTECT_Msk) == 0) {

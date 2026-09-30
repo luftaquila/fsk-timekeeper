@@ -76,10 +76,9 @@ static void on_beacon(mac_sensor_t *s, const uint8_t *buf, int n)
     sq_resolve(&s->q, &s->sync, capture_now64());
     if (b.cp_req != 0u && b.cp_req != s->cp_answered) { s->cp_pending = b.cp_req; }
 
-    /* Our slot carries our short id and this boot's tag. The same short id under
-     * another tag is our entry from before a reboot, or a sensor whose id shares
-     * our low 16 bits: contend in a free slot rather than jam that one, and use it
-     * only when no slot is free (the master then updates the tag). */
+    /* Our slot carries our short id and this boot's tag. The short id under another tag is our
+     * entry from before a reboot, or a sensor sharing our low 16 bits: contend in a free slot
+     * rather than jam it, and in it only when none is free (the master then updates the tag). */
     unsigned free_mask = 0, named_mask = 0;
     s->slot = -1;
     for (unsigned k = 0; k < MAX_NODES; k++) {

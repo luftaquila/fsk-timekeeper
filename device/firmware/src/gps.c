@@ -15,11 +15,9 @@
 #define NMEA_MAX          96u
 #define NMEA_FIELDS       16u
 
-/* ---- UARTE0 receive: one-byte EasyDMA transfers re-armed by the ENDRX->STARTRX
- * short, each byte moved to a ring from the ENDRX interrupt: the main loop can
- * block for tens of ms (beacon LBT + TX) while a byte takes 1.04 ms at 9600 bps.
- * Overflow drops the newest byte and the checksum rejects the torn sentence.
- * EasyDMA buffers must live in RAM. */
+/* ---- UARTE0 receive: one-byte EasyDMA transfers (ENDRX->STARTRX short) moved to a ring by the
+ * ENDRX interrupt, as the main loop can block for tens of ms at 1.04 ms per byte. Overflow drops
+ * the newest byte (the checksum rejects the torn sentence). EasyDMA buffers must be in RAM. */
 static uint8_t s_dma_byte;
 static volatile uint8_t s_rx_ring[RX_RING];
 static volatile uint16_t s_rx_head;
@@ -85,10 +83,9 @@ static uint64_t s_pps_last_tick;
 static uint32_t s_pps_last_ms;
 static int s_pps_have;
 
-/* Qualification segments for the console's PPS timeline: a segment is a run of
- * qualified edges one second apart; it ends whenever the window restarts. An
- * edge qualifies once its interval to the previous one passed the gate, so the
- * first edge of a window (a glitch that reset it, say) is never a segment. */
+/* Qualification segments for the console's PPS timeline: runs of qualified edges one second
+ * apart, ended by a window restart. An edge qualifies once its interval to the previous one
+ * passed the gate, so a window's first edge (a glitch that reset it, say) is never a segment. */
 static uint32_t s_seg;       /* id of the current segment, 0 before the first */
 static uint32_t s_seg_n;     /* index of the newest edge in it */
 typedef struct {
@@ -102,10 +99,9 @@ static edge_t s_edge;        /* newest edge, until reported */
 static int s_edge_pending;
 static edge_t s_rep;         /* newest reported edge (repeated by later reports) */
 
-/* RMC A is a conservative, expiring prerequisite, not a PPS lock or accuracy
- * flag (NMEA has no timepulse-validity indication). A cached A never qualifies
- * edges after UART reception stops. The interval gate rejects outliers but
- * cannot certify an SI-second reference. */
+/* RMC A is a conservative, expiring prerequisite, not a PPS lock or accuracy flag (NMEA has no
+ * timepulse validity): a cached A never qualifies edges after UART reception stops. The interval
+ * gate rejects outliers but cannot certify an SI-second reference. */
 static int s_nav_valid;
 static uint32_t s_rmc_last_ms;
 static uint32_t s_hfxo_stops;

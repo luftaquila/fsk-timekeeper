@@ -99,10 +99,9 @@ extern "C" int radio_begin(void)
         if (!radio_answers()) {
             continue;
         }
-        /* begin() runs on the RC standby: the TCXO answers to DIO3 only once
-         * begin() has reset the chip and configured it. begin() also makes
-         * DIO2 drive the RF switch; the Ra-01SH ties TXEN to DIO2 and leaves
-         * RXEN open, so neither pin is wired. */
+        /* begin() runs on the RC standby (the TCXO answers to DIO3 only once begin() has
+         * configured it) and makes DIO2 drive the RF switch: the Ra-01SH ties TXEN to DIO2
+         * and leaves RXEN open, so neither pin is wired. */
         radio.standbyXOSC = false;
         state = radio.begin(LORA_FREQ_MHZ, LORA_BW_KHZ, LORA_SF, LORA_CR,
                             LORA_SYNCWORD, LORA_POWER_DBM, LORA_PREAMBLE,

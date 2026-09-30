@@ -112,10 +112,9 @@ function segmentFrequency(segs, index, atEnd) {
   return best ?? q(F_NOMINAL);
 }
 
-// Frequencies at L (last edge of a) and F (first edge of b), k seconds apart: the two end
-// windows' frequencies moved along the trend between their middles, so a crystal drifting
-// linearly with temperature is followed. Null unless both ends have a measured frequency:
-// one side alone gives no trend.
+// Frequencies at L and F (k seconds apart): each end window's frequency moved to its gap end
+// along the trend between the windows, so a linear drift is followed. Null unless both ends
+// have a measured frequency (one side gives no trend).
 function gapFrequencies(a, b, k) {
   const wa = endWindow(a, true);
   const wb = endWindow(b, false);
@@ -124,11 +123,9 @@ function gapFrequencies(a, b, k) {
   return { fL: sub(wa.f, mul(trend, wa.mid)), fF: sub(wb.f, mul(trend, wb.mid)) };
 }
 
-// Bridge from the last edge of a to the first edge of b: { k whole GPS seconds, gap
-// frequencies }, or null. The ticks across the gap must be k seconds at the neighbours'
-// frequencies within 1 us + 1 ppm: edges that disagree more (a PPS phase step on
-// reacquisition, say) are not bridged, and the gap is extrapolated. Without a measured
-// frequency on both sides only the firmware gate's 200 ppm can be checked.
+// { k whole GPS seconds, gap frequencies } from the last edge of a to the first of b, or null:
+// the ticks must be k seconds at the neighbours' frequencies within 1 us + 1 ppm (else, e.g. a
+// PPS phase step, the gap is extrapolated); unmeasured neighbours leave only the 200 ppm gate.
 function bridgeOf(a, b) {
   const L = a.edges[a.edges.length - 1];
   const F = b.edges[0];

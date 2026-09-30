@@ -56,10 +56,9 @@ uint8_t sync_health(const sync_t *s, uint64_t at, int xtal);
 /* Age of the newest anchor at local tick `at`, ms, saturated (UINT16_MAX = none). */
 uint16_t sync_age_ms(const sync_t *s, uint64_t at);
 
-/* Stamp a capture taken at local tick `local` with HFXO state xtal:
- *   SYNC_STAMPED  master tick and flags set (flags may lack health bits),
- *   SYNC_HOLD     anchor too old: keep the local tick and retry after the next anchor,
- *   SYNC_UNKNOWN  cannot be stamped (no anchor, clock lost, anchors too far apart). */
+/* Stamp a capture at local tick `local` with HFXO state xtal: SYNC_STAMPED (master tick and flags
+ * set, flags may lack health bits), SYNC_HOLD (anchor too old: keep the local tick, retry after
+ * the next anchor), SYNC_UNKNOWN (no anchor, clock lost, anchors too far apart or disagreeing). */
 #define SYNC_STAMPED 0
 #define SYNC_HOLD    1
 #define SYNC_UNKNOWN 2
