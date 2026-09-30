@@ -61,6 +61,48 @@ static void service(uint32_t now)
     board_hfxo_service();
 }
 
+/* ===== bring-up ========================================================== */
+
+/* Radio, TIMER1 and the role's captures; 0 when up. Fail closed: no radio or
+ * TIMER1 work on HFINT. Until it is up the board keeps USB provisioning and
+ * retries with backoff. */
+static int bring_up(int master)
+{
+    if (!board_hfclk_xtal()) { return -1; }
+    int st = radio_begin();
+    if (st != 0) { return st; }
+    capture_init();
+    if (master) {
+        capture_pps_enable();
+        gps_init();
+    } else {
+        capture_sensor_enable();
+    }
+    return 0;
+}
+
+typedef struct {
+    uint32_t at_ms;
+    uint32_t backoff_ms;
+} retry_t;
+
+static void retry_init(retry_t *r)
+{
+    r->backoff_ms = RADIO_BOOT_RETRY_MS;
+    r->at_ms = board_millis() + r->backoff_ms;
+}
+
+/* 1 once a due retry has brought the board up. */
+static int retry_bring_up(retry_t *r, int master, uint32_t now)
+{
+    if ((int32_t)(now - r->at_ms) < 0) { return 0; }
+    el_note(EL_RADIO_RESET);
+    if (bring_up(master) == 0) { return 1; }
+    r->backoff_ms = r->backoff_ms * 2u > RADIO_RESET_BACKOFF_MAX_MS ? RADIO_RESET_BACKOFF_MAX_MS : r->backoff_ms * 2u;
+    r->at_ms = board_millis() + r->backoff_ms;
+    return 0;
+}
+
 /* ===== sensor ============================================================ */
 
 static mac_sensor_t g_sensor;
@@ -68,6 +110,8 @@ static mac_sensor_t g_sensor;
 static void run_sensor(int st)
 {
     if (st == 0) { mac_sensor_init(&g_sensor, node_sender_id(), fault_reset_reason()); }
+    retry_t retry;
+    retry_init(&retry);
     uint32_t last_blink = board_millis();
     for (;;) {
         uint32_t now = board_millis();
@@ -85,7 +129,12 @@ static void run_sensor(int st)
             default: break;
             }
         }
-        if (st != 0) { /* no radio / no crystal: provisioning only */
+        if (st != 0) { /* no radio / no crystal: provisioning, and a retry now and then */
+            if (retry_bring_up(&retry, 0, now)) {
+                st = 0;
+                mac_sensor_init(&g_sensor, node_sender_id(), fault_reset_reason());
+                continue;
+            }
             if ((uint32_t)(now - last_blink) >= 1000u) { last_blink = now; board_led_toggle(); }
             continue;
         }
@@ -182,6 +231,8 @@ static void run_master(int st)
     if (fault_take_report(&pc, &lr, &cause, &cfsr)) { pu_emit_fault(pc, lr, cause, cfsr); }
 
     mp_state_t power = MP_RUN;
+    retry_t retry;
+    retry_init(&retry);
     uint32_t last = board_millis();
     uint8_t idle_seq = 0;
     for (;;) {
@@ -234,6 +285,12 @@ static void run_master(int st)
         mq_pump(&g_queue, now);
 
         if (st != 0) {
+            if (retry_bring_up(&retry, 1, now)) {
+                st = 0;
+                g_hfxo_stops = board_hfxo_stops();
+                mac_master_init(&g_mac, &g_queue);
+                continue;
+            }
             if ((uint32_t)(now - last) >= 1000u) {
                 last = now;
                 pu_emit_heartbeat(0, now, idle_seq++, 0);
@@ -266,22 +323,9 @@ int main(void)
 
     int master = role_decide_master();
 
-    /* USB may have started HFXO while the role was being resolved; check the
-     * real source only now and fail closed: no radio or TIMER1 work on HFINT.
-     * Provisioning over USB stays available either way. */
-    int st = -1;
-    if (board_hfclk_xtal()) {
-        st = radio_begin();
-        if (st == 0) {
-            capture_init();
-            if (master) {
-                capture_pps_enable();
-                gps_init();
-            } else {
-                capture_sensor_enable();
-            }
-        }
-    }
+    /* USB may have started HFXO while the role was being resolved: check the
+     * clock source only now. */
+    int st = bring_up(master);
 
     if (master) {
         run_master(st);

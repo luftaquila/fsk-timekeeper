@@ -107,6 +107,9 @@
 #define RADIO_NORESP_RESET         3u
 #define BEACON_LOSS_RESET_MS       10000u
 #define RADIO_RESET_BACKOFF_MAX_MS 60000u
+/* A radio that fails to come up at boot is retried after this, doubling up to
+ * RADIO_RESET_BACKOFF_MAX_MS: one bad start must not silence a board. */
+#define RADIO_BOOT_RETRY_MS        1000u
 /* BUSY wait per SX1262 command. Legitimate waits are a few ms (TCXO start 5 ms,
  * calibration); RadioLib's 1 s default stalls the main loop on a dead radio. */
 #define RADIO_SPI_TIMEOUT_MS       50u
