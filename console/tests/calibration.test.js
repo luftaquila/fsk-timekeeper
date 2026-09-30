@@ -109,6 +109,25 @@ describe("PPS timeline", () => {
     assert.equal(island([...edgesOf(steady, [0]), ...stepped(steady, 20, 80, 1000)]), 0);
   });
 
+  it("follows a crystal drifting across a bridged gap instead of averaging it", () => {
+    for (const { b, gap } of [
+      { b: 1e-8, gap: 600 }, // 0.01 ppm/s: a straight line between the ends is 450 us off mid-gap
+      { b: 1e-7, gap: 60 }, // 0.1 ppm/s: 45 us
+    ]) {
+      const osc = oscillator({ a: 20e-6, b });
+      const edges = [...edgesOf(osc, range(0, 60), { seg: 1 }), ...edgesOf(osc, range(60 + gap, 120 + gap), { seg: 2, n0: 0 })];
+      const timeline = buildTimeline(edges);
+      assert.equal(timeline.segs[1].island, 0);
+      let worst = 0;
+      for (let i = 1; i < 20; i++) {
+        const t = 60 + (gap * i) / 20;
+        assert.equal(timeAt(timeline, osc(t)).how, "bridge");
+        worst = Math.max(worst, Math.abs(seconds(timeline, osc(t)) - t) * 1e9);
+      }
+      assert.ok(worst < 1000, `b=${b} gap=${gap}: worst ${worst} ns`);
+    }
+  });
+
   it("extrapolates past the last edge with the nearest segment's frequency", () => {
     const osc = oscillator({ a: 50e-6, b: 0 });
     const edges = edgesOf(osc, range(0, 100));

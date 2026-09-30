@@ -4,7 +4,9 @@
  * Edges of one segment are exactly one GPS second apart per unit of n. Neighbouring segments
  * are bridged when the whole seconds between them are known (UTC, or tick rounding within an
  * hour) and the ticks across the gap match that many seconds at the neighbours' measured
- * frequencies; otherwise they belong to separate islands. Ticks outside PPS coverage are
+ * frequencies; otherwise they belong to separate islands. Inside a bridge T follows the
+ * frequencies at both ends (cubic Hermite), so a drifting crystal is not averaged over the gap.
+ * Ticks outside PPS coverage are
  * extrapolated with the nearest segment's measured frequency; islands meet at the midpoint of
  * their gap. A boot without qualified edges is converted at the nominal 16 MHz.
  */
@@ -139,7 +141,7 @@ export function buildTimeline(edges) {
   for (const e of list) {
     const seg = segs[segs.length - 1];
     if (seg && seg.id === e.seg && e.n > seg.edges[seg.edges.length - 1].n) seg.edges.push(e);
-    else segs.push({ id: e.seg, edges: [e], base: null, island: 0 });
+    else segs.push({ id: e.seg, edges: [e], base: null, island: 0, bridgeFreq: null });
   }
   let island = 0;
   for (let i = 0; i < segs.length; i++) {
@@ -156,6 +158,7 @@ export function buildTimeline(edges) {
     if (bridge) {
       seg.island = island;
       seg.base = sub(add(tL, q(bridge.k)), q(F.n));
+      seg.bridgeFreq = bridge.freq;
       continue;
     }
     // New island: each half of the gap is extrapolated from its own side; T meets at the midpoint.
@@ -187,6 +190,21 @@ function lastAtOrBefore(edges, tick) {
   return found;
 }
 
+// T between the last edge a of one segment and the first edge b of the next, bridged: cubic
+// Hermite in u = (tick − a) / (b − a) with the end slopes 1/fL and 1/fF (seconds per tick).
+// A frequency changing linearly across the gap is followed exactly; the ends stay a.t, b.t.
+function hermite(a, b, tick, freq) {
+  const dx = q(b.tick - a.tick);
+  const u = q(tick - a.tick, b.tick - a.tick);
+  const u2 = mul(u, u);
+  const u3 = mul(u2, u);
+  const h00 = add(sub(mul(q(2n), u3), mul(q(3n), u2)), q(1n));
+  const h10 = add(sub(u3, mul(q(2n), u2)), u);
+  const h01 = sub(mul(q(3n), u2), mul(q(2n), u3));
+  const h11 = sub(u3, u2);
+  return add(add(mul(h00, a.t), mul(h10, div(dx, freq.fL))), add(mul(h01, b.t), mul(h11, div(dx, freq.fF))));
+}
+
 // T(tick) in GPS seconds, with how it was obtained and the island it was taken from.
 export function timeAt(timeline, tickValue) {
   const tick = toBig(tickValue);
@@ -201,7 +219,8 @@ export function timeAt(timeline, tickValue) {
   const a = edges[i];
   const b = edges[i + 1];
   if (a.island === b.island) {
-    const t = add(a.t, div(mul(q(tick - a.tick), sub(b.t, a.t)), q(b.tick - a.tick)));
+    const freq = a.seg === b.seg ? null : timeline.segs[b.seg].bridgeFreq;
+    const t = freq ? hermite(a, b, tick, freq) : add(a.t, div(mul(q(tick - a.tick), sub(b.t, a.t)), q(b.tick - a.tick)));
     return { t, how: a.seg === b.seg ? "interp" : "bridge", extrapTicks: null, island: a.island };
   }
   return 2n * tick <= a.tick + b.tick ? forward(a) : backward(b);
