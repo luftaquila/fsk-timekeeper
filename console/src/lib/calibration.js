@@ -1,5 +1,5 @@
 /* PPS timeline: master ticks -> GPS seconds (exact rationals), from the qualified PPS edges
- * of one master boot. DESIGN §8 / PLAN W10.
+ * of one master boot. DESIGN §8.
  *
  * Edges of one segment are exactly one GPS second apart per unit of n. Neighbouring segments
  * are bridged when the whole seconds between them are known (UTC, or tick rounding within an

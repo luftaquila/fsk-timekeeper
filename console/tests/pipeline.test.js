@@ -134,7 +134,7 @@ describe("pipeline with the fake master", () => {
     assert.equal(again.settings.state.lastNote, "car 7");
   });
 
-  it("ignores a finish before the first start (PLAN case F) and bundles a burst into one line", { timeout: 20000 }, async () => {
+  it("ignores a finish before the first start (case F) and bundles a burst into one line", { timeout: 20000 }, async () => {
     const { device, settings, timing } = await boot();
     const { fake, a, b } = await mapSprint(device, settings);
     fake.setSlotDelay(200, 200);

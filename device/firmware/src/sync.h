@@ -5,7 +5,7 @@
  * that RxDone). The slope over recent anchors is the skew. A capture is stamped
  * immediately from the newest anchor while that anchor is fresh; a capture taken
  * while it is stale is held and stamped by interpolation once the next anchor
- * exists (W2-9).
+ * exists.
  */
 #ifndef SYNC_H
 #define SYNC_H

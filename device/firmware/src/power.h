@@ -1,4 +1,4 @@
-/* Master USB power policy (W1): without VBUS the master stops (no beacons, no
+/* Master USB power policy: without VBUS the master stops (no beacons, no
  * radio); when VBUS returns it reboots into a new session. A host that merely
  * suspends the bus keeps VBUS and is not a stop. Pure logic. */
 #ifndef POWER_H

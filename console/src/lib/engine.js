@@ -1,4 +1,4 @@
-/* Run engine: START snapshot, evidence evaluation and run states (PLAN §2.4).
+/* Run engine: START snapshot, evidence evaluation and run states.
  *
  * A run is a plain JSON-able object:
  * {

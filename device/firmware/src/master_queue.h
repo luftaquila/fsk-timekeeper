@@ -1,4 +1,4 @@
-/* Master host queue (W5). Each record the master accepts becomes one E line
+/* Master host queue. Each record the master accepts becomes one E line
  * with a fresh hseq and its crc, formatted once; the head line is re-sent
  * unchanged every MASTER_USB_RETRY_MS until the host acks exactly that
  * (hseq, master_boot_id, crc). Main-loop context only. */

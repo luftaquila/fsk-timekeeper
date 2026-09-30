@@ -1,4 +1,4 @@
-/* One sensor's evidence timeline for a run (PLAN §2.4 (1)).
+/* One sensor's evidence timeline for a run.
  *
  * capture_seq order is capture-time order. Walking the stream from the START checkpoint,
  * `known` is the tick through which every edge of this sensor is identified (delivered or

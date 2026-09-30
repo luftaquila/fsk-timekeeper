@@ -34,7 +34,7 @@ void mac_sensor_init(mac_sensor_t *s, uint32_t my_id, uint8_t reset_reason)
     radio_start_rx();
 }
 
-/* Unregistered: contend in a random slot of `mask` with probability 1/2 (W2-2). */
+/* Unregistered: contend in a random slot of `mask` with probability 1/2. */
 static int contend_slot(unsigned mask)
 {
     unsigned n = 0;

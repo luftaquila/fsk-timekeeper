@@ -1,4 +1,4 @@
-/* Sensor MAC (DESIGN §2.8, W2): sync to beacons, stamp captures, and send at
+/* Sensor MAC (DESIGN §2.8): sync to beacons, stamp captures, and send at
  * most one packet per beacon in the sensor's slot; the beacon's slot table
  * carries the cumulative ACK. A sensor that heard no beacon this cycle stays
  * silent. Main-loop context. */

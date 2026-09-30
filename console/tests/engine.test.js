@@ -147,7 +147,7 @@ describe("createRun", () => {
   });
 });
 
-describe("PLAN §2.5 cases (D = 300 ms)", () => {
+describe("reference cases (D = 300 ms)", () => {
   it("A: a start-sensor loss after S1 does not matter", () => {
     const log = sprintLog();
     const run = start(log, "sprint", SPRINT);

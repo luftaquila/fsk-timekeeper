@@ -1,6 +1,6 @@
-/* A role (start / finish) combines its sensors' independently debounced crossings
- * (PLAN §2.4 (2)). The role is certain through T when every member is: identified through T
- * and no significant hole below T. */
+/* A role (start / finish) combines its sensors' independently debounced crossings. The
+ * role is certain through T when every member is: identified through T and no significant
+ * hole below T. */
 import { acceptCrossings } from "./sensor-stream";
 
 // A sensor whose evidence has ended (reboot, master session end, capture order fault): an

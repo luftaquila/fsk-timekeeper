@@ -1,4 +1,4 @@
-/* Fault handling (W6-3). HardFault, MemManage, BusFault, UsageFault, NMI,
+/* Fault handling. HardFault, MemManage, BusFault, UsageFault, NMI,
  * every unused interrupt vector and a hung radio save the fault PC/LR/cause in
  * RAM that survives a system reset, then reboot. More than FAULT_REBOOT_MAX consecutive fault
  * reboots halt the board with a fast LED blink (double-tap RST reaches the
