@@ -124,7 +124,7 @@ extern "C" int radio_start_rx(void)
 extern "C" int radio_standby(void)
 {
     hal.restartHangCheck();
-    return track(radio.standby());
+    return track(radio.standby(RADIOLIB_SX126X_STANDBY_RC)); /* parked: the TCXO stops too */
 }
 
 extern "C" int radio_receive(uint8_t *buf, int maxlen, float *rssi, float *snr)

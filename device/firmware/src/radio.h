@@ -21,6 +21,7 @@ int radio_transmit(const uint8_t *data, int len);
  * IRQ status for radio_rx_settle(). 0 on success. */
 int radio_start_rx(void);
 
+/* Park the radio (a stopped master): standby on the RC oscillator, TCXO off. */
 int radio_standby(void);
 
 /* Read a received packet: > 0 = length (RSSI/SNR filled when non-NULL; either
