@@ -38,6 +38,27 @@ static int16_t track(int16_t state)
     return state;
 }
 
+/* SX126x ReadRegister frame: opcode, 16-bit address, a status byte, then the data.
+ * RadioLib's Module switches to this framing only inside begin(), so the probe
+ * sends it itself. */
+static bool read_version(char version[16])
+{
+    uint32_t t0 = board_millis();
+    while (gpio_read(PIN_LORA_BUSY)) {
+        if ((uint32_t)(board_millis() - t0) >= RADIO_SPI_TIMEOUT_MS) { return false; }
+    }
+    uint8_t out[4 + 16] = { RADIOLIB_SX126X_CMD_READ_REGISTER,
+                            (uint8_t)(RADIOLIB_SX126X_REG_VERSION_STRING >> 8),
+                            (uint8_t)(RADIOLIB_SX126X_REG_VERSION_STRING & 0xFFu),
+                            RADIOLIB_SX126X_CMD_NOP };
+    uint8_t in[sizeof(out)] = { 0 };
+    gpio_clear(PIN_LORA_NSS);
+    hal.spiTransfer(out, sizeof(out), in);
+    gpio_set(PIN_LORA_NSS);
+    memcpy(version, &in[4], 16);
+    return true;
+}
+
 /* Pulse NRST and wait for the version string: a radio that never answers would
  * keep begin() in findChip (10 resets, each retrying standby for 1 s). */
 static bool radio_answers(void)
@@ -48,9 +69,7 @@ static bool radio_answers(void)
     uint32_t t0 = board_millis();
     for (;;) {
         char version[16] = { 0 };
-        mod.SPIreadRegisterBurst(RADIOLIB_SX126X_REG_VERSION_STRING, sizeof(version),
-                                 reinterpret_cast<uint8_t *>(version));
-        if (strncmp(version, RADIOLIB_SX1262_CHIP_TYPE, 6) == 0) { return true; }
+        if (read_version(version) && strncmp(version, RADIOLIB_SX1262_CHIP_TYPE, 6) == 0) { return true; }
         if ((uint32_t)(board_millis() - t0) >= RADIO_PROBE_MS) { return false; }
         board_delay_ms(1);
     }

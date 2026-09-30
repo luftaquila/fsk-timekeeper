@@ -110,7 +110,7 @@ all: deps
 
 build: $(BUILD)/$(TARGET).uf2 $(BUILD)/$(TARGET).hex $(BUILD)/$(TARGET).bin
 
-test:
+test: deps
 	@$(MAKE) --no-print-directory -C tests test
 
 deps: $(NRFX) $(CMSIS) $(RADIOLIB) $(TINYUSB) $(MONOCYPHER)

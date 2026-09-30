@@ -46,7 +46,7 @@ jobs:
       - name: Build
         run: make -C device/firmware
 
-      - name: Host tests (GPS, sync, queues, faults, MAC simulator)
+      - name: Host tests (GPS, sync, queues, faults, MAC simulator, radio driver)
         timeout-minutes: 5
         run: make -C device/firmware test
 
