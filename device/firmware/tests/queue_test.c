@@ -97,6 +97,24 @@ static void fifo_overflow_keeps_order(void)
     printf("PASS fifo_overflow_keeps_order\n");
 }
 
+static void fifo_unknown_losses_go_together(void)
+{
+    static sensor_queue_t q;
+    sq_init(&q);
+    for (uint32_t s = 1; s <= 9; s++) { sq_push_loss(&q, s, s, 0, 0, EVENT_TIME_UNKNOWN); } /* a bounce, no sync */
+    sq_push_edge(&q, 10, 1000, HEALTH_EVENT_REQUIRED, 0);
+    sq_push_loss(&q, 11, 11, 0, 0, EVENT_TIME_UNKNOWN);
+    sq_push_loss(&q, 13, 13, 0, 0, EVENT_TIME_UNKNOWN); /* not contiguous */
+    uplink_pl_t *p = sq_packet(&q, 1);
+    assert(p->kind == UL_KIND_LOSS && p->capture_seq == 1 && p->u.loss.end_seq == 9 && p->flags == EVENT_TIME_UNKNOWN);
+    sq_ack(&q, p->ev_seq);
+    p = sq_packet(&q, 1); assert(p->kind == UL_KIND_EDGES && p->capture_seq == 10); sq_ack(&q, p->ev_seq);
+    p = sq_packet(&q, 1); assert(p->kind == UL_KIND_LOSS && p->capture_seq == 11 && p->u.loss.end_seq == 11); sq_ack(&q, p->ev_seq);
+    p = sq_packet(&q, 1); assert(p->kind == UL_KIND_LOSS && p->capture_seq == 13 && p->u.loss.end_seq == 13); sq_ack(&q, p->ev_seq);
+    assert(sq_idle(&q));
+    printf("PASS fifo_unknown_losses_go_together\n");
+}
+
 static void fifo_range_never_shrinks(void)
 {
     static sensor_queue_t q;
@@ -296,6 +314,7 @@ int main(void)
     fifo_bundles();
     fifo_overflow_keeps_order();
     fifo_range_never_shrinks();
+    fifo_unknown_losses_go_together();
     fifo_held_and_clear();
     host_queue();
     ack_parser();

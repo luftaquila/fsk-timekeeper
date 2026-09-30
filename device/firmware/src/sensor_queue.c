@@ -152,10 +152,19 @@ uplink_pl_t *sq_packet(sensor_queue_t *q, uint32_t master_boot_id)
     q->pkt.tick = first->tick;
     q->pkt.sync_age_ms = first->sync_age_ms;
     if (first->kind == SQ_LOSS) {
+        /* Consecutive losses of unknown time go as one range, not one per cycle. */
+        unsigned n = 1;
+        const sq_item_t *last = first;
+        while (first->flags == EVENT_TIME_UNKNOWN && n < q->count) {
+            const sq_item_t *it = at(q, n);
+            if (it->kind != SQ_LOSS || it->flags != EVENT_TIME_UNKNOWN || it->seq != last->end_seq + 1u) { break; }
+            last = it;
+            n++;
+        }
         q->pkt.kind = UL_KIND_LOSS;
-        q->pkt.u.loss.end_seq = first->end_seq;
-        q->pkt.u.loss.end_tick = first->end_tick;
-        q->pkt_items = 1;
+        q->pkt.u.loss.end_seq = last->end_seq;
+        q->pkt.u.loss.end_tick = last->end_tick;
+        q->pkt_items = n;
     } else {
         /* Bundle consecutive stamped edges with the same flags; deltas are u32. */
         unsigned n = 1;
