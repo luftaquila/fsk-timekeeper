@@ -166,7 +166,9 @@ static int master_clock_check(void)
         reported = 0;
     }
     if (!faulted) { return 1; }
-    if (!reported) { reported = mq_push_timebase_end(&g_queue, boot, at); }
+    /* A full host queue holds the marker back until there is room: a retry on
+     * every pass is no overflow. */
+    if (!reported && !mq_full(&g_queue)) { reported = mq_push_timebase_end(&g_queue, boot, at); }
     if (reported && board_hfclk_xtal()) {
         sec_init();
         mac_master_session(&g_mac);
