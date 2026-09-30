@@ -1,11 +1,6 @@
-/* RadioLib hardware abstraction for the nRF52840 (bare-metal, no Arduino).
- *
- * Implements RadioLibHal over: gpio.h (GPIO), raw SPIM0 (SPI), and a free-
- * running TIMER2 at 1 MHz (millis/micros). attachInterrupt/pulseIn are stubs —
- * RadioLib's blocking transmit/receive polls digitalRead(DIO1) (SX126x.cpp),
- * so they are not needed until async/HW-capture (Stage 3). Modelled on the
- * RadioLib NonArduino EspHal example.
- */
+/* RadioLib hardware abstraction for the nRF52840, bare metal: gpio.h pins, raw
+ * SPIM0, and board_micros()/board_millis() for time. RadioLib polls DIO1
+ * itself, so attachInterrupt/pulseIn are stubs. Main-loop context only. */
 #ifndef RADIO_HAL_H
 #define RADIO_HAL_H
 
@@ -45,10 +40,14 @@ class NrfHal : public RadioLibHal {
     void spiEndTransaction() override;
     void spiEnd() override;
 
+    /* True once after an SPIM transfer did not finish in time. */
+    bool takeSpiTimeout();
+
   private:
     uint32_t _sck;
     uint32_t _miso;
     uint32_t _mosi;
+    bool _spiTimeout;
 };
 
 #endif /* RADIO_HAL_H */

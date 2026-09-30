@@ -11,10 +11,12 @@ static uint64_t now_ms;
 static uint64_t next_pps;
 static int have_pps;
 static int xtal = 1;
+static uint32_t hfxo_stops;
 static unsigned clock_ppm;
 
 uint32_t board_millis(void) { return (uint32_t)now_ms; }
 int board_hfclk_xtal(void) { return xtal; }
+uint32_t board_hfxo_stops(void) { return hfxo_stops; }
 uint64_t capture_now64(void) { return now_ms * 16000u + now_ms * 16u * clock_ppm / 1000u; }
 int capture_pps_get(uint64_t *tick)
 {
@@ -183,6 +185,82 @@ int main(int argc, char **argv)
         assert(report().pps_valid == 1);
         now_ms += 2500;
         assert(report().pps_valid == 0);
+    } else if (!strcmp(scenario, "segments")) {
+        /* every qualified edge reports its segment and its second within it */
+        now_ms = 100; rmc(1);
+        edge(1, 1); /* the first edge of a window has no checked interval yet */
+        assert(report().seg == 0);
+        for (unsigned i = 2; i <= 9; i++) {
+            edge(i, 1);
+            gps_report_t out = report();
+            assert(out.pps_tick == next_pps && out.seg == 1 && out.n == i - 2u && out.utc_s != 0);
+        }
+        edge(10, 0); /* V: the edge its RMC follows is not qualified, the segment ends */
+        gps_report_t out = report();
+        assert(out.pps_tick == next_pps && out.seg == 0 && out.utc_s == 0);
+        edge(11, 1); /* A again: this transition edge is discarded too */
+        assert(report().seg == 0);
+        edge(12, 1); /* a new window starts */
+        assert(report().seg == 0);
+        edge(13, 1);
+        out = report();
+        assert(out.seg == 2 && out.n == 0);
+        edge(14, 1);
+        out = report();
+        assert(out.seg == 2 && out.n == 1);
+        /* a missing pulse breaks the one-second chain */
+        edge(16, 1);
+        assert(report().seg == 0);
+        edge(17, 1);
+        out = report();
+        assert(out.seg == 3 && out.n == 0);
+        /* a repeat without a new edge reports the same edge again */
+        now_ms += 1000;
+        out = report();
+        assert(out.seg == 3 && out.n == 0 && out.pps_tick == next_pps);
+    } else if (!strcmp(scenario, "glitch")) {
+        /* A spurious pulse after an edge, before its RMC: it restarts the window and
+         * takes that RMC, but neither it nor the next real edge is qualified, so no
+         * one-edge segment can pin the timeline to it. */
+        warm();
+        now_ms = 10000;
+        next_pps = capture_now64(); have_pps = 1;
+        gps_poll();
+        now_ms = 10050;
+        uint64_t glitch = capture_now64();
+        next_pps = glitch; have_pps = 1;
+        gps_poll();
+        now_ms = 10100;
+        rmc(1);
+        gps_report_t out = report();
+        assert(out.pps_tick == glitch && out.seg == 0);
+        edge(11, 1); /* 0.95 s after the glitch */
+        assert(report().seg == 0);
+        edge(12, 1);
+        out = report();
+        assert(out.seg == 2 && out.n == 0);
+    } else if (!strcmp(scenario, "hfxo_stop_between_edges")) {
+        /* an HFXO stop already over by the next edge still breaks the window */
+        warm();
+        hfxo_stops++;
+        edge(10, 1); /* first edge of a new window */
+        gps_report_t out = report();
+        assert(out.pps_valid == 0 && out.seg == 0);
+        edge(11, 1);
+        out = report();
+        assert(out.seg == 2 && out.n == 0);
+    } else if (!strcmp(scenario, "report_timeout")) {
+        warm();
+        now_ms = 10000;
+        next_pps = capture_now64(); have_pps = 1;
+        gps_poll(); /* edge without its RMC */
+        now_ms = 10000 + GPS_RMC_LAG_MAX_MS - 1u;
+        s_last_report_ms = now_ms; /* only the edge can make a report due */
+        assert(!gps_report_due());
+        now_ms = 10000 + GPS_RMC_LAG_MAX_MS;
+        assert(gps_report_due());
+        gps_report_t out = report();
+        assert(out.pps_tick == next_pps && out.seg == 1 && out.n == 8 && out.utc_s == 0);
     } else {
         fprintf(stderr, "unknown scenario: %s\n", scenario);
         return 2;

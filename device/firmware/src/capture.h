@@ -1,44 +1,42 @@
-/* Stage-3 hardware timestamp capture (DESIGN.md §2.4, §8).
+/* Hardware timestamp capture on TIMER1 (DESIGN §2.4, §8).
  *
- * TIMER1 free-runs at 16 MHz (62.5 ns) as the common timebase, extended to
- * 64 bits in software (the raw 32-bit counter wraps every ~268 s, too short for
- * a full run). DIO1 (Tx/RxDone) and SENSOR edges are latched into TIMER1 CC
- * registers by GPIOTE->PPI with zero CPU latency; the 32-bit capture is widened
- * to 64 bits against the current time. capture_now64() must be called often
- * enough to never miss a wrap (the per-second beacon loop guarantees this).
+ * TIMER1 free-runs at 16 MHz (62.5 ns) and is extended to 64 bits in software.
+ * GPIOTE -> PPI latches DIO1 (Tx/RxDone), SENSOR and GPS PPS edges into TIMER1
+ * CC registers with no CPU latency; a 32-bit capture is widened against the
+ * current time. capture_now64() must run at least once per ~268 s wrap.
+ * Main-loop context except where noted.
  */
 #ifndef CAPTURE_H
 #define CAPTURE_H
 
 #include <stdint.h>
 
+/* TIMER1 + DIO1 capture (both roles). */
 void capture_init(void);
+/* SENSOR input capture into a 64-entry ISR ring (sensor role). */
+void capture_sensor_enable(void);
+/* GPS PPS capture on its own GPIOTE/PPI channel (master role). */
+void capture_pps_enable(void);
 
-/* Current 64-bit 16 MHz tick. Also advances the wrap accounting — call it
- * regularly (at least once per ~268 s). */
 uint64_t capture_now64(void);
 
-/* If a DIO1 rising edge (Tx/RxDone) was latched since the last call, widen it to
- * 64 bits into *tick and return 1; else 0. */
+/* Latest DIO1 rising edge since the last call (1), or none (0). */
 int capture_dio1_get(uint64_t *tick);
 
-/* Pop the oldest SENSOR falling edge from the ISR-backed ring buffer. */
+/* Oldest SENSOR edge from the ring: capture seq (counts every edge, lost ones
+ * included) and whether HFXO ran when it was taken. */
 int capture_sensor_get(uint64_t *tick, uint32_t *seq, int *clock_xtal);
+/* Edges the full ring had to drop, as a seq/tick range; it follows every edge
+ * still in the ring. Drain with capture_sensor_get() first, then this, until
+ * both return 0. */
 int capture_sensor_loss(uint64_t *first_tick, uint64_t *last_tick, uint32_t *first_seq, uint32_t *last_seq);
+/* Now and the seq of the last edge; returns 1 only when no edge is pending
+ * anywhere (ring, loss, latched event), i.e. the pair may be a checkpoint. */
 int capture_sensor_checkpoint(uint64_t *tick, uint32_t *seq);
-
-/* Lifetime diagnostic only; loss ranges carry the affected capture boundaries. */
+/* Ring overflows since boot (diagnostic). */
 uint16_t capture_sensor_overflow(void);
 
-/* Master-only GPS PPS capture. Re-targets the (idle) SENSOR capture channel at
- * PIN_GPS_PPS, rising edge; capture_pps_get() polls the latched edge and widens it
- * to 64 bits. Main loop only (like capture_dio1_get). */
-void capture_pps_enable(void);
+/* Latest PPS rising edge since the last call (1), or none (0). */
 int capture_pps_get(uint64_t *tick);
-
-/* Master-only USB clock monitor. PPI captures each USBD SOF into a spare TIMER1
- * CC register; samples are diagnostic and never alter the event timebase. */
-void capture_usb_sof_enable(void);
-int capture_usb_sof_sample(uint64_t *tick, uint16_t *frame);
 
 #endif /* CAPTURE_H */

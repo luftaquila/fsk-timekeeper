@@ -1,36 +1,84 @@
+#include <string.h>
+
 #include <RadioLib.h>
 
 #include "radio_hal.h"
 #include "radio.h"
 #include "gpio.h"
+#include "board.h"
+#include "errlog.h"
 
 extern "C" {
 #include "config.h"
 }
 
-/* Statically allocated — no heap. Constructors run from __libc_init_array
- * before main(); hardware init happens in radio_begin() -> radio.begin(). */
+/* Statically allocated; hardware init happens in radio_begin(). */
 static NrfHal hal(PIN_LORA_SCK, PIN_LORA_MISO, PIN_LORA_MOSI);
 static Module mod(&hal, PIN_LORA_NSS, PIN_LORA_DIO1, PIN_LORA_NRST, PIN_LORA_BUSY);
 static SX1262 radio(&mod);
 
-extern "C" int radio_begin(float freq_mhz)
+/* RX latches preamble/header detections so an in-progress reception is visible
+ * before a CAD; DIO1 stays on RxDone. */
+#define RX_IRQ_FLAGS (RADIOLIB_IRQ_RX_DEFAULT_FLAGS | (1UL << RADIOLIB_IRQ_PREAMBLE_DETECTED))
+
+static unsigned s_noresp;
+static unsigned s_cad_fail;
+
+/* Count SPI no-responses (BUSY stuck, SPIM hung, a status byte nobody drove);
+ * any answered command clears the streak. */
+static int16_t track(int16_t state)
 {
+    bool spim_hung = hal.takeSpiTimeout();
+    if (spim_hung || state == RADIOLIB_ERR_SPI_CMD_TIMEOUT || state == RADIOLIB_ERR_CHIP_NOT_FOUND) {
+        s_noresp++;
+        el_note(EL_SPI_TIMEOUT);
+    } else {
+        s_noresp = 0;
+    }
+    return state;
+}
+
+/* Pulse NRST and wait for the version string: a radio that never answers would
+ * keep begin() in findChip (10 resets, each retrying standby for 1 s). */
+static bool radio_answers(void)
+{
+    mod.init(); /* SPI and NSS; begin() repeats it */
+    gpio_cfg_input(PIN_LORA_BUSY);
+    radio.reset(false);
+    uint32_t t0 = board_millis();
+    for (;;) {
+        char version[16] = { 0 };
+        mod.SPIreadRegisterBurst(RADIOLIB_SX126X_REG_VERSION_STRING, sizeof(version),
+                                 reinterpret_cast<uint8_t *>(version));
+        if (strncmp(version, RADIOLIB_SX1262_CHIP_TYPE, 6) == 0) { return true; }
+        if ((uint32_t)(board_millis() - t0) >= RADIO_PROBE_MS) { return false; }
+        board_delay_ms(1);
+    }
+}
+
+extern "C" int radio_begin(void)
+{
+    mod.spiConfig.timeout = RADIO_SPI_TIMEOUT_MS;
     /* begin() occasionally fails with garbled SPI readback on the hand-built
-     * board; retry a few times (each begin() re-resets the radio). */
-    int state = RADIOLIB_ERR_NONE;
+     * board; each attempt resets the radio again. */
+    int16_t state = RADIOLIB_ERR_CHIP_NOT_FOUND;
     for (int attempt = 0; attempt < 5; attempt++) {
-        state = radio.begin(freq_mhz, LORA_BW_KHZ, LORA_SF, LORA_CR,
+        if (!radio_answers()) {
+            continue;
+        }
+        state = radio.begin(LORA_FREQ_MHZ, LORA_BW_KHZ, LORA_SF, LORA_CR,
                             LORA_SYNCWORD, LORA_POWER_DBM, LORA_PREAMBLE,
                             LORA_TCXO_V, false);
         if (state == RADIOLIB_ERR_NONE) {
             break;
         }
     }
+    (void)hal.takeSpiTimeout();
     if (state != RADIOLIB_ERR_NONE) {
         return state;
     }
-
+    s_noresp = 0;
+    s_cad_fail = 0;
     /* Ra-01SH RF switch (TXEN/RXEN) — required for any TX/RX (DESIGN §3/§8). */
     radio.setRfSwitchPins(PIN_LORA_RXEN, PIN_LORA_TXEN);
     return RADIOLIB_ERR_NONE;
@@ -38,43 +86,25 @@ extern "C" int radio_begin(float freq_mhz)
 
 extern "C" int radio_transmit(const uint8_t *data, int len)
 {
-    return radio.transmit(const_cast<uint8_t *>(data), (size_t)len);
+    int16_t state = track(radio.transmit(data, (size_t)len));
+    if (state != RADIOLIB_ERR_NONE) { el_note(EL_TX_FAIL); }
+    return state;
 }
 
 extern "C" int radio_start_rx(void)
 {
-    return radio.startReceive();
+    int16_t state = track(radio.startReceive(RADIOLIB_SX126X_RX_TIMEOUT_INF, RX_IRQ_FLAGS,
+                                             RADIOLIB_IRQ_RX_DEFAULT_MASK, 0));
+    if (state != RADIOLIB_ERR_NONE) { el_note(EL_RX_FAIL); }
+    return state;
 }
 
-extern "C" int radio_lbt_clear(void)
+extern "C" int radio_standby(void)
 {
-    /* CAD-based listen-before-talk (DESIGN §2.8): clear unless a LoRa preamble is
-     * detected on-channel. This is the exact channel check the pre-LBT firmware
-     * used for EVENT/STATUS backoff — proven, no false-busy — unlike the
-     * instantaneous-RSSI energy detect which mis-read right after startReceive()
-     * (~0 dBm default) and starved the master's beacon, wrecking sensor sync.
-     * Anything other than a positive detection (including a scan error) counts as
-     * clear, so the sync-critical beacon is never starved by a flaky scan. */
-    return radio.scanChannel() != RADIOLIB_LORA_DETECTED;
+    return track(radio.standby());
 }
 
-extern "C" int radio_receive(uint8_t *buf, int maxlen)
-{
-    /* DIO1 is mapped to RxDone (+ error/timeout) by startReceive(); we poll it
-     * since attachInterrupt is a stub in this stage. */
-    if (gpio_read(PIN_LORA_DIO1) == 0) {
-        return 0;
-    }
-    size_t len = radio.getPacketLength();
-    if (len > (size_t)maxlen) {
-        len = (size_t)maxlen;
-    }
-    int16_t state = radio.readData(buf, len);
-    radio.startReceive(); /* re-arm */
-    return (state == RADIOLIB_ERR_NONE) ? (int)len : -1;
-}
-
-extern "C" int radio_receive_q(uint8_t *buf, int maxlen, float *rssi, float *snr)
+extern "C" int radio_receive(uint8_t *buf, int maxlen, float *rssi, float *snr)
 {
     if (gpio_read(PIN_LORA_DIO1) == 0) {
         return 0;
@@ -83,10 +113,70 @@ extern "C" int radio_receive_q(uint8_t *buf, int maxlen, float *rssi, float *snr
     if (len > (size_t)maxlen) {
         len = (size_t)maxlen;
     }
-    int16_t state = radio.readData(buf, len);
-    /* Sample link quality of the just-read packet BEFORE re-arming. */
+    int16_t state = track(radio.readData(buf, len));
+    /* Link quality of this packet, before re-arming. */
     if (rssi) { *rssi = radio.getRSSI(true); }
     if (snr)  { *snr = radio.getSNR(); }
-    radio.startReceive(); /* re-arm */
-    return (state == RADIOLIB_ERR_NONE) ? (int)len : -1;
+    radio_start_rx();
+    if (state != RADIOLIB_ERR_NONE) {
+        el_note(EL_RX_FAIL);
+        return -1;
+    }
+    return (int)len;
+}
+
+extern "C" int radio_rx_settle(uint32_t header_wait_ms, uint32_t max_ms)
+{
+    uint32_t t0 = board_millis();
+    for (;;) {
+        if (gpio_read(PIN_LORA_DIO1)) {
+            return RADIO_RX_PACKET;
+        }
+        uint32_t irq = radio.getIrqFlags();
+        uint32_t waited = board_millis() - t0;
+        /* A valid header means a packet is arriving, whatever older header error
+         * is latched beside it. A header error or a preamble that led nowhere
+         * stays latched: the caller's next CAD or TX clears the IRQ status. */
+        if (irq & RADIOLIB_SX126X_IRQ_HEADER_VALID) {
+            if (waited >= max_ms) { return RADIO_RX_BUSY; }
+        } else if ((irq & RADIOLIB_SX126X_IRQ_HEADER_ERR) || !(irq & RADIOLIB_SX126X_IRQ_PREAMBLE_DETECTED) ||
+                   waited >= header_wait_ms) {
+            return RADIO_RX_IDLE;
+        }
+        board_delay_ms(1);
+    }
+}
+
+/* A failed start or a CAD that never completes counts towards a reset. The
+ * start fails with WRONG_MODEM once the radio has reset itself: back in GFSK,
+ * it still transmits and receives, so only this sees it. */
+extern "C" int radio_cad(void)
+{
+    if (track(radio.startChannelScan()) != RADIOLIB_ERR_NONE) {
+        el_note(EL_CAD_TIMEOUT);
+        s_cad_fail++;
+        radio_start_rx();
+        return 0;
+    }
+    uint32_t t0 = board_millis();
+    while (gpio_read(PIN_LORA_DIO1) == 0) {
+        if ((uint32_t)(board_millis() - t0) >= CAD_TIMEOUT_MS) {
+            el_note(EL_CAD_TIMEOUT);
+            s_cad_fail++;
+            radio.standby();
+            radio_start_rx();
+            return 0;
+        }
+    }
+    s_cad_fail = 0;
+    if (radio.getChannelScanResult() == RADIOLIB_LORA_DETECTED) {
+        radio_start_rx();
+        return 1;
+    }
+    return 0;
+}
+
+extern "C" int radio_needs_reset(void)
+{
+    return s_noresp >= RADIO_NORESP_RESET || s_cad_fail >= RADIO_NORESP_RESET;
 }

@@ -1,17 +1,12 @@
-/* Authenticated encryption for the LoRa air link (DESIGN.md §2.11).
+/* Authenticated encryption for the LoRa air link (DESIGN §2.11).
  *
  * Every packet is sealed with XChaCha20-Poly1305 (Monocypher) under a fleet-wide
- * 32-byte pre-shared key loaded at boot from the flash keystore (keystore.h) —
- * the key is provisioned per board over the serial 'K' command, never compiled
- * in, so CI builds a key-less app. Confidentiality + integrity + sender
- * authenticity come from the AEAD; replay resistance comes from a per-boot
- * random id plus a monotonic per-boot counter carried in the cleartext header
- * (see protocol.h SEC_HDR_*) and bound into the nonce.
+ * 32-byte key loaded from the flash keystore (never compiled in). Replay
+ * resistance: a random per-boot id plus a per-boot counter in the cleartext
+ * header, both bound into the nonce.
  *
- * Nonce uniqueness (the one rule a stream cipher must never break): the 24-byte
- * nonce is (domain | type | node_id | boot_id | ctr). ctr increments on every
- * seal, so it never repeats within a boot; boot_id is fresh random per power-up,
- * so nonces don't repeat across reboots even though ctr restarts at 0.
+ * Nonce = (domain | type | node_id | boot_id | ctr): ctr never repeats within a
+ * boot and boot_id is fresh per power-up, so a nonce never repeats.
  */
 #ifndef SECURE_H
 #define SECURE_H
@@ -22,28 +17,29 @@
 extern "C" {
 #endif
 
-/* Seed this node's boot_id (hardware RNG), reset the tx counter, and load the
- * fleet key from the flash keystore. Call once at startup, before any sec_seal(). */
+/* Draw a new boot_id from the hardware RNG, reset the tx counter and load the
+ * key. Call before any sec_seal(); a master calls it again to open a new session.
+ * If the RNG fails, sealing stays refused (a repeated boot_id could repeat a nonce). */
 void sec_init(void);
 
-/* Reload the key from the keystore — call after a successful re-provisioning so
- * the new key takes effect without a reboot. */
+/* Reload the key after re-provisioning (no reboot needed). */
 void sec_reload(void);
 
-/* 1 if a fleet key is present (seal/unseal work), 0 if unprovisioned — the radio
- * stays inert until a key is written via the serial 'K' command. */
+/* 1 when a key is loaded (seal/unseal work), 0 when unprovisioned. */
 int sec_provisioned(void);
 
-uint32_t sec_boot_id(void); /* this node's per-boot random id (for diagnostics) */
+uint32_t sec_boot_id(void);
+
+/* Non-cryptographic 32-bit random value (MAC slot contention). */
+uint32_t sec_random(void);
 
 /* Seal payload into out[] as [header | ciphertext | mac]. node_id is the
- * SENDER's id (ignored for downlink types, which are always master id 0 and omit
- * it from the wire). Returns the total wire length, or <0: -1 out too small,
- * -3 tx counter exhausted, -4 unprovisioned. Advances this node's tx counter. */
+ * sender's id (ignored for downlink types, always the master). Returns the wire
+ * length, or <0: -1 out too small, -3 counter exhausted, -4 unprovisioned or no
+ * boot id. Advances the tx counter. */
 int sec_seal(uint8_t *out, int out_cap, uint8_t type, uint32_t node_id,
              const void *payload, int payload_len);
 
-/* Parsed cleartext header of a received packet. */
 typedef struct {
     uint8_t  type;
     uint32_t node_id;
@@ -51,27 +47,24 @@ typedef struct {
     uint32_t ctr;
 } sec_meta_t;
 
-/* Verify + decrypt a received packet of the given payload length. On success
- * fills meta and copies the decrypted payload into out_payload, returns 0.
- * Returns <0: -1 short buffer / length mismatch, -2 MAC failure (forgery / bit
- * error / wrong key), -3 unprovisioned, -4 protocol-version mismatch. Does NOT
- * enforce replay — callers do that with sec_replay once they know which
- * (sender, direction) state to use. */
+/* Verify + decrypt. 0 on success; <0: -1 short buffer, -2 MAC failure, -3
+ * unprovisioned, -4 protocol-version mismatch. Replay is checked separately. */
 int sec_unseal(const uint8_t *in, int in_len, sec_meta_t *meta,
                void *out_payload, int payload_len);
 
-/* Per-(sender, direction) replay window. One per remote talker a receiver
- * tracks: the master keeps one per sensor, a sensor keeps one for the master. */
+/* 1 when a received packet of any protocol version authenticates under the
+ * fleet key, i.e. a board of this fleet sent it. */
+int sec_authentic_any_version(const uint8_t *in, int in_len);
+
+/* Per-(sender, direction) replay window. */
 typedef struct {
     uint32_t boot_id;
     uint32_t max_ctr;
     uint8_t  have;
 } sec_replay_t;
 
-/* Returns 1 and updates st if (boot_id, ctr) is fresh; returns 0 on replay.
- * A new boot_id re-baselines the window (a battery sensor that reboots restarts
- * its counter at 0). For the timing-critical EVENT this is backed by a
- * timestamp-freshness gate in main.c so a replayed old event is still rejected. */
+/* 1 and update st if (boot_id, ctr) is fresh, 0 on replay. A new boot_id
+ * re-baselines the window. */
 int sec_replay(sec_replay_t *st, uint32_t boot_id, uint32_t ctr);
 
 #ifdef __cplusplus

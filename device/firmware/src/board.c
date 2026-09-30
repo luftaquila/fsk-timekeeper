@@ -1,6 +1,7 @@
 #include "board.h"
 
 #include "config.h"
+#include "errlog.h"
 #include "gpio.h"
 #include "nrf.h"
 
@@ -8,14 +9,8 @@
  * vector table so interrupts dispatch to us, not the SoftDevice's. */
 #define APP_VECTOR_BASE 0x00026000UL
 
-/* Switch HFCLK from the 64 MHz internal RC (HFINT, the reset default) to the
- * external crystal (HFXO). The TIMERs derive PCLK16M from HFCLK, so the capture
- * timebase (TIMER1) inherits the source's accuracy. HFINT is only ~±1-2% — two
- * nodes on RC drift apart by ~1% (skew_ppm reads ~10000 and never settles). The
- * external SX1262 radio does not need the nRF RADIO peripheral, so nothing else
- * forces HFXO on; previously only the USB-connected master got HFXO for free
- * (TinyUSB starts it on VBUS), leaving battery sensors on RC. Start it here so
- * every role's timebase is crystal-disciplined (±40 ppm) regardless of USB. */
+/* TIMER1 (the capture timebase) inherits the HFCLK source's accuracy: HFINT is
+ * only ~1 %, so every role runs on the crystal. */
 static int hfclk_is_xtal(void)
 {
     return (NRF_CLOCK->HFCLKSTAT & CLOCK_HFCLKSTAT_STATE_Msk) &&
@@ -25,19 +20,15 @@ static int hfclk_is_xtal(void)
 
 static void hfclk_init(void)
 {
-    /* The nice!nano/Adafruit bootloader uses USB, so it hands off with HFXO
-     * ALREADY running. Re-triggering HFCLKSTART in that state does not regenerate
-     * EVENTS_HFCLKSTARTED, so an unconditional wait spins forever and the boot
-     * hangs before USB ever comes up. Guard: if HFCLK is already sourced from the
-     * crystal, there's nothing to do; otherwise start it with a bounded wait that
-     * can never hang (HFXO normally settles in <1 ms). */
+    /* The bootloader may hand off with HFXO already running; HFCLKSTART then
+     * raises no new HFCLKSTARTED event, so only start it when needed, and bound
+     * the wait so a dead crystal cannot hang USB provisioning. */
     if (hfclk_is_xtal()) {
         return;
     }
     NRF_CLOCK->EVENTS_HFCLKSTARTED = 0;
     NRF_CLOCK->TASKS_HFCLKSTART = 1;
     for (volatile uint32_t i = 0; i < 1000000u && NRF_CLOCK->EVENTS_HFCLKSTARTED == 0; i++) {
-        /* bounded so a failed crystal cannot hang provisioning over USB */
     }
 }
 
@@ -46,10 +37,36 @@ int board_hfclk_xtal(void)
     return hfclk_is_xtal();
 }
 
+static uint32_t s_hfxo_stops;
+
+uint32_t board_hfxo_stops(void)
+{
+    return s_hfxo_stops;
+}
+
+void board_hfxo_service(void)
+{
+    static int restarting;
+    static uint32_t requested_ms;
+    if (hfclk_is_xtal()) {
+        restarting = 0;
+        return;
+    }
+    uint32_t now = board_millis();
+    if (!restarting) {
+        el_note(EL_HFXO_RESTART);
+        s_hfxo_stops++;
+        restarting = 1;
+    } else if ((uint32_t)(now - requested_ms) < 1000u) {
+        return;
+    }
+    requested_ms = now;
+    NRF_CLOCK->TASKS_HFCLKSTART = 1;
+}
+
 static void timebase_init(void)
 {
-    /* TIMER2 free-running at 1 MHz (16 MHz / 2^4). TIMER0 belongs to the
-     * (unused) SoftDevice, TIMER1 is reserved for the Stage-3 capture base. */
+    /* TIMER2 at 1 MHz (16 MHz / 2^4). TIMER1 is the capture timebase. */
     NRF_TIMER2->TASKS_STOP = 1;
     NRF_TIMER2->MODE = TIMER_MODE_MODE_Timer;
     NRF_TIMER2->BITMODE = TIMER_BITMODE_BITMODE_32Bit;
@@ -66,9 +83,7 @@ uint32_t board_micros(void)
 
 uint32_t board_millis(void)
 {
-    /* Extend before dividing: micros wraps at ~71 min, whereas callers use
-     * uint32 subtraction expecting millis to wrap at ~49 days. The main loop
-     * calls this much more often than once per micros wrap. */
+    /* Extend before dividing so millis wraps at ~49 days, not with micros. */
     static uint32_t previous;
     static uint64_t elapsed;
     uint32_t now = board_micros();
@@ -77,20 +92,21 @@ uint32_t board_millis(void)
     return (uint32_t)(elapsed / 1000u);
 }
 
-/* P0.09/P0.10 are the NFC antenna pins until UICR.NFCPINS.PROTECT is cleared
- * (factory default = NFC, with a clamp diode between the two pins). The GPS PPS
- * and TXD lines sit on them, so clear the bit once, on a board's first boot:
- * NVMC write-enable, clear the bit (flash writes only clear bits, and the factory
- * word is erased so one write is within spec), read back, then reset so the new
- * UICR takes effect. Readback-guarded — a failed write cannot loop the board
- * through resets, it just boots without GPS. App DFU never erases UICR, so this
- * runs once per board. Runs in both roles (harmless on a sensor). Must precede
- * every other peripheral/pin setup. */
-static void nvmc_wait(void)
+/* The CPU stalls during NVMC operations (a page erase ~85 ms); the bound only
+ * catches a controller that never reports ready. */
+static int nvmc_wait(void)
 {
-    while (NRF_NVMC->READY == NVMC_READY_READY_Busy) { /* CPU stalls during op */ }
+    for (uint32_t i = 0; i < 20000000u; i++) {
+        if (NRF_NVMC->READY != NVMC_READY_READY_Busy) { return 1; }
+    }
+    el_note(EL_HW_TIMEOUT);
+    return 0;
 }
 
+/* P0.09/P0.10 (GPS PPS/TXD) are NFC pins until UICR.NFCPINS.PROTECT is cleared.
+ * Clear it once on a board's first boot, verify, and reset so it takes effect;
+ * a failed write boots without GPS instead of looping. App DFU never erases UICR.
+ * Must precede every other pin setup. */
 static void nfc_pins_as_gpio(void)
 {
     if ((NRF_UICR->NFCPINS & UICR_NFCPINS_PROTECT_Msk) == 0) {
@@ -105,11 +121,6 @@ static void nfc_pins_as_gpio(void)
     if ((NRF_UICR->NFCPINS & UICR_NFCPINS_PROTECT_Msk) == 0) {
         NVIC_SystemReset();
     }
-}
-
-int board_nfc_pins_gpio(void)
-{
-    return (NRF_UICR->NFCPINS & UICR_NFCPINS_PROTECT_Msk) == 0;
 }
 
 void board_init(void)
@@ -132,16 +143,6 @@ void board_ext_power_on(void)
     gpio_set(PIN_EXT_POWER);
 }
 
-void board_ext_power_off(void)
-{
-    gpio_clear(PIN_EXT_POWER);
-}
-
-void board_led_on(void)
-{
-    gpio_set(PIN_LED_STATUS);
-}
-
 void board_led_off(void)
 {
     gpio_clear(PIN_LED_STATUS);
@@ -150,11 +151,6 @@ void board_led_off(void)
 void board_led_toggle(void)
 {
     gpio_toggle(PIN_LED_STATUS);
-}
-
-void board_led_write(int on)
-{
-    gpio_write(PIN_LED_STATUS, on);
 }
 
 void board_delay_ms(uint32_t ms)

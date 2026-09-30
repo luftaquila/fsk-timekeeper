@@ -4,7 +4,8 @@
  *    __HeapBase/__HeapLimit (nrf_common.ld). nosys.specs' _sbrk just fails.
  *  - operator new/delete: backed by malloc/free (RadioLib is mostly heap-free,
  *    but provide them so any reachable allocation links).
- *  - __cxa_pure_virtual: pure-virtual call trap (should never run).
+ *  - __cxa_pure_virtual: pure-virtual call trap (should never run). An undefined
+ *    instruction, so the fault handlers record it and reboot.
  *
  * Built with -fno-exceptions -fno-rtti -fno-use-cxa-atexit, so no __cxa_throw /
  * typeinfo / __cxa_atexit are needed.
@@ -32,8 +33,7 @@ void *_sbrk(int incr)
 
 void __cxa_pure_virtual(void)
 {
-    for (;;) {
-    }
+    __builtin_trap();
 }
 
 } /* extern "C" */

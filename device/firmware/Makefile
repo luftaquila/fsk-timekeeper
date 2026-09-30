@@ -5,7 +5,7 @@
 #   make distclean       remove build/ and vendor/
 #   FW_VERSION=1.2.3 make   version reported on the USB `I` line (CI passes the release tag)
 #   NODE_DEBUG=1 make       print chip id / role over USB once per second (testing only)
-#   make test              host GPS regression tests (C11 compiler, no ARM deps)
+#   make test              host tests: GPS, sync, queues, MAC simulator (C11 compiler, no ARM deps)
 #
 # One binary for every board: the role is chosen at runtime (master when a PC
 # enumerates the USB device, sensor otherwise; src/main.c). The fleet key is not
@@ -40,9 +40,10 @@ SIZE    := $(PREFIX)size
 # ---- sources -----------------------------------------------------------------
 # Ours: full warnings.
 APP_C := \
-	src/main.c src/board.c src/sensor.c src/meas.c src/capture.c \
-	src/secure.c src/keystore.c src/proto_usb.c src/node_id.c \
-	src/usb.c src/usb_descriptors.c src/gps.c
+	src/main.c src/board.c src/meas.c src/capture.c src/crc32.c src/errlog.c \
+	src/fault.c src/power.c src/secure.c src/keystore.c src/proto_usb.c src/node_id.c \
+	src/usb.c src/usb_descriptors.c src/gps.c src/sync.c src/sensor_queue.c \
+	src/master_queue.c src/registry.c src/mac_sensor.c src/mac_master.c
 APP_CXX := src/radio_hal.cpp src/radio.cpp src/runtime.cpp
 
 # Vendored: warnings off. RadioLib is built whole (non-Arduino mode, our HAL);
@@ -79,7 +80,9 @@ COMMON   := $(MCU) $(OPT) -ffunction-sections -fdata-sections $(INC) $(DEFS) -MM
 CFLAGS   := $(COMMON) -std=gnu11
 # Bare-metal C++ for RadioLib: drop the parts that need a hosted runtime.
 CXXFLAGS := $(COMMON) -std=gnu++17 -fno-exceptions -fno-rtti -fno-threadsafe-statics -fno-use-cxa-atexit
-ASFLAGS  := $(MCU) -x assembler-with-cpp -DNRF52840_XXAA
+# 4 KB heap (RadioLib's short-lived SPI buffers) keeps data + heap below the
+# retained fault block at 0x20007E00 (linker/nrf52840_app.ld).
+ASFLAGS  := $(MCU) -x assembler-with-cpp -DNRF52840_XXAA -D__HEAP_SIZE=4096
 
 # newlib (nano) + nosys stubs; the linker script places the app at 0x26000
 # (S140 user-app base) and INCLUDEs nrf_common.ld from the MDK. C++ objects

@@ -1,147 +1,130 @@
-/* Secured LoRa packet formats + time-sync helpers (DESIGN.md §2.5, §2.6, §2.11).
+/* Sealed LoRa packet formats, radio protocol v11 (DESIGN §2.6, §2.8, §2.11).
  *
- * One master + up to 6 sensors, single channel, single timebase (the master's
- * 16 MHz TIMER1). node_id is the SENDER's own identity = the low 32 bits of its
- * chip id (FICR.DEVICEID); the master is the reserved id 0. Nothing is hardcoded
- * and there is no slot/number: a sensor transmits under its own id and the master
- * auto-registers it on first contact, reporting that id over USB. The
- * sensor->event mapping lives on the server, so packets carry no set_id.
+ * Wire = [cleartext header | ciphertext payload | 16-byte Poly1305 tag]
+ * (secure.h). The type byte carries PROTO_VER in its high nibble, so every
+ * packet is version-checked before decryption. The header carries the sender's
+ * node_id only on uplinks; the master is the implicit sender of beacons.
  *
- * SECURITY (DESIGN §2.11): every air packet is sealed with XChaCha20-Poly1305
- * (Monocypher) under a fleet-wide pre-shared key. Wire layout is
- *
- *     [ sec header (cleartext, authenticated) | ciphertext(payload) | mac(16) ]
- *
- * The cleartext header carries the sender id + the anti-replay counters and is
- * fed to the AEAD as associated data (so it cannot be tampered). The payload
- * struct (timestamps, offsets, ...) is encrypted. The 16-byte Poly1305 tag
- * detects both bit errors and forgery. See secure.h.
- *
- * WIRE COMPACTNESS: the header is variable-length and the payloads are
- * right-sized to keep airtime down on the one shared LoRa channel:
- *   - The protocol version rides in the high nibble of the type byte (SEC_VT_*),
- *     so every packet is version-checked with no extra byte.
- *   - node_id is serialized ONLY on uplink packets (EVENT/STATUS); downlink
- *     packets (BEACON/ACK) are always sent by the master (id 0), which both
- *     sides supply implicitly to the nonce — see secure.c.
- *   - ctr is 24-bit on the wire (16.7M seals/session = 194 days at 1 Hz).
+ * node_id = low 32 bits of the sender's chip id (never 0); the master is id 0.
+ * Every packet has a fixed length.
  */
 #ifndef PROTOCOL_H
 #define PROTOCOL_H
 
 #include <stdint.h>
 
-/* Low nibble of the type byte. Values 1..15; the high nibble carries PROTO_VER. */
+/* Low nibble of the type byte. */
 #define PKT_TYPE_BEACON   0x01u
-#define PKT_TYPE_EVENT    0x02u
-#define PKT_TYPE_ACK      0x03u
-#define PKT_TYPE_STATUS   0x04u
+#define PKT_TYPE_UPLINK   0x02u
 
-#define PROTO_VER   10u /* 9 = source sequence, loss ranges, reliable checkpoints; 10 = beacon checkpoint request */
+#define PROTO_VER 11u
 
-/* Type byte = (PROTO_VER << 4) | PKT_TYPE_*. Both nibbles are authenticated as
- * AEAD associated data and the type half feeds the nonce. PROTO_VER must stay <= 15. */
 #define SEC_VT(ver, type) ((uint8_t)(((uint8_t)(ver) << 4) | ((uint8_t)(type) & 0x0Fu)))
 #define SEC_VT_TYPE(b)    ((uint8_t)((b) & 0x0Fu))
 #define SEC_VT_VER(b)     ((uint8_t)((b) >> 4))
 
-/* Uplink packets (sensor -> master) carry the sender's 32-bit node_id in the
- * cleartext header so the master can demux + build the nonce. Downlink packets
- * (master -> sensor) omit it: the sender is always the master (id 0). */
-#define SEC_TYPE_HAS_NODE(t) ((t) == PKT_TYPE_EVENT || (t) == PKT_TYPE_STATUS)
+#define SEC_TYPE_HAS_NODE(t) ((t) == PKT_TYPE_UPLINK)
 
-/* node_id is a 32-bit identity: the master is the reserved id 0 (NODE_MASTER), a
- * sensor is the low 32 bits of its own chip id (never 0 — see node_sender_id()).
- * The master tracks sensors in a small registry (MAX_NODES entries) keyed by id,
- * auto-registering on first contact; entries are a set, not indexed by id. */
-#define MAX_NODES   7u  /* max sensors tracked at once (registry capacity) */
+/* Registry capacity at the master = number of uplink slots. */
+#define MAX_NODES 5u
 #define NODE_MASTER 0u
 
-/* ---- Encrypted payloads (plaintext form, before sealing) ----------------- */
+/* Slot-table name of a sensor id: its low 16 bits, never 0 (0 = free slot).
+ * The master refuses to register a second live sensor with the same short id. */
+static inline uint16_t node_short_id(uint32_t id)
+{
+    uint16_t s = (uint16_t)id;
+    if (s == 0u) { s = (uint16_t)(id >> 16); }
+    return s ? s : 1u;
+}
 
-/* Master -> all sensors (broadcast sync anchor). Carries the master TxDone tick
- * of the PREVIOUS beacon so a sensor can pair it with its own stored RxDone of
- * that beacon (§2.5). The beacon/sync period and STATUS cycle are fixed config
- * constants shared by both roles (config.h), so they are NOT carried on air. */
+/* ---- Beacon (master -> all) ----------------------------------------------- */
+
+/* Slot k of the table is registry entry k. short_id 0 = free slot. ack_seq is
+ * the last ev_seq the master accepted in order from that sensor boot
+ * (cumulative ACK); boot_tag = low byte of that boot's id. */
+typedef struct __attribute__((packed)) {
+    uint16_t short_id;
+    uint16_t ack_seq;
+    uint8_t  boot_tag;
+} beacon_slot_t;
+
+#define BEACON_TX_PREV_VALID 0x01u /* m_tx_prev is the TxDone of beacon seq-1 */
+
 typedef struct __attribute__((packed)) {
     uint8_t  seq;        /* beacon sequence (wraps at 256) */
-    uint64_t m_tx_prev;  /* master TxDone tick of beacon (seq-1) */
-    uint8_t  cp_req;     /* checkpoint request id: 0 = none; else every synced sensor answers each
-                          * id once with an immediate checkpoint (config.h CP_REQ_BEACONS, §2.8) */
+    uint8_t  flags;      /* BEACON_* */
+    uint64_t m_tx_prev;  /* master TxDone tick of beacon seq-1 */
+    uint8_t  cp_req;     /* checkpoint request id, 0 = none */
+    beacon_slot_t slot[MAX_NODES];
 } beacon_pl_t;
 
-/* Sensor -> master. ev_master_t = event tick already mapped to master time.
- * master_boot_id = the complete master session boot_id this event is
- * synced to (from the beacons the sensor tracks). The master rejects events that
- * don't name its current session, so an event captured under a previous master
- * power-cycle cannot be replayed after the master reboots (DESIGN §2.11).
- * Preserve the complete boot ID; truncation would weaken the session fence. */
-typedef struct __attribute__((packed)) {
-    uint16_t ev_seq;
-    uint64_t ev_master_t;
-    uint32_t master_boot_id; /* complete master boot_id (session binding) */
-    uint16_t sync_age_ms;    /* age of the offset anchor when the edge was captured */
-    uint8_t  flags;
-    uint32_t capture_seq;
-    uint32_t end_seq;
-    uint64_t end_tick;
-} event_pl_t;
+/* ---- Uplink (sensor -> master) ------------------------------------------- */
 
-#define EVENT_LOSS 0x10u
-#define EVENT_CHECKPOINT 0x20u
-#define EVENT_TIME_UNKNOWN 0x40u
+#define UL_KIND_EDGES      1u /* capture_seq..capture_seq+count-1 at tick, tick+dt[0], ... */
+#define UL_KIND_LOSS       2u /* capture_seq..end_seq lost between tick and end_tick */
+#define UL_KIND_CHECKPOINT 3u /* through tick, the last capture is capture_seq */
 
+#define UL_EDGES_MAX 5u
+
+/* flags: health of the capture clock when the record was stamped. */
 #define HEALTH_SYNC_VALID 0x01u
 #define HEALTH_SKEW_VALID 0x02u
 #define HEALTH_CLOCK_XTAL 0x04u
-#define HEALTH_CAPTURE_OK 0x08u
-#define HEALTH_EVENT_REQUIRED (HEALTH_SYNC_VALID | HEALTH_SKEW_VALID | HEALTH_CLOCK_XTAL | HEALTH_CAPTURE_OK)
+#define EVENT_INTERPOLATED 0x08u /* stamped by interpolation after a sync gap */
+#define EVENT_TIME_UNKNOWN 0x40u /* ticks carry no timing information */
+#define HEALTH_EVENT_REQUIRED (HEALTH_SYNC_VALID | HEALTH_SKEW_VALID | HEALTH_CLOCK_XTAL)
 
-/* Master -> sensor: acknowledges a received EVENT so the sensor stops
- * retransmitting (DESIGN §2.8). The header node_id is the master (0, implicit);
- * the acked sensor is named here in the payload by its 32-bit id. */
 typedef struct __attribute__((packed)) {
-    uint32_t node_id;  /* sensor being acked (its low-32 chip id) */
-    uint16_t ev_seq;   /* event being acked */
-    uint32_t sensor_boot_id;
-    uint64_t ev_master_t;
-} ack_pl_t;
+    uint8_t  health;           /* HEALTH_* of the sensor clock now */
+    uint16_t sync_age_ms;      /* age of the newest anchor now, saturated */
+    int16_t  skew_ppm;         /* measured drift vs master, clamped to i16 */
+    uint16_t rx_miss;          /* beacons missed since boot (saturating) */
+    uint8_t  beacon_gap;       /* beacons missed in a row right now (saturating) */
+    uint16_t batt_mv;          /* cell estimate */
+    int16_t  temp_c10;         /* die temperature, 0.1 C */
+    uint16_t capture_overflow; /* ISR ring overflows since boot */
+    uint16_t fifo_drop;        /* records discarded (session change) since boot */
+    uint16_t err_flags;        /* ERR_* (proto_usb.h), sticky per boot */
+    uint8_t  reset_reason;     /* RESET_* (proto_usb.h) */
+} ul_diag_t;
 
-/* Sensor -> master: periodic diagnostics (DESIGN §2.10), sent once per STATUS
- * cycle at a chip-id-hashed phase within the synced cycle (collision-resistant
- * without coordination, §2.8). offset/skew are the sensor's own sync health; the
- * master adds RSSI/SNR/last-seen/latency on its side. */
 typedef struct __attribute__((packed)) {
-    uint8_t  seq;         /* status sequence (uplink-loss detect) */
-    int64_t  offset_tick; /* current master-time offset (master_t - local_t) */
-    int16_t  skew_ppm;    /* clock drift estimate, signed ppm (+-32767 covers any real XO) */
-    uint16_t rx_miss;     /* beacons missed since boot (saturating) */
-    uint8_t  beacon_gap;  /* consecutive beacons missed right now (saturating at 255) */
-    uint16_t batt_mv;     /* cell estimate (VDDH via SAADC VDDHDIV5 + diode drop) */
-    int16_t  temp_c10;    /* nRF die temperature, deci-degrees C (235 = 23.5 C) */
-    uint16_t sync_age_ms; /* current offset-anchor age, saturated */
-    uint16_t capture_overflow; /* sticky SENSOR ISR ring overflow count */
-    uint16_t event_drop;  /* post-sync events rejected, overflowed, or expired before ACK */
-    uint8_t  flags;       /* HEALTH_* bits */
-} status_pl_t;
+    uint8_t  kind;           /* UL_KIND_* */
+    uint8_t  flags;          /* HEALTH_* | EVENT_* */
+    uint16_t ev_seq;         /* transport sequence, 1.. per sensor boot */
+    uint32_t master_boot_id; /* master session the ticks belong to */
+    uint32_t capture_seq;
+    uint64_t tick;           /* master time */
+    uint16_t sync_age_ms;    /* anchor age when the first record was stamped */
+    union __attribute__((packed)) {
+        struct __attribute__((packed)) {
+            uint8_t  count;                   /* 1..UL_EDGES_MAX */
+            uint32_t dt[UL_EDGES_MAX - 1];    /* tick deltas of edges 2..count */
+        } edges;
+        struct __attribute__((packed)) {
+            uint32_t end_seq;
+            uint64_t end_tick;
+        } loss;
+    } u;
+    ul_diag_t diag;
+} uplink_pl_t;
 
 /* ---- Wire sizes ---------------------------------------------------------- */
 
-/* Cleartext header: vt(1) + boot_id(4) + ctr(3), plus node_id(4) on uplink. */
-#define SEC_HDR_DL    8                        /* downlink (BEACON/ACK): no node_id */
-#define SEC_HDR_UL    12                       /* uplink (EVENT/STATUS): + node_id */
-#define SEC_MAC_LEN   16                       /* Poly1305 tag */
+/* Cleartext header: vt(1) + boot_id(4) + ctr(3), plus node_id(4) on uplinks. */
+#define SEC_HDR_DL    8
+#define SEC_HDR_UL    12
+#define SEC_MAC_LEN   16
 
-/* Sealed wire length for a given header length + plaintext payload length. */
 #define SEC_WIRE_LEN(hdr, pl) ((hdr) + (int)(pl) + SEC_MAC_LEN)
 
-#define WIRE_BEACON   SEC_WIRE_LEN(SEC_HDR_DL, sizeof(beacon_pl_t))  /* 34 */
-#define WIRE_EVENT    SEC_WIRE_LEN(SEC_HDR_UL, sizeof(event_pl_t))
-#define WIRE_ACK      SEC_WIRE_LEN(SEC_HDR_DL, sizeof(ack_pl_t))
-#define WIRE_STATUS   SEC_WIRE_LEN(SEC_HDR_UL, sizeof(status_pl_t))
-#define WIRE_MAX      64 /* RX buffer size; largest sealed packet is WIRE_EVENT */
+#define WIRE_BEACON   SEC_WIRE_LEN(SEC_HDR_DL, sizeof(beacon_pl_t))  /* 60 B, ~56 ms */
+#define WIRE_UPLINK   SEC_WIRE_LEN(SEC_HDR_UL, sizeof(uplink_pl_t))  /* 86 B, ~77 ms */
+#define WIRE_MAX      96 /* RX buffer size */
 
-_Static_assert(WIRE_EVENT <= WIRE_MAX, "EVENT must fit the radio frame");
-_Static_assert(WIRE_STATUS <= WIRE_MAX, "STATUS must fit the radio frame");
+_Static_assert(sizeof(beacon_pl_t) == 36, "beacon payload layout");
+_Static_assert(sizeof(uplink_pl_t) == 58, "uplink payload layout");
+_Static_assert(WIRE_UPLINK <= WIRE_MAX && WIRE_BEACON <= WIRE_MAX, "packets must fit the RX buffer");
 
 #endif /* PROTOCOL_H */

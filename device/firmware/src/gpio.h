@@ -1,9 +1,6 @@
-/* Tiny port-aware GPIO helpers over the MDK registers.
- *
- * Stage 1 keeps GPIO on raw registers (no nrfx_config/glue): the nrfx nrf_gpio
- * HAL would pull in the whole <nrfx.h> chain for no functional gain on plain
- * I/O. nrfx proper is introduced with the radio/capture (Stage 2/3), where its
- * drivers earn their setup. Pin numbering: P0.n == n, P1.n == 32 + n (config.h).
+/* Tiny port-aware GPIO helpers over the MDK registers (the nrfx GPIO HAL would
+ * pull in the whole <nrfx.h> chain for plain I/O). Pin numbering: P0.n == n,
+ * P1.n == 32 + n (config.h).
  */
 #ifndef GPIO_H
 #define GPIO_H
