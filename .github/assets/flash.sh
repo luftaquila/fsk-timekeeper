@@ -1,25 +1,42 @@
 #!/bin/sh
 # Flash the fsk-timekeeper firmware over the Adafruit nRF52 bootloader's serial DFU.
 #
-#   ./flash.sh [port]
+#   ./flash.sh [--serial <devid>] [port]
 #
 # Finds the board by itself. A board running the FSK-WL app is rebooted into the
 # bootloader first (1200-baud touch); a board that is already in the bootloader
-# (new board, or after a double-tap on RST) is flashed directly.
+# (new board, or after a double-tap on RST) is flashed directly. With several
+# boards plugged in, --serial picks the board whose USB serial number is the given
+# chip id (the 16 hex digits of its `I` line); the bootloader reports it too. An
+# app from before chip-id serials reports 0001 instead.
 # Linux users need permission on the serial port (usually the `dialout` group).
 set -eu
 cd "$(dirname "$0")"
 
-# Serial port of the first USB device with this vendor (and product) id, hex.
+SERIAL=""
+PORT=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+    --serial) [ $# -ge 2 ] || { echo "--serial needs the board's chip id" >&2; exit 1; }
+              SERIAL="$(printf %s "$2" | tr '[:lower:]' '[:upper:]')"; shift 2 ;;
+    *) PORT="$1"; shift ;;
+    esac
+done
+
+# Serial port of the first USB device with this vendor id (and product id and
+# serial number when given), hex.
 usb_port() {
     vid="$1"
     pid="${2:-}"
+    want="${3:-}"
     case "$(uname)" in
     Darwin)
-        ioreg -r -c IOUSBHostDevice -l 2>/dev/null | awk -v vid="$((0x$vid))" -v pid="$( [ -n "$pid" ] && printf %d "0x$pid" || echo -1 )" '
-            /"idVendor" = /       { v = $NF }
-            /"idProduct" = /      { p = $NF }
-            /"IOCalloutDevice" = / { if (v == vid && (pid < 0 || p == pid)) { gsub(/"/, "", $NF); print $NF; exit } }'
+        ioreg -r -c IOUSBHostDevice -l 2>/dev/null | awk -v vid="$((0x$vid))" \
+            -v pid="$( [ -n "$pid" ] && printf %d "0x$pid" || echo -1 )" -v want="$want" '
+            /"idVendor" = /          { v = $NF }
+            /"idProduct" = /         { p = $NF }
+            /"USB Serial Number" = / { s = $NF; gsub(/"/, "", s); s = toupper(s) }
+            /"IOCalloutDevice" = /   { if (v == vid && (pid < 0 || p == pid) && (want == "" || s == want)) { gsub(/"/, "", $NF); print $NF; exit } }'
         ;;
     *)
         for tty in /sys/class/tty/ttyACM*; do
@@ -27,6 +44,7 @@ usb_port() {
             dev="$tty/device/.."
             [ "$(cat "$dev/idVendor" 2>/dev/null)" = "$vid" ] || continue
             [ -z "$pid" ] || [ "$(cat "$dev/idProduct" 2>/dev/null)" = "$pid" ] || continue
+            [ -z "$want" ] || [ "$(tr '[:lower:]' '[:upper:]' < "$dev/serial" 2>/dev/null)" = "$want" ] || continue
             echo "/dev/$(basename "$tty")"
             return
         done
@@ -34,9 +52,8 @@ usb_port() {
     esac
 }
 
-APP="$(usb_port 1999 0515)"   # FSK-WL application
-BOOT="$(usb_port 239a)"       # Adafruit nRF52 bootloader
-PORT="${1:-}"
+APP="$(usb_port 1999 0515 "$SERIAL")"   # FSK-WL application
+BOOT="$(usb_port 239a "" "$SERIAL")"    # Adafruit nRF52 bootloader (same chip id serial)
 TOUCH=""
 if [ -n "$PORT" ]; then
     [ "$PORT" = "$APP" ] && TOUCH="--touch 1200"
@@ -45,6 +62,9 @@ elif [ -n "$APP" ]; then
     TOUCH="--touch 1200"
 elif [ -n "$BOOT" ]; then
     PORT="$BOOT"
+elif [ -n "$SERIAL" ]; then
+    echo "no board with serial $SERIAL. An app from before chip-id serials reports 0001: pass its port, or double-tap RST and run this again." >&2
+    exit 1
 else
     # Unknown bootloader id: accept a single remaining port.
     set -- $(ls /dev/ttyACM* /dev/cu.usbmodem* 2>/dev/null || true)
@@ -54,7 +74,7 @@ else
         echo "no board found. Plug it in; a new board or a hung app needs a double-tap on RST first." >&2
         exit 1
     else
-        echo "several serial ports found; pass the board's port: ./flash.sh /dev/ttyACM0" >&2
+        echo "several serial ports found; pass the board's port (./flash.sh /dev/ttyACM0) or its chip id (--serial)" >&2
         exit 1
     fi
 fi

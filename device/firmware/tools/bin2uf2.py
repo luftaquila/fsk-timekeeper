@@ -34,7 +34,9 @@ def main():
     nblocks = (len(data) + PAYLOAD - 1) // PAYLOAD
     out = bytearray()
     for i in range(nblocks):
-        chunk = data[i * PAYLOAD:(i + 1) * PAYLOAD]
+        # The nRF52 bootloader accepts only 256-byte payloads, including the
+        # final block. A short final payload is ignored and never completes DFU.
+        chunk = data[i * PAYLOAD:(i + 1) * PAYLOAD].ljust(PAYLOAD, b"\xff")
         block = struct.pack(
             "<IIIIIIII",
             UF2_MAGIC_START0,
