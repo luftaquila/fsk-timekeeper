@@ -3,8 +3,8 @@
  *
  * Edges of one segment are exactly one GPS second apart per unit of n. Neighbouring segments
  * are bridged when the whole seconds between them are known (UTC, or tick rounding within an
- * hour) and the ticks fit that many seconds of a plausible crystal; otherwise they belong to
- * separate islands. Ticks outside PPS coverage are
+ * hour) and the ticks across the gap match that many seconds at the neighbours' measured
+ * frequencies; otherwise they belong to separate islands. Ticks outside PPS coverage are
  * extrapolated with the nearest segment's measured frequency; islands meet at the midpoint of
  * their gap. A boot without qualified edges is converted at the nominal 16 MHz.
  */
@@ -14,6 +14,8 @@ const F_NOMINAL = MASTER_TICKS_PER_S;
 const WINDOW_S = 64n; // edges used for an extrapolation frequency
 const BRIDGE_MAX_TICKS = 3600n * F_NOMINAL;
 const BRIDGE_PPM_DIV = 5000n; // 200 ppm, the firmware's gate between qualified PPS edges
+const BRIDGE_JITTER_TICKS = 16n; // 1 us: PPS jitter and capture quantization at both ends
+const BRIDGE_DRIFT_DIV = 1_000_000n; // 1 ppm of the gap: what the measured frequencies miss
 
 function gcd(a, b) {
   if (a < 0n) a = -a;
@@ -63,11 +65,51 @@ function utcBase(seg) {
 }
 
 const abs = (v) => (v < 0n ? -v : v);
+// |r| > t for rationals (denominators are positive).
+const exceeds = (r, t) => abs(r.n) * t.d > t.n * r.d;
 
-// Whole GPS seconds between the last edge of a and the first edge of b, or null. The ticks
-// between them must be k seconds within the PPS gate's 200 ppm: edges that disagree more (a
-// PPS phase step on reacquisition, say) are not bridged, and the gap is extrapolated.
-function bridgeSeconds(a, b) {
+// Ticks per second over at most WINDOW_S seconds at one end of a segment, with the window's
+// middle in seconds from that end edge (<= 0 at the end, >= 0 at the start); null with fewer
+// than two edges there.
+function endWindow(seg, atEnd) {
+  const edges = seg.edges;
+  if (atEnd) {
+    const last = edges[edges.length - 1];
+    let first = last;
+    for (let i = edges.length - 2; i >= 0 && last.n - edges[i].n <= WINDOW_S; i--) first = edges[i];
+    if (first === last) return null;
+    return { f: q(last.tick - first.tick, last.n - first.n), mid: q(first.n - last.n, 2n) };
+  }
+  const first = edges[0];
+  let last = first;
+  for (let i = 1; i < edges.length && edges[i].n - first.n <= WINDOW_S; i++) last = edges[i];
+  if (last === first) return null;
+  return { f: q(last.tick - first.tick, last.n - first.n), mid: q(last.n - first.n, 2n) };
+}
+
+// Ticks per second measured over at most WINDOW_S seconds at one end of a segment.
+function segmentFrequency(seg, atEnd) {
+  return endWindow(seg, atEnd)?.f ?? q(F_NOMINAL);
+}
+
+// Frequencies at L (last edge of a) and F (first edge of b), k seconds apart: the two end
+// windows' frequencies moved along the trend between their middles, so a crystal drifting
+// linearly with temperature is followed. Null unless both ends have a measured frequency:
+// one side alone gives no trend.
+function gapFrequencies(a, b, k) {
+  const wa = endWindow(a, true);
+  const wb = endWindow(b, false);
+  if (!wa || !wb) return null;
+  const trend = div(sub(wb.f, wa.f), sub(add(q(k), wb.mid), wa.mid));
+  return { fL: sub(wa.f, mul(trend, wa.mid)), fF: sub(wb.f, mul(trend, wb.mid)) };
+}
+
+// Bridge from the last edge of a to the first edge of b: { k whole GPS seconds, gap
+// frequencies }, or null. The ticks across the gap must be k seconds at the neighbours'
+// frequencies within 1 us + 1 ppm: edges that disagree more (a PPS phase step on
+// reacquisition, say) are not bridged, and the gap is extrapolated. Without a measured
+// frequency on both sides only the firmware gate's 200 ppm can be checked.
+function bridgeOf(a, b) {
   const L = a.edges[a.edges.length - 1];
   const F = b.edges[0];
   const dt = F.tick - L.tick;
@@ -83,24 +125,12 @@ function bridgeSeconds(a, b) {
     const rounded = roundHalfUp(q(dt, F_NOMINAL));
     if (rounded >= 1n) k = rounded;
   }
-  if (k == null || abs(k * F_NOMINAL - dt) > (k * F_NOMINAL) / BRIDGE_PPM_DIV) return null;
-  return k;
-}
-
-// Ticks per second measured over at most WINDOW_S seconds at one end of a segment.
-function segmentFrequency(seg, atEnd) {
-  const edges = seg.edges;
-  if (edges.length < 2) return q(F_NOMINAL);
-  if (atEnd) {
-    const last = edges[edges.length - 1];
-    let first = last;
-    for (let i = edges.length - 2; i >= 0 && last.n - edges[i].n <= WINDOW_S; i--) first = edges[i];
-    return first === last ? q(F_NOMINAL) : q(last.tick - first.tick, last.n - first.n);
-  }
-  const first = edges[0];
-  let last = first;
-  for (let i = 1; i < edges.length && edges[i].n - first.n <= WINDOW_S; i++) last = edges[i];
-  return last === first ? q(F_NOMINAL) : q(last.tick - first.tick, last.n - first.n);
+  if (k == null) return null;
+  const freq = gapFrequencies(a, b, k);
+  if (!freq) return abs(k * F_NOMINAL - dt) > (k * F_NOMINAL) / BRIDGE_PPM_DIV ? null : { k, freq: null };
+  const expected = mul(q(k), div(add(freq.fL, freq.fF), q(2n)));
+  const tolerance = q(BRIDGE_JITTER_TICKS + (k * F_NOMINAL) / BRIDGE_DRIFT_DIV);
+  return exceeds(sub(q(dt), expected), tolerance) ? null : { k, freq };
 }
 
 export function buildTimeline(edges) {
@@ -122,10 +152,10 @@ export function buildTimeline(edges) {
     const L = prev.edges[prev.edges.length - 1];
     const F = seg.edges[0];
     const tL = add(prev.base, q(L.n));
-    const k = bridgeSeconds(prev, seg);
-    if (k != null) {
+    const bridge = bridgeOf(prev, seg);
+    if (bridge) {
       seg.island = island;
-      seg.base = sub(add(tL, q(k)), q(F.n));
+      seg.base = sub(add(tL, q(bridge.k)), q(F.n));
       continue;
     }
     // New island: each half of the gap is extrapolated from its own side; T meets at the midpoint.

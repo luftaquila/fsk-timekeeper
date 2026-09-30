@@ -94,6 +94,21 @@ describe("PPS timeline", () => {
     }
   });
 
+  it("checks a bridge against the neighbours' frequencies to the microsecond", () => {
+    const stepped = (osc, from, to, stepUs) =>
+      edgesOf(osc, range(from, to), { seg: 2, n0: 0 }).map((e) => ({ ...e, tick: String(BigInt(e.tick) + BigInt(Math.round((stepUs * F) / 1e6))) }));
+    const island = (edges) => buildTimeline(edges).segs[1].island;
+    const steady = oscillator({ b: 0 });
+    // a 100 us PPS step across a 20 s gap: 200 ppm would allow 4 ms, the neighbours 21 us
+    assert.equal(island([...edgesOf(steady, range(0, 60)), ...stepped(steady, 80, 140, 100)]), 1);
+    assert.equal(island([...edgesOf(steady, range(0, 60)), ...stepped(steady, 80, 140, 15)]), 0);
+    // a crystal warming 0.1 ppm/s over a 600 s gap is followed, not mistaken for a step
+    const warming = oscillator({ a: 20e-6, b: 1e-7 });
+    assert.equal(island([...edgesOf(warming, range(0, 60)), ...stepped(warming, 660, 720, 0)]), 0);
+    // one edge on a side gives no frequency: only the 200 ppm gate applies
+    assert.equal(island([...edgesOf(steady, [0]), ...stepped(steady, 20, 80, 1000)]), 0);
+  });
+
   it("extrapolates past the last edge with the nearest segment's frequency", () => {
     const osc = oscillator({ a: 50e-6, b: 0 });
     const edges = edgesOf(osc, range(0, 100));
