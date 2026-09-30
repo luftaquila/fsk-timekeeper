@@ -61,6 +61,7 @@ export function createRun({
   debounceMs = DEFAULT_DEBOUNCE_MS,
   gpsAtStart = null,
   startedUtc = null,
+  durable = true,
   now = Date.now(),
   statusMaxAgeMs = WIRELESS_STATUS_MAX_AGE_MS,
 }) {
@@ -106,7 +107,7 @@ export function createRun({
     startedUtc,
     startedAt: now,
     historyId: null,
-    durable: true,
+    durable,
   };
 }
 
@@ -199,6 +200,9 @@ export function evaluateRun(run, rows, { now = Date.now() } = {}) {
     faultCuts = cuts;
   };
   const cutsBelow = (role, bound) => role.finalCuts.filter((c) => bound == null || c.cut < bound);
+  // A hole decides only once its role has settled: a sensor still behind may yet report the
+  // crossing the result needs, before the hole.
+  const cutBelow = (role, bound) => role.settled && (bound == null || role.finalCut < bound);
 
   if (run.mode === "laps") {
     const confirmed = starts.filter((c) => c.tick <= startRole.certain).map((c) => String(c.tick));
@@ -207,7 +211,7 @@ export function evaluateRun(run, rows, { now = Date.now() } = {}) {
     if (target && confirmed.length >= target + 1) {
       state = "verified";
       crossingTicks = confirmed.slice(0, target + 1);
-    } else if (startRole.finalCut != null && (stop == null || startRole.finalCut < stop)) {
+    } else if (cutBelow(startRole, stop)) {
       invalid(cutsBelow(startRole, stop));
       totalValid = false;
     } else if (stop != null && startRole.certain >= stop) {
@@ -224,8 +228,8 @@ export function evaluateRun(run, rows, { now = Date.now() } = {}) {
     let s1Final = false;
     if (s1 != null) {
       if (s1 <= startRole.certain) s1Final = true;
-      else if (startRole.finalCut != null && startRole.finalCut < s1) invalid(cutsBelow(startRole, s1));
-    } else if (startRole.finalCut != null && (stop == null || startRole.finalCut < stop)) {
+      else if (cutBelow(startRole, s1)) invalid(cutsBelow(startRole, s1));
+    } else if (cutBelow(startRole, stop)) {
       invalid(cutsBelow(startRole, stop));
     } else if (stop != null && startRole.certain >= stop) {
       state = "dnf";
@@ -244,8 +248,8 @@ export function evaluateRun(run, rows, { now = Date.now() } = {}) {
           if (f1 <= finishRole.certain) {
             state = "verified";
             finishTick = String(f1);
-          } else if (finishRole.finalCut != null && finishRole.finalCut < f1) invalid(cutsBelow(finishRole, f1));
-        } else if (finishRole.finalCut != null && (stop == null || finishRole.finalCut < stop)) {
+          } else if (cutBelow(finishRole, f1)) invalid(cutsBelow(finishRole, f1));
+        } else if (cutBelow(finishRole, stop)) {
           invalid(cutsBelow(finishRole, stop));
         } else if (stop != null && finishRole.certain >= stop) {
           state = "dnf";
@@ -265,7 +269,8 @@ export function evaluateRun(run, rows, { now = Date.now() } = {}) {
 
   const laps = [];
   if (run.mode === "laps") {
-    for (let i = 1; i < starts.length; i++) {
+    const end = run.lapTarget ? Math.min(starts.length, run.lapTarget + 1) : starts.length; // crossings past the target are no laps
+    for (let i = 1; i < end; i++) {
       laps.push({ startTick: String(starts[i - 1].tick), endTick: String(starts[i].tick), confirmed: starts[i].tick <= startRole.certain });
     }
   }

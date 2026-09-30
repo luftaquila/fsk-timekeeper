@@ -483,6 +483,9 @@ describe("pipeline with the fake master", () => {
     await waitFor(() => history.rows[0].durable === false);
     fake.crossing(a);
     await waitFor(() => timing.run.crossingTicks.length === 1); // acks keep flowing from memory
+    timing.reset();
+    assert.equal(await timing.start("laps"), true, toasts.error.join(" | "));
+    assert.equal(timing.run.durable, false); // started after the failure
     await device.disconnect();
   });
 
