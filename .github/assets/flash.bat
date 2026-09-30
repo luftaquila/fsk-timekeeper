@@ -1,2 +1,2 @@
-powershell -NoProfile -ExecutionPolicy Bypass -Command "& ./flash.ps1"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0flash.ps1" %*
 pause

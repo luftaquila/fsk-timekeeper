@@ -6,8 +6,9 @@
 # Finds the board by itself. A board running the FSK-WL app is rebooted into the
 # bootloader first (1200-baud touch); a board that is already in the bootloader
 # (new board, or after a double-tap on RST) is flashed directly. With several
-# boards plugged in, --serial picks the app board whose USB serial number is the
-# given chip id (the 16 hex digits of its `I` line).
+# boards plugged in, --serial picks the board whose USB serial number is the given
+# chip id (the 16 hex digits of its `I` line); the bootloader reports it too. An
+# app from before chip-id serials reports 0001 instead.
 # Linux users need permission on the serial port (usually the `dialout` group).
 set -eu
 cd "$(dirname "$0")"
@@ -52,18 +53,18 @@ usb_port() {
 }
 
 APP="$(usb_port 1999 0515 "$SERIAL")"   # FSK-WL application
-BOOT="$(usb_port 239a)"                 # Adafruit nRF52 bootloader
+BOOT="$(usb_port 239a "" "$SERIAL")"    # Adafruit nRF52 bootloader (same chip id serial)
 TOUCH=""
 if [ -n "$PORT" ]; then
     [ "$PORT" = "$APP" ] && TOUCH="--touch 1200"
 elif [ -n "$APP" ]; then
     PORT="$APP"
     TOUCH="--touch 1200"
-elif [ -n "$SERIAL" ]; then
-    echo "no FSK-WL board with serial $SERIAL. A board already in the bootloader has another serial: pass its port instead." >&2
-    exit 1
 elif [ -n "$BOOT" ]; then
     PORT="$BOOT"
+elif [ -n "$SERIAL" ]; then
+    echo "no board with serial $SERIAL. An app from before chip-id serials reports 0001: pass its port, or double-tap RST and run this again." >&2
+    exit 1
 else
     # Unknown bootloader id: accept a single remaining port.
     set -- $(ls /dev/ttyACM* /dev/cu.usbmodem* 2>/dev/null || true)

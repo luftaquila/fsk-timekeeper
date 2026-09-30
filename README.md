@@ -12,7 +12,7 @@ Wireless LoRa timing instrument for Formula Student Korea dynamic events.
 
 * The master is the board plugged into the console PC, and it must stay plugged in. Unplugged, it stops all radio activity; plugged back in, it starts a new session and any open run ends.
 * Update the console and the firmware of every board together. The console refuses a master that reports another protocol version and says why.
-* Flashing with several boards plugged in: `./flash.sh --serial <chip id>` (Windows: `.\flash.ps1 -Serial <chip id>`, not yet tested on Windows). The chip id is the 16-hex device id the console shows for the board.
+* Flashing with several boards plugged in: `./flash.sh --serial <chip id>` (Windows: `.\flash.ps1 -Serial <chip id>`, not yet tested on Windows). The chip id is the 16-hex device id the console shows for the board; a board in the bootloader reports it too. A board still running a release from before chip-id serials reports 0001: give its port for that first update.
 
 > [!NOTE]
 > Assembly, usage and troubleshooting guides will follow.
