@@ -4,7 +4,7 @@ import { MODES, ROLES, REQUIRED_ROLES, DEFAULT_DEBOUNCE_MS, DEBOUNCE_MIN_MS, DEB
 import { validateNodeId } from "../lib/protocol";
 
 const KEY = "tk.settings.v2";
-const LEGACY_KEYS = ["tk.settings.v1", "tk.runs.v1", "tk.fleetKey.v1"];
+const OLD_KEYS = ["tk.settings.v1", "tk.runs.v1", "tk.fleetKey.v1"];
 
 function defaults() {
   return {
@@ -23,7 +23,7 @@ function clampDebounce(ms) {
 function load() {
   const base = defaults();
   try {
-    for (const k of LEGACY_KEYS) localStorage.removeItem(k);
+    for (const k of OLD_KEYS) localStorage.removeItem(k);
     const raw = localStorage.getItem(KEY);
     if (!raw) return base;
     const saved = JSON.parse(raw);

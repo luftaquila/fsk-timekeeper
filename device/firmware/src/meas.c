@@ -1,21 +1,33 @@
 #include "meas.h"
 
+#include "board.h"
+#include "errlog.h"
 #include "nrf.h"
 
-/* Bare-metal die-temp + VDDH battery sense (same register-access style as
- * capture.c / board.c — no nrfx driver). Both are one-shot and blocking; they
- * are called only when building a STATUS/diag frame (every 5 s), not polled. */
+/* Every wait here finishes in well under 1 ms. */
+#define MEAS_WAIT_MAX_US 2000u
+
+static int wait_event(volatile uint32_t *event)
+{
+    uint32_t t0 = board_micros();
+    while (*event == 0) {
+        if ((uint32_t)(board_micros() - t0) >= MEAS_WAIT_MAX_US) {
+            el_note(EL_HW_TIMEOUT);
+            return 0;
+        }
+    }
+    return 1;
+}
 
 int16_t meas_temp_c10(void)
 {
+    NRF_TEMP->EVENTS_DATARDY = 0;
     NRF_TEMP->TASKS_START = 1;
-    while (NRF_TEMP->EVENTS_DATARDY == 0) {
-        /* conversion takes ~36 us */
-    }
+    int ok = wait_event(&NRF_TEMP->EVENTS_DATARDY);
     NRF_TEMP->EVENTS_DATARDY = 0;
     int32_t raw = (int32_t)NRF_TEMP->TEMP; /* signed, 0.25 C units */
     NRF_TEMP->TASKS_STOP = 1;
-    return (int16_t)((raw * 10) / 4);      /* -> deci-C */
+    return ok ? (int16_t)((raw * 10) / 4) : 0;
 }
 
 /* EasyDMA target for the single sample. */
@@ -41,19 +53,21 @@ uint16_t meas_vddh_mv(void)
     NRF_SAADC->ENABLE = SAADC_ENABLE_ENABLE_Enabled;
     NRF_SAADC->EVENTS_STARTED = 0;
     NRF_SAADC->TASKS_START = 1;
-    while (NRF_SAADC->EVENTS_STARTED == 0) { }
-    NRF_SAADC->EVENTS_END = 0;
-    NRF_SAADC->TASKS_SAMPLE = 1;
-    while (NRF_SAADC->EVENTS_END == 0) { }
+    int ok = wait_event(&NRF_SAADC->EVENTS_STARTED);
+    if (ok) {
+        NRF_SAADC->EVENTS_END = 0;
+        NRF_SAADC->TASKS_SAMPLE = 1;
+        ok = wait_event(&NRF_SAADC->EVENTS_END);
+    }
     NRF_SAADC->EVENTS_STOPPED = 0;
     NRF_SAADC->TASKS_STOP = 1;
-    while (NRF_SAADC->EVENTS_STOPPED == 0) { }
+    (void)wait_event(&NRF_SAADC->EVENTS_STOPPED);
     NRF_SAADC->ENABLE = SAADC_ENABLE_ENABLE_Disabled;
+    if (!ok) { return 0; }
 
     int32_t code = s_adc_result;
     if (code < 0) { code = 0; } /* single-ended; clamp noise below 0 */
 
-    /* SE 12-bit, ref 0.6 V, gain 1/6 -> full scale 3.6 V at code 4096.
-     * input = VDDH/5, so VDDH(mV) = code * 3.6 * 5 * 1000 / 4096 = code*18000/4096. */
+    /* SE 12-bit, ref 0.6 V, gain 1/6 -> 3.6 V full scale; input = VDDH / 5. */
     return (uint16_t)(((uint32_t)code * 18000u) / 4096u);
 }

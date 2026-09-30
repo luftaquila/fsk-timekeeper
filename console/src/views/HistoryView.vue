@@ -3,7 +3,8 @@ import { ref, computed } from "vue";
 import { useHistoryStore } from "../stores/history";
 import { useNotification } from "../composables/useNotification";
 import { MODES, MODE_LABEL } from "../lib/constants";
-import { msToClockStr, fmtDateTime, fmtPpm } from "../lib/format";
+import { formatDuration, fmtDateTime, fmtPpm } from "../lib/format";
+import { resultNs, lapsNs, calibrationMethod, calibrationLabel, isOldFormatRow } from "../lib/results";
 
 const history = useHistoryStore();
 const notyf = useNotification();
@@ -13,8 +14,21 @@ const confirmClear = ref(false);
 
 const rows = computed(() => history.filtered(filter.value || null));
 
+function result(r) {
+  const ns = resultNs(r, history.edgesFor(r));
+  return ns != null ? formatDuration(ns) : "—";
+}
 function laps(r) {
-  return (r.laps || []).map(msToClockStr).join(" / ");
+  return lapsNs(r, history.edgesFor(r))
+    .map((ns) => formatDuration(ns))
+    .join(" / ");
+}
+function calibration(r) {
+  if (isOldFormatRow(r)) return r.ppb != null ? `HFXO ${fmtPpm(r.ppb)} (GPS)` : "nominal 16 MHz";
+  return calibrationLabel(calibrationMethod(r, history.edgesFor(r)));
+}
+function badgeClass(r) {
+  return r.verification === "verified" ? "badge-success" : r.verification === "invalid" ? "badge-danger" : r.verification === "dnf" ? "badge-default" : "badge-warning";
 }
 async function remove(r) {
   await history.removeRow(r.id);
@@ -66,13 +80,14 @@ async function clearAll() {
           <tbody>
             <tr v-for="r in rows" :key="r.id">
               <td class="mono nowrap">{{ fmtDateTime(r.createdAt) }}</td>
-              <td class="mono nowrap" :title="r.ppb != null ? `HFXO ${fmtPpm(r.ppb)} (GPS)` : 'nominal 16 MHz'">{{ r.startedUtc ? r.startedUtc.slice(11, 19) + "Z" : "—" }}</td>
+              <td class="mono nowrap" :title="calibration(r)">{{ r.startedUtc ? r.startedUtc.slice(11, 19) + "Z" : "—" }}</td>
               <td>{{ MODE_LABEL[r.mode] || r.mode }}</td>
               <td>{{ r.note || "—" }}</td>
-              <td class="mono nowrap strong">{{ r.result != null ? msToClockStr(r.result) : "—" }}</td>
+              <td class="mono nowrap strong" :title="calibration(r)">{{ result(r) }}</td>
               <td class="mono laps">{{ laps(r) || "—" }}</td>
               <td>
-                <span class="badge" :class="r.verification === 'verified' ? 'badge-success' : r.verification === 'invalid' ? 'badge-danger' : 'badge-warning'" :title="r.fault?.reasons?.map((x) => x.reason).join('\n') || ''">{{ r.verification }}</span>
+                <span class="badge" :class="badgeClass(r)" :title="r.fault?.reasons?.map((x) => x.reason).join('\n') || ''">{{ history.status(r) }}</span>
+                <span v-if="r.durable === false" class="badge badge-danger" title="Not stored durably">memory</span>
               </td>
               <td class="actions"><button class="btn btn-ghost btn-sm" @click="remove(r)">Delete</button></td>
             </tr>

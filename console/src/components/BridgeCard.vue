@@ -34,10 +34,12 @@ const lastLine = computed(() => (device.connected ? fmtAgeMs(now.value - device.
       <dl v-if="device.connected" class="info">
         <dt>Firmware</dt>
         <dd class="mono">{{ device.identity ? `${device.identity.product} ${device.identity.fw}` : "…" }}</dd>
+        <dt>Protocol</dt>
+        <dd :class="device.contract.ok ? 'ok' : 'bad'">{{ device.contract.ok ? `USB v${device.identity.usbProto} · radio v${device.identity.radioProto}` : device.contract.reason }}</dd>
         <dt>Device ID</dt>
         <dd class="mono">{{ device.identity?.devid || "…" }}</dd>
         <dt>Radio</dt>
-        <dd class="mono">{{ device.identity ? `${device.identity.freqMhz} MHz · SF${device.identity.sf} · BW${device.identity.bw}` : "…" }}</dd>
+        <dd class="mono">{{ device.identity?.freqMhz != null ? `${device.identity.freqMhz} MHz · SF${device.identity.sf} · BW${device.identity.bw}` : "…" }}</dd>
         <dt>Uptime</dt>
         <dd class="mono">{{ uptime }}</dd>
         <dt>Sensors seen</dt>
@@ -98,5 +100,11 @@ const lastLine = computed(() => (device.connected ? fmtAgeMs(now.value - device.
 }
 .info dd {
   margin: 0;
+}
+.info dd.ok {
+  color: var(--accent-success);
+}
+.info dd.bad {
+  color: var(--accent-danger);
 }
 </style>

@@ -1,40 +1,52 @@
-/* Durable log of raw `E` rows (IndexedDB) with an in-memory mirror the engine reads.
+/* Durable log of evidence rows (IndexedDB) with the in-memory mirror the engine reads.
  *
- * The master keeps each event in a 16-slot RAM queue and re-sends the head every
- * 100 ms until the host commits it with `C`. `ingest()` resolves once the row is
- * committed to IndexedDB (or, if IndexedDB is unavailable, once it is in memory —
- * a host that never acks stalls the queue, which is worse than losing durability).
+ * Rows of one E line are committed in one transaction before the line is acked; the master
+ * re-sends the line until then. Without IndexedDB, or after a write failure, rows stay in
+ * memory: a host that stops acking would stall the master queue, which is worse than losing
+ * durability. Write failures are reported to onWriteFailure listeners.
  */
-import { openDb, add, getAll, getByIndex, count, removeRange, request } from "./idb";
-import { eventKey } from "./protocol";
-import { CAPTURE_CHECKPOINT } from "./capture-integrity";
+import { openDb, transaction, request, done, addAll, getAll, count, removeRange } from "./idb";
+import { rowKey, lineKey } from "./protocol";
 
 export const DB_NAME = "fsk-timekeeper";
-export const DB_VERSION = 1;
+export const DB_VERSION = 2;
 export const STORE_EVENTS = "events";
 export const STORE_RESULTS = "results";
+export const STORE_PPS = "pps";
+export const STORE_LOG = "log";
+export const STORE_QUARANTINE = "quarantine";
 export const RETENTION = 100000;
 const MEMORY_WINDOW = 20000;
 const PRUNE_EVERY = 500;
+const ROW_INDEX = ["master_boot_id", "node_id", "sensor_boot_id", "kind", "capture_seq", "master_tick"];
 
 let db = null;
 let durable = false;
 let initError = null;
 let rows = []; // sorted by seq
-const keyToSeq = new Map();
+const keyToSeq = new Map(); // rowKey -> seq
+const lines = new Set(); // lineKey of every stored or quarantined E line
 let lastSeq = 0;
 let chain = Promise.resolve();
 let insertsSincePrune = 0;
+const failureListeners = new Set();
 
-function upgrade(database, oldVersion) {
+function upgrade(database, oldVersion, tx) {
   if (oldVersion < 1) {
     const events = database.createObjectStore(STORE_EVENTS, { keyPath: "seq", autoIncrement: true });
-    events.createIndex("key", ["node_id", "ev_seq", "master_tick", "master_boot_id", "sensor_boot_id"], { unique: true });
     events.createIndex("node_boot", ["node_id", "master_boot_id"]);
     const results = database.createObjectStore(STORE_RESULTS, { keyPath: "id", autoIncrement: true });
     results.createIndex("runId", "runId", { unique: true });
     results.createIndex("mode", "mode");
     results.createIndex("createdAt", "createdAt");
+  }
+  if (oldVersion < 2) {
+    const events = tx.objectStore(STORE_EVENTS);
+    if (events.indexNames.contains("key")) events.deleteIndex("key");
+    events.createIndex("row", ROW_INDEX, { unique: true });
+    database.createObjectStore(STORE_PPS, { keyPath: ["master_boot_id", "tick"] }).createIndex("received_at", "received_at");
+    database.createObjectStore(STORE_LOG, { keyPath: "id", autoIncrement: true }).createIndex("at", "at");
+    database.createObjectStore(STORE_QUARANTINE, { keyPath: "id", autoIncrement: true }).createIndex("line", "line", { unique: true });
   }
 }
 
@@ -50,6 +62,36 @@ export function getInitError() {
   return initError;
 }
 
+// cb(error) after an IndexedDB write failed (the log continues in memory).
+export function onWriteFailure(cb) {
+  failureListeners.add(cb);
+  return () => failureListeners.delete(cb);
+}
+
+// Any module whose IndexedDB write failed reports it here; storage stays memory-only after.
+export function reportWriteFailure(error) {
+  durable = false;
+  initError = error;
+  try {
+    db?.close();
+  } catch {
+    /* ignore */
+  }
+  db = null;
+  for (const cb of failureListeners) {
+    try {
+      cb(error);
+    } catch {
+      /* listener errors must not break ingest */
+    }
+  }
+}
+
+function remember(row) {
+  if (row.kind && row.kind !== "quarantine") keyToSeq.set(rowKey(row), row.seq);
+  if (row.hseq != null) lines.add(lineKey(row.master_boot_id, row.hseq));
+}
+
 // minSeq: rows with seq > minSeq must be in memory (open-run cursors); the last
 // MEMORY_WINDOW rows are always loaded.
 export async function init({ minSeq = Infinity } = {}) {
@@ -62,7 +104,8 @@ export async function init({ minSeq = Infinity } = {}) {
       loaded = await getAll(db, STORE_EVENTS, IDBKeyRange.lowerBound(minSeq, true));
     }
     rows = loaded.sort((a, b) => a.seq - b.seq);
-    for (const row of rows) keyToSeq.set(eventKey(row), row.seq);
+    for (const row of rows) remember(row);
+    for (const q of await getAll(db, STORE_QUARANTINE)) lines.add(q.line);
     lastSeq = rows.length ? rows[rows.length - 1].seq : await lastKey(STORE_EVENTS);
   } catch (error) {
     db = null;
@@ -75,7 +118,7 @@ export async function init({ minSeq = Infinity } = {}) {
 async function getAllDesc(store, limit) {
   const out = [];
   await new Promise((resolve, reject) => {
-    const req = db.transaction(store, "readonly").objectStore(store).openCursor(null, "prev");
+    const req = transaction(db, store).objectStore(store).openCursor(null, "prev");
     req.onsuccess = () => {
       const cursor = req.result;
       if (!cursor || out.length >= limit) return resolve();
@@ -88,7 +131,7 @@ async function getAllDesc(store, limit) {
 }
 
 async function lastKey(store) {
-  const req = db.transaction(store, "readonly").objectStore(store).openKeyCursor(null, "prev");
+  const req = transaction(db, store).objectStore(store).openKeyCursor(null, "prev");
   const cursor = await request(req);
   return cursor ? cursor.key : 0;
 }
@@ -109,53 +152,98 @@ export function getLastSeq() {
   return lastSeq;
 }
 
-// Latest checkpoint of a node under a master session at or before maxTick.
+// Latest checkpoint row of a node under a master session at or before maxTick.
 export function latestCheckpoint(node, masterBootId, maxTick) {
   const limit = BigInt(maxTick);
   for (let i = rows.length - 1; i >= 0; i--) {
     const row = rows[i];
-    if (row.node_id !== node || row.master_boot_id !== masterBootId || !(row.flags & CAPTURE_CHECKPOINT)) continue;
+    if (row.kind !== "checkpoint" || row.node_id !== node || row.master_boot_id !== masterBootId) continue;
     if (BigInt(row.master_tick) <= limit) return row;
   }
   return null;
 }
 
-// Serialized: seq assignment, IDB commit and memory append happen in arrival order.
-export function ingest(row, receivedAt = Date.now()) {
-  const p = chain.then(async () => {
-    const key = eventKey(row);
-    const known = keyToSeq.get(key);
-    if (known != null) return { seq: known, duplicate: true, row: rows.find((r) => r.seq === known) || row };
-    const stored = { ...row, received_at: receivedAt };
-    if (db) {
-      try {
-        stored.seq = await add(db, STORE_EVENTS, stored);
-      } catch (error) {
-        if (error?.name === "ConstraintError") {
-          // Committed in an earlier session and not loaded into memory.
-          const existing = await getByIndex(db, STORE_EVENTS, "key", [row.node_id, row.ev_seq, row.master_tick, row.master_boot_id, row.sensor_boot_id]);
-          if (existing) {
-            keyToSeq.set(key, existing.seq);
-            return { seq: existing.seq, duplicate: true, row: existing };
-          }
-        }
-        durable = false;
-        initError = error;
-        db = null;
-      }
-    }
-    if (stored.seq == null) stored.seq = lastSeq + 1;
-    lastSeq = Math.max(lastSeq, stored.seq);
-    rows.push(stored);
-    keyToSeq.set(key, stored.seq);
-    if (++insertsSincePrune >= PRUNE_EVERY) {
-      insertsSincePrune = 0;
-      pruneMemory();
-    }
-    return { seq: stored.seq, duplicate: false, row: stored };
-  });
+function append(row) {
+  if (row.seq == null) row.seq = lastSeq + 1;
+  lastSeq = Math.max(lastSeq, row.seq);
+  rows.push(row);
+  remember(row);
+  if (++insertsSincePrune >= PRUNE_EVERY) {
+    insertsSincePrune = 0;
+    pruneMemory();
+  }
+}
+
+function serialize(task) {
+  const p = chain.then(task);
   chain = p.catch(() => {});
   return p;
+}
+
+// Store the rows of one valid E line (one transaction). -> { duplicate, rows }
+export function ingestLine({ rows: incoming, masterBootId, hseq }, receivedAt = Date.now()) {
+  return serialize(async () => {
+    const key = lineKey(masterBootId, hseq);
+    if (lines.has(key) || incoming.every((row) => keyToSeq.has(rowKey(row)))) return { duplicate: true, rows: [] };
+    const stored = incoming.map((row) => ({ ...row, received_at: receivedAt }));
+    if (db) {
+      try {
+        const keys = await addAll(db, STORE_EVENTS, stored);
+        stored.forEach((row, i) => (row.seq = keys[i]));
+      } catch (error) {
+        if (error?.name === "ConstraintError") {
+          // Committed before this page load and no longer in memory.
+          lines.add(key);
+          return { duplicate: true, rows: [] };
+        }
+        stored.forEach((row) => delete row.seq);
+        reportWriteFailure(error);
+      }
+    }
+    for (const row of stored) append(row);
+    return { duplicate: false, rows: stored };
+  });
+}
+
+// Quarantine an E line whose crc is right but whose content breaks the contract: the raw text
+// goes to the quarantine store and a marker row into the event log (one transaction).
+// -> { duplicate, marker }
+export function ingestQuarantine({ raw, reason, node, hseq, masterBootId }, receivedAt = Date.now()) {
+  return serialize(async () => {
+    const key = lineKey(masterBootId, hseq);
+    if (lines.has(key)) return { duplicate: true, marker: null };
+    const marker = { kind: "quarantine", node_id: node ?? "*", master_boot_id: masterBootId ?? null, hseq, raw, reason, received_at: receivedAt };
+    const record = { line: key, masterBootId: masterBootId ?? null, hseq, raw, reason, node_id: node ?? null, at: receivedAt };
+    if (db) {
+      try {
+        const tx = transaction(db, [STORE_EVENTS, STORE_QUARANTINE], "readwrite");
+        const finished = done(tx);
+        const seqReq = request(tx.objectStore(STORE_EVENTS).add(marker));
+        const qReq = request(tx.objectStore(STORE_QUARANTINE).add(record));
+        const [seq] = await Promise.all([seqReq, qReq]).catch(async (error) => {
+          await finished.catch(() => {});
+          throw error;
+        });
+        await finished;
+        marker.seq = seq;
+      } catch (error) {
+        if (error?.name === "ConstraintError") {
+          lines.add(key);
+          return { duplicate: true, marker: null };
+        }
+        delete marker.seq;
+        reportWriteFailure(error);
+      }
+    }
+    lines.add(key);
+    append(marker);
+    return { duplicate: false, marker, record };
+  });
+}
+
+export async function listQuarantine() {
+  if (!db) return rows.filter((row) => row.kind === "quarantine").map((row) => ({ masterBootId: row.master_boot_id, hseq: row.hseq, raw: row.raw, reason: row.reason, node_id: row.node_id === "*" ? null : row.node_id, at: row.received_at }));
+  return getAll(db, STORE_QUARANTINE);
 }
 
 let protectSeq = Infinity;
@@ -169,7 +257,11 @@ function pruneMemory() {
   if (rows.length <= MEMORY_WINDOW || rows[0].seq >= keepFrom) return;
   const drop = since(keepFrom).length;
   const removed = rows.splice(0, rows.length - drop);
-  for (const row of removed) keyToSeq.delete(eventKey(row));
+  for (const row of removed) {
+    if (row.kind && row.kind !== "quarantine") keyToSeq.delete(rowKey(row));
+    // The master only re-sends its queue head, so lines this old never come again.
+    if (row.hseq != null && row.kind !== "quarantine") lines.delete(lineKey(row.master_boot_id, row.hseq));
+  }
 }
 
 // Durable retention: keep the newest RETENTION rows, never below protectSeq.
@@ -204,8 +296,10 @@ export function _reset() {
   initError = null;
   rows = [];
   keyToSeq.clear();
+  lines.clear();
   lastSeq = 0;
   chain = Promise.resolve();
   insertsSincePrune = 0;
   protectSeq = Infinity;
+  failureListeners.clear();
 }

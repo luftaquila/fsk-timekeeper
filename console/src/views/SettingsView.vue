@@ -7,6 +7,7 @@ import DiagnosticsCard from "../components/DiagnosticsCard.vue";
 import ProvisionCard from "../components/ProvisionCard.vue";
 import DfuCard from "../components/DfuCard.vue";
 import SerialConsole from "../components/SerialConsole.vue";
+import DeviceLogCard from "../components/DeviceLogCard.vue";
 import SimulatorCard from "../components/SimulatorCard.vue";
 
 const settings = useSettingsStore();
@@ -42,6 +43,7 @@ function onDebounce(e) {
     <DiagnosticsCard />
     <ProvisionCard />
     <DfuCard />
+    <DeviceLogCard />
     <SerialConsole />
     <SimulatorCard v-if="isDev" />
   </div>

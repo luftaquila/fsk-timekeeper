@@ -1,44 +1,36 @@
 import { describe, it } from "vitest";
 import assert from "node:assert/strict";
-import { formatLapMs, masterTickDeltaMs, masterTickDurationsMs, masterTickDistanceBelowMs, tickDurationMs } from "../src/lib/event-timing.js";
+import { masterTick, nominalNs } from "../src/lib/event-timing.js";
+import { formatDuration } from "../src/lib/format.js";
 
-describe("master-tick arithmetic", () => {
-  it("formats ms as MM:SS.mmm", () => {
-    assert.equal(formatLapMs(62531), "01:02.531");
-    assert.equal(formatLapMs(0), "00:00.000");
-    assert.equal(formatLapMs(-5), "00:00.000");
+describe("master ticks", () => {
+  it("parses 64-bit ticks exactly and rejects anything else", () => {
+    assert.equal(masterTick("18446744073709551615"), (1n << 64n) - 1n);
+    assert.equal(masterTick(16000), 16000n);
+    assert.throws(() => masterTick("18446744073709551616"), /invalid master tick/);
+    assert.throws(() => masterTick("-1"), /invalid master tick/);
+    assert.throws(() => masterTick(1.5), /invalid master tick/);
   });
-
-  it("subtracts raw 64-bit ticks before rounding once", () => {
-    const start = "8160"; // 0.51 ms
-    const finish = "16023840"; // 1001.49 ms, delta = 1000.98 ms
-    assert.equal(masterTickDeltaMs(finish, start), 1001);
-    assert.equal(masterTickDeltaMs("9007199254740993000", "9007199254724977000"), 1001);
-    assert.throws(() => masterTickDeltaMs("18446744073709551616", "0"), /invalid master tick/);
+  it("converts a span at the nominal rate, half up", () => {
+    assert.equal(nominalNs(16000n), 1_000_000n);
+    assert.equal(nominalNs(1n), 63n); // 62.5 ns
+    assert.equal(nominalNs(-1n), -63n);
   });
+});
 
-  it("sums lap ticks and rounds the total once", () => {
-    assert.equal(masterTickDurationsMs([8000n, 8000n]), 1); // 0.5 ms + 0.5 ms -> 1 ms, not 1 + 1
-    assert.equal(masterTickDurationsMs([]), 0);
-    assert.equal(masterTickDurationsMs(["16000", 16000n, 16000]), 3);
+describe("formatDuration", () => {
+  it("rounds ns to ms half up, once", () => {
+    assert.equal(formatDuration(62_531_000_000n), "01:02.531");
+    assert.equal(formatDuration(1_000_499_999n), "00:01.000");
+    assert.equal(formatDuration(1_000_500_000n), "00:01.001"); // x.5 ms rounds up
+    assert.equal(formatDuration(0n), "00:00.000");
+    assert.equal(formatDuration(-5n), "00:00.000");
+    assert.equal(formatDuration(3_600_000_000_000n), "60:00.000");
+    assert.equal(formatDuration(null), "—");
   });
-
-  it("applies the GPS ppb correction with exact rational rounding", () => {
-    // 60 s at nominal = 960 000 000 ticks; +100 ppm fast clock -> 59994 ms, -100 ppm -> 60006 ms
-    assert.equal(masterTickDeltaMs("960000000", "0", 100000), 59994);
-    assert.equal(masterTickDeltaMs("960000000", "0", -100000), 60006);
-    assert.equal(masterTickDeltaMs("960000000", "0", 0), 60000);
-    assert.equal(masterTickDurationsMs([480000000n, 480000000n], 100000), 59994);
-    assert.equal(tickDurationMs(-16000n, 0), -1);
-    assert.equal(tickDurationMs("8000", 0), 1); // half up, unchanged at nominal
-    assert.equal(tickDurationMs(7999n, 0), 0);
-    assert.throws(() => masterTickDeltaMs("16000", "0", 1.5), /invalid ppb/);
-    assert.throws(() => masterTickDeltaMs("16000", "0", 2_000_000), /invalid ppb/);
-  });
-
-  it("compares debounce windows in raw ticks without endpoint rounding", () => {
-    assert.equal(masterTickDistanceBelowMs("31999", "16000", 1), true);
-    assert.equal(masterTickDistanceBelowMs("32000", "16000", 1), false);
-    assert.equal(masterTickDistanceBelowMs("32000", "16000", -1), false);
+  it("divides before rounding (averages)", () => {
+    assert.equal(formatDuration(3_000_000_001n, 2n), "00:01.500");
+    assert.equal(formatDuration(2_000_999_999n + 1_000_000_000n, 3n), "00:01.000"); // 1000.333 ms
+    assert.equal(formatDuration(1_001n * 1_000_000n + 1n, 2n), "00:00.501"); // 500.5000005 ms
   });
 });

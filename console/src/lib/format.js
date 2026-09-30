@@ -1,19 +1,16 @@
-import { MASTER_TICKS_PER_MS as TICKS_PER_MS } from "./event-timing";
+// Display formatting. Durations are stored as exact ns; this is the only place they are rounded.
 
-// ms -> "MM:SS.mmm" (minutes may exceed 59). Fractional input is floored.
-export function msToClockStr(ms) {
-  if (!Number.isFinite(ms) || ms < 0) ms = 0;
-  ms = Math.floor(ms);
-  const minutes = String(Math.floor(ms / 60000)).padStart(2, "0");
-  const seconds = String(Math.floor((ms % 60000) / 1000)).padStart(2, "0");
-  const millis = String(ms % 1000).padStart(3, "0");
-  return `${minutes}:${seconds}.${millis}`;
-}
+const pad = (v, n) => String(v).padStart(n, "0");
 
-// Fractional ms between two raw ticks (display only; official results round once via event-timing).
-// ppb = master HFXO error from GPS PPS, 0 = nominal.
-export function tickDeltaToMs(end, start, ppb = 0) {
-  return (Number(BigInt(end) - BigInt(start)) / Number(TICKS_PER_MS)) * (1e9 / (1e9 + ppb));
+// ns / divisor -> "MM:SS.mmm" (minutes may exceed 59), milliseconds rounded half up once.
+// null -> "—". Negative spans show as zero.
+export function formatDuration(ns, divisor = 1n) {
+  if (ns == null) return "—";
+  let n = BigInt(ns);
+  if (n < 0n) n = 0n;
+  const d = BigInt(divisor) * 1_000_000n;
+  const ms = (2n * n + d) / (2n * d);
+  return `${pad(ms / 60000n, 2)}:${pad((ms % 60000n) / 1000n, 2)}.${pad(ms % 1000n, 3)}`;
 }
 
 // ppb -> "±x.xx ppm"

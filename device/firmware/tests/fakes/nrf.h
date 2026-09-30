@@ -12,8 +12,9 @@ typedef struct {
     struct { uint32_t RXD, TXD, RTS, CTS; } PSEL;
     struct { uint32_t PTR, MAXCNT; } RXD, TXD;
 } NRF_UARTE_Type;
-static NRF_GPIO_Type test_gpio[2];
-static NRF_UARTE_Type test_uart;
+/* Each test defines only the register banks it uses. */
+extern NRF_GPIO_Type test_gpio[2];
+extern NRF_UARTE_Type test_uart;
 #define NRF_P0 (&test_gpio[0])
 #define NRF_P1 (&test_gpio[1])
 #define NRF_UARTE0 (&test_uart)

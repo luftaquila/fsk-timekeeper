@@ -1,10 +1,10 @@
 /* USB descriptors for a single CDC-ACM device. */
 #include "tusb.h"
+#include "node_id.h"
 
-/* Wireless LoRa controller. Keep the FSK VID, but a NEW PID + product string so
- * the legacy FSK wired controller (PID 0x0514) and the wireless host app never
- * cross-match. Device identity is confirmed by the "I FSK-WL ..." reply to
- * the "?ID" handshake, independent of the descriptor. */
+/* FSK VID with its own PID and product string, so the wired FSK controller
+ * (PID 0x0514) and this app never cross-match. The console still confirms the
+ * board with the "I FSK-WL ..." reply to "?ID". */
 #define USB_VID 0x1999
 #define USB_PID 0x0515
 
@@ -55,12 +55,24 @@ const uint8_t *tud_descriptor_configuration_cb(uint8_t index)
 static const char *string_desc_arr[] = {
     (const char[]){0x09, 0x04}, /* 0: English (0x0409) */
     "FSK",                       /* 1: Manufacturer */
-    "FSK-WL",                    /* 2: Product (wireless LoRa controller) */
-    "0001",                      /* 3: Serial */
+    "FSK-WL",                    /* 2: Product */
+    NULL,                        /* 3: Serial = chip id, 16 uppercase hex like the I line */
     "FSK-WL",                    /* 4: CDC interface */
 };
 
 static uint16_t desc_str[32];
+
+/* node_init() runs before usb_init(), so the chip id is already known. */
+static uint8_t serial_utf16(uint16_t *out)
+{
+    static const char hex[] = "0123456789ABCDEF";
+    uint32_t words[2] = { node_devid_hi(), node_devid_lo() };
+    uint8_t n = 0;
+    for (int w = 0; w < 2; w++) {
+        for (int i = 7; i >= 0; i--) { out[n++] = (uint16_t)hex[(words[w] >> (i * 4)) & 0xFu]; }
+    }
+    return n;
+}
 
 const uint16_t *tud_descriptor_string_cb(uint8_t index, uint16_t langid)
 {
@@ -70,6 +82,8 @@ const uint16_t *tud_descriptor_string_cb(uint8_t index, uint16_t langid)
     if (index == 0) {
         desc_str[1] = 0x0409;
         chr_count = 1;
+    } else if (index == 3) {
+        chr_count = serial_utf16(&desc_str[1]);
     } else {
         if (index >= sizeof(string_desc_arr) / sizeof(string_desc_arr[0])) {
             return NULL;

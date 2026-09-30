@@ -3,7 +3,7 @@ import { computed } from "vue";
 import { useTimingStore } from "../stores/timing";
 import { useSettingsStore } from "../stores/settings";
 import { MODES, MODE_LABEL } from "../lib/constants";
-import { fmtPpm } from "../lib/format";
+import { calibrationLabel } from "../lib/results";
 
 defineProps({ modelValue: { type: String, default: "" } });
 const emit = defineEmits(["update:modelValue"]);
@@ -12,6 +12,10 @@ const timing = useTimingStore();
 const settings = useSettingsStore();
 
 const mode = computed(() => timing.run?.mode ?? settings.state.mode);
+const badgeClass = computed(() => {
+  const v = timing.run?.verification;
+  return v === "verified" ? "badge-success" : v === "invalid" ? "badge-danger" : v === "dnf" ? "badge-default" : "badge-warning";
+});
 
 function onMode(e) {
   settings.setMode(e.target.value);
@@ -52,8 +56,8 @@ function onTarget(e) {
       </div>
 
       <div v-if="timing.run" class="run-meta">
-        <span>{{ timing.run.note || "(no note)" }}<span v-if="timing.run.calib" class="ppm">{{ fmtPpm(timing.run.calib.ppb) }}</span></span>
-        <span class="badge" :class="timing.run.verification === 'verified' ? 'badge-success' : timing.run.verification === 'invalid' ? 'badge-danger' : 'badge-warning'">{{ timing.run.verification }}</span>
+        <span>{{ timing.run.note || "(no note)" }}<span v-if="timing.calibrationMethod" class="ppm">{{ calibrationLabel(timing.calibrationMethod) }}</span></span>
+        <span class="badge" :class="badgeClass">{{ timing.run.verification === "dnf" ? timing.run.dnfReason || "DNF" : timing.run.verification }}</span>
       </div>
     </div>
   </div>

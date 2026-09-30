@@ -1,6 +1,5 @@
-/* TinyUSB configuration — nRF52840 device, single CDC-ACM (serial), no OS, no
- * SoftDevice (SOFTDEVICE_PRESENT intentionally undefined so the nRF dcd drives
- * HFCLK directly). */
+/* TinyUSB configuration — nRF52840 device, single CDC-ACM, no OS, no SoftDevice
+ * (SOFTDEVICE_PRESENT undefined, so the nRF dcd drives HFCLK directly). */
 #ifndef TUSB_CONFIG_H
 #define TUSB_CONFIG_H
 
@@ -16,7 +15,7 @@
 
 #define CFG_TUD_CDC            1
 #define CFG_TUD_CDC_RX_BUFSIZE 256
-#define CFG_TUD_CDC_TX_BUFSIZE 256
+#define CFG_TUD_CDC_TX_BUFSIZE 4096 /* a ?STATUS burst (H, D x 6, P, A) fits at once */
 #define CFG_TUD_CDC_EP_BUFSIZE 64
 
 #define CFG_TUD_MSC            0

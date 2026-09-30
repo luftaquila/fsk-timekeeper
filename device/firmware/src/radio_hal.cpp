@@ -2,23 +2,22 @@
 
 #include "nrf.h"
 #include "gpio.h"
-#include "board.h" /* board_micros / board_millis — single timebase owner */
+#include "board.h"
+#include "errlog.h"
 
-static inline uint32_t now_us(void)
-{
-    return board_micros();
-}
+/* A 1 MHz transfer of the largest SX1262 command (~260 B) takes ~2 ms. */
+#define SPI_TRANSFER_MAX_US 10000u
 
 NrfHal::NrfHal(uint32_t sck, uint32_t miso, uint32_t mosi)
     : RadioLibHal(NRFHAL_INPUT, NRFHAL_OUTPUT, NRFHAL_LOW, NRFHAL_HIGH,
                   NRFHAL_RISING, NRFHAL_FALLING),
-      _sck(sck), _miso(miso), _mosi(mosi)
+      _sck(sck), _miso(miso), _mosi(mosi), _spiTimeout(false)
 {
 }
 
 void NrfHal::init(void)
 {
-    /* Timebase (TIMER2) is started by board_init(); just bring up SPI here. */
+    /* TIMER2 is started by board_init(); only SPI here. */
     spiBegin();
 }
 
@@ -55,33 +54,34 @@ uint32_t NrfHal::digitalRead(uint32_t pin)
     return gpio_read(pin);
 }
 
-/* Blocking TX/RX poll DIO1; no ISR needed yet (Stage 3 brings GPIOTE capture). */
 void NrfHal::attachInterrupt(uint32_t, void (*)(void), uint32_t) {}
 void NrfHal::detachInterrupt(uint32_t) {}
 
 void NrfHal::delay(RadioLibTime_t ms)
 {
-    uint32_t start = now_us();
+    uint32_t start = board_micros();
     uint32_t target = ms * 1000UL;
-    while ((uint32_t)(now_us() - start) < target) {
+    while ((uint32_t)(board_micros() - start) < target) {
     }
 }
 
 void NrfHal::delayMicroseconds(RadioLibTime_t us)
 {
-    uint32_t start = now_us();
-    while ((uint32_t)(now_us() - start) < (uint32_t)us) {
+    uint32_t start = board_micros();
+    while ((uint32_t)(board_micros() - start) < (uint32_t)us) {
     }
 }
 
+/* RadioLib compares these by unsigned subtraction: both wrap modulo 2^32
+ * (millis every ~49 days, micros every ~71.6 min). */
 RadioLibTime_t NrfHal::millis(void)
 {
-    return now_us() / 1000UL;
+    return board_millis();
 }
 
 RadioLibTime_t NrfHal::micros(void)
 {
-    return now_us();
+    return board_micros();
 }
 
 long NrfHal::pulseIn(uint32_t, uint32_t, RadioLibTime_t)
@@ -89,27 +89,22 @@ long NrfHal::pulseIn(uint32_t, uint32_t, RadioLibTime_t)
     return 0; /* unused by SX126x */
 }
 
-static inline uint32_t psel(uint32_t pin)
-{
-    /* pin == port*32 + n already encodes PORT(bit5)|PIN(bits0-4); CONNECT bit clear. */
-    return pin;
-}
-
 void NrfHal::spiBegin(void)
 {
-    /* SCK/MOSI as outputs (SCK idle low for SPI mode 0), MISO as input. */
+    /* Also runs again on every radio reset: PSEL may only change while SPIM is
+     * disabled. SCK/MOSI outputs (SCK idle low, SPI mode 0), MISO input.
+     * PSEL = port*32+pin. */
+    NRF_SPIM0->ENABLE = (SPIM_ENABLE_ENABLE_Disabled << SPIM_ENABLE_ENABLE_Pos);
     gpio_clear(_sck);
     gpio_cfg_output(_sck);
     gpio_clear(_mosi);
     gpio_cfg_output(_mosi);
     gpio_cfg_input(_miso);
 
-    NRF_SPIM0->PSEL.SCK = psel(_sck);
-    NRF_SPIM0->PSEL.MOSI = psel(_mosi);
-    NRF_SPIM0->PSEL.MISO = psel(_miso);
-    /* 1 Mbps — conservative for the hand-built board's unterminated SPI traces.
-     * 8 MHz gave corrupted readback (WRONG_MODEM / SPI_CMD_FAILED); SX1262
-     * config traffic is tiny so the low rate costs nothing. */
+    NRF_SPIM0->PSEL.SCK = _sck;
+    NRF_SPIM0->PSEL.MOSI = _mosi;
+    NRF_SPIM0->PSEL.MISO = _miso;
+    /* 1 Mbps: 8 MHz corrupted readback on the hand-built board's traces. */
     NRF_SPIM0->FREQUENCY = SPIM_FREQUENCY_FREQUENCY_M1;
     NRF_SPIM0->CONFIG = 0; /* mode 0, MSB first */
     NRF_SPIM0->ENABLE = (SPIM_ENABLE_ENABLE_Enabled << SPIM_ENABLE_ENABLE_Pos);
@@ -128,7 +123,16 @@ void NrfHal::spiTransfer(uint8_t* out, size_t len, uint8_t* in)
     NRF_SPIM0->RXD.MAXCNT = len;
     NRF_SPIM0->EVENTS_END = 0;
     NRF_SPIM0->TASKS_START = 1;
+    uint32_t t0 = board_micros();
     while (NRF_SPIM0->EVENTS_END == 0) {
+        if ((uint32_t)(board_micros() - t0) >= SPI_TRANSFER_MAX_US) {
+            /* RadioLib sees garbage status and fails the command; the radio
+             * layer counts this as a no-response. */
+            NRF_SPIM0->TASKS_STOP = 1;
+            el_note(EL_HW_TIMEOUT);
+            _spiTimeout = true;
+            return;
+        }
     }
     NRF_SPIM0->EVENTS_END = 0;
 }
@@ -138,4 +142,11 @@ void NrfHal::spiEndTransaction(void) {}
 void NrfHal::spiEnd(void)
 {
     NRF_SPIM0->ENABLE = (SPIM_ENABLE_ENABLE_Disabled << SPIM_ENABLE_ENABLE_Pos);
+}
+
+bool NrfHal::takeSpiTimeout(void)
+{
+    bool t = _spiTimeout;
+    _spiTimeout = false;
+    return t;
 }

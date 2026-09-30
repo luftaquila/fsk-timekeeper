@@ -5,55 +5,67 @@
 #include "gpio.h"
 #include "nrf.h"
 
-/* TIMER1 = capture timebase (TIMER0 = unused SD, TIMER2 = board_micros).
- * SoftDevice never enabled so all GPIOTE/PPI channels are free. */
+/* TIMER1 = capture timebase (TIMER2 = board_micros). The SoftDevice is never
+ * enabled, so every GPIOTE/PPI channel is free. */
 #define CAP_GPIOTE_DIO1 0
 #define CAP_GPIOTE_SENS 1
+#define CAP_GPIOTE_PPS  2
 #define CAP_PPI_DIO1    0
 #define CAP_PPI_SENS    1
-#define CAP_PPI_USB_SOF 2
-#define CAP_CC_DIO1     0 /* TIMER1->CC[] holding DIO1 captures */
+#define CAP_PPI_PPS     2
+#define CAP_CC_DIO1     0 /* TIMER1->CC[] latched by DIO1 */
 #define CAP_CC_NOW      1 /* TIMER1->CC[] for on-demand reads */
-#define CAP_CC_SENS     2 /* TIMER1->CC[] holding SENSOR captures */
-#define CAP_CC_USB_SOF  3 /* TIMER1->CC[] holding the latest USB SOF */
-#define SENSOR_QUEUE_LEN 16u
+#define CAP_CC_SENS     2 /* TIMER1->CC[] latched by SENSOR */
+#define CAP_CC_PPS      3 /* TIMER1->CC[] latched by PPS */
+#define SENSOR_RING_LEN 64u /* power of two */
 
-#define DIO1_PIN (PIN_LORA_DIO1 % 32u) /* 6 */
-#define DIO1_PRT (PIN_LORA_DIO1 / 32u) /* 1 */
-#define SENS_PIN (PIN_SENSOR_IN % 32u) /* 13 */
-#define SENS_PRT (PIN_SENSOR_IN / 32u) /* 1 */
-#define PPS_PIN  (PIN_GPS_PPS % 32u)   /* 9 */
-#define PPS_PRT  (PIN_GPS_PPS / 32u)   /* 0 */
+#define DIO1_PIN (PIN_LORA_DIO1 % 32u)
+#define DIO1_PRT (PIN_LORA_DIO1 / 32u)
+#define SENS_PIN (PIN_SENSOR_IN % 32u)
+#define SENS_PRT (PIN_SENSOR_IN / 32u)
+#define PPS_PIN  (PIN_GPS_PPS % 32u)
+#define PPS_PRT  (PIN_GPS_PPS / 32u)
 
-static volatile uint32_t s_sensor_queue[SENSOR_QUEUE_LEN];
-static volatile uint32_t s_sensor_seq_queue[SENSOR_QUEUE_LEN];
-static volatile uint8_t s_sensor_clock_queue[SENSOR_QUEUE_LEN];
+static volatile uint32_t s_ring_tick[SENSOR_RING_LEN];
+static volatile uint32_t s_ring_seq[SENSOR_RING_LEN];
+static volatile uint8_t s_ring_xtal[SENSOR_RING_LEN];
 static volatile uint32_t s_sensor_seq;
 static volatile uint32_t s_loss_first_seq, s_loss_last_seq, s_loss_first_tick, s_loss_last_tick;
 static volatile int s_loss_pending;
-static volatile uint8_t s_sensor_head;
-static volatile uint8_t s_sensor_tail;
-static volatile uint16_t s_sensor_overflow;
+static volatile uint8_t s_head;
+static volatile uint8_t s_tail;
+static volatile uint16_t s_overflow;
 
+/* SENSOR edge: ring the latched tick; when the ring is full, extend the loss range.
+ * A pending range keeps growing until the main loop takes it, even once the ring
+ * has room again, so every ring item precedes it and records leave in seq order. */
 void GPIOTE_IRQHandler(void)
 {
     if (NRF_GPIOTE->EVENTS_IN[CAP_GPIOTE_SENS]) {
         NRF_GPIOTE->EVENTS_IN[CAP_GPIOTE_SENS] = 0;
         uint32_t seq = ++s_sensor_seq;
-        uint8_t head = s_sensor_head;
-        uint8_t next = (uint8_t)((head + 1u) & (SENSOR_QUEUE_LEN - 1u));
-        if (next == s_sensor_tail) {
-            if (s_sensor_overflow != UINT16_MAX) { s_sensor_overflow++; }
-            if (!s_loss_pending) { s_loss_first_seq = seq; s_loss_first_tick = NRF_TIMER1->CC[CAP_CC_SENS]; }
-            s_loss_last_seq = seq; s_loss_last_tick = NRF_TIMER1->CC[CAP_CC_SENS]; s_loss_pending = 1;
+        uint32_t tick = NRF_TIMER1->CC[CAP_CC_SENS];
+        uint8_t head = s_head;
+        uint8_t next = (uint8_t)((head + 1u) & (SENSOR_RING_LEN - 1u));
+        if (next == s_tail || s_loss_pending) {
+            if (s_overflow != UINT16_MAX) { s_overflow++; }
+            if (!s_loss_pending) { s_loss_first_seq = seq; s_loss_first_tick = tick; }
+            s_loss_last_seq = seq; s_loss_last_tick = tick; s_loss_pending = 1;
         } else {
-            s_sensor_queue[head] = NRF_TIMER1->CC[CAP_CC_SENS];
-            s_sensor_seq_queue[head] = seq;
-            s_sensor_clock_queue[head] = board_hfclk_xtal();
+            s_ring_tick[head] = tick;
+            s_ring_seq[head] = seq;
+            s_ring_xtal[head] = (uint8_t)board_hfclk_xtal();
             __DMB();
-            s_sensor_head = next;
+            s_head = next;
         }
     }
+}
+
+static uint32_t gpiote_event(uint32_t pin, uint32_t port, uint32_t polarity)
+{
+    return ((uint32_t)GPIOTE_CONFIG_MODE_Event << GPIOTE_CONFIG_MODE_Pos) |
+           (pin << GPIOTE_CONFIG_PSEL_Pos) | (port << GPIOTE_CONFIG_PORT_Pos) |
+           (polarity << GPIOTE_CONFIG_POLARITY_Pos);
 }
 
 void capture_init(void)
@@ -61,32 +73,25 @@ void capture_init(void)
     NRF_TIMER1->TASKS_STOP = 1;
     NRF_TIMER1->MODE = TIMER_MODE_MODE_Timer;
     NRF_TIMER1->BITMODE = TIMER_BITMODE_BITMODE_32Bit;
-    NRF_TIMER1->PRESCALER = 0; /* 16 MHz, 62.5 ns/tick */
+    NRF_TIMER1->PRESCALER = 0; /* 16 MHz */
     NRF_TIMER1->TASKS_CLEAR = 1;
     NRF_TIMER1->TASKS_START = 1;
 
-    /* DIO1 (Tx/RxDone) — rising edge. */
-    NRF_GPIOTE->CONFIG[CAP_GPIOTE_DIO1] =
-        ((uint32_t)GPIOTE_CONFIG_MODE_Event       << GPIOTE_CONFIG_MODE_Pos)     |
-        ((uint32_t)DIO1_PIN                       << GPIOTE_CONFIG_PSEL_Pos)     |
-        ((uint32_t)DIO1_PRT                       << GPIOTE_CONFIG_PORT_Pos)     |
-        ((uint32_t)GPIOTE_CONFIG_POLARITY_LoToHi  << GPIOTE_CONFIG_POLARITY_Pos);
+    NRF_GPIOTE->CONFIG[CAP_GPIOTE_DIO1] = gpiote_event(DIO1_PIN, DIO1_PRT, GPIOTE_CONFIG_POLARITY_LoToHi);
     NRF_GPIOTE->EVENTS_IN[CAP_GPIOTE_DIO1] = 0;
     NRF_PPI->CH[CAP_PPI_DIO1].EEP = (uint32_t)&NRF_GPIOTE->EVENTS_IN[CAP_GPIOTE_DIO1];
     NRF_PPI->CH[CAP_PPI_DIO1].TEP = (uint32_t)&NRF_TIMER1->TASKS_CAPTURE[CAP_CC_DIO1];
+    NRF_PPI->CHENSET = (1UL << CAP_PPI_DIO1);
+}
 
-    /* SENSOR (event) — falling edge (NPN open-collector); needs the pull-up. */
-    gpio_cfg_input_pullup(PIN_SENSOR_IN);
-    NRF_GPIOTE->CONFIG[CAP_GPIOTE_SENS] =
-        ((uint32_t)GPIOTE_CONFIG_MODE_Event       << GPIOTE_CONFIG_MODE_Pos)     |
-        ((uint32_t)SENS_PIN                       << GPIOTE_CONFIG_PSEL_Pos)     |
-        ((uint32_t)SENS_PRT                       << GPIOTE_CONFIG_PORT_Pos)     |
-        ((uint32_t)GPIOTE_CONFIG_POLARITY_HiToLo  << GPIOTE_CONFIG_POLARITY_Pos);
+void capture_sensor_enable(void)
+{
+    gpio_cfg_input_pullup(PIN_SENSOR_IN); /* NPN open collector */
+    NRF_GPIOTE->CONFIG[CAP_GPIOTE_SENS] = gpiote_event(SENS_PIN, SENS_PRT, GPIOTE_CONFIG_POLARITY_HiToLo);
     NRF_GPIOTE->EVENTS_IN[CAP_GPIOTE_SENS] = 0;
     NRF_PPI->CH[CAP_PPI_SENS].EEP = (uint32_t)&NRF_GPIOTE->EVENTS_IN[CAP_GPIOTE_SENS];
     NRF_PPI->CH[CAP_PPI_SENS].TEP = (uint32_t)&NRF_TIMER1->TASKS_CAPTURE[CAP_CC_SENS];
-
-    NRF_PPI->CHENSET = (1UL << CAP_PPI_DIO1) | (1UL << CAP_PPI_SENS);
+    NRF_PPI->CHENSET = (1UL << CAP_PPI_SENS);
 
     NRF_GPIOTE->INTENSET = (1UL << (GPIOTE_INTENSET_IN0_Pos + CAP_GPIOTE_SENS));
     NVIC_ClearPendingIRQ(GPIOTE_IRQn);
@@ -94,10 +99,21 @@ void capture_init(void)
     NVIC_EnableIRQ(GPIOTE_IRQn);
 }
 
-/* 32->64-bit extension. capture_now64() polls the 32-bit counter and bumps the
- * high word on wrap; it must be called more often than the ~268 s wrap period. */
-static uint64_t s_base; /* accumulated multiples of 2^32 */
-static uint32_t s_prev; /* last low word observed */
+void capture_pps_enable(void)
+{
+    /* Rising edge (the ATGM336H aligns it to the UTC second); polled like DIO1.
+     * Pull-down: an unpopulated GPS gives no edges. */
+    gpio_cfg_input_pulldown(PIN_GPS_PPS);
+    NRF_GPIOTE->CONFIG[CAP_GPIOTE_PPS] = gpiote_event(PPS_PIN, PPS_PRT, GPIOTE_CONFIG_POLARITY_LoToHi);
+    NRF_GPIOTE->EVENTS_IN[CAP_GPIOTE_PPS] = 0;
+    NRF_PPI->CH[CAP_PPI_PPS].EEP = (uint32_t)&NRF_GPIOTE->EVENTS_IN[CAP_GPIOTE_PPS];
+    NRF_PPI->CH[CAP_PPI_PPS].TEP = (uint32_t)&NRF_TIMER1->TASKS_CAPTURE[CAP_CC_PPS];
+    NRF_PPI->CHENSET = (1UL << CAP_PPI_PPS);
+}
+
+/* 32 -> 64-bit extension: bump the high word whenever the low word wrapped. */
+static uint64_t s_base;
+static uint32_t s_prev;
 
 static uint32_t timer1_now32(void)
 {
@@ -115,11 +131,11 @@ uint64_t capture_now64(void)
     return s_base + low;
 }
 
-/* Widen a recently-latched 32-bit capture (< 2^32 ticks ago) to 64 bits. */
+/* Widen a capture latched less than 2^32 ticks ago. */
 static uint64_t widen(uint32_t cap_low)
 {
     uint64_t now = capture_now64();
-    uint32_t delta = (uint32_t)now - cap_low; /* ticks since capture (mod 2^32) */
+    uint32_t delta = (uint32_t)now - cap_low;
     return now - delta;
 }
 
@@ -135,13 +151,13 @@ int capture_dio1_get(uint64_t *tick)
 
 int capture_sensor_get(uint64_t *tick, uint32_t *seq, int *clock_xtal)
 {
-    uint8_t tail = s_sensor_tail;
-    if (tail == s_sensor_head) { return 0; }
-    uint32_t low = s_sensor_queue[tail];
-    *seq = s_sensor_seq_queue[tail];
-    *clock_xtal = s_sensor_clock_queue[tail];
+    uint8_t tail = s_tail;
+    if (tail == s_head) { return 0; }
+    uint32_t low = s_ring_tick[tail];
+    *seq = s_ring_seq[tail];
+    *clock_xtal = s_ring_xtal[tail];
     __DMB();
-    s_sensor_tail = (uint8_t)((tail + 1u) & (SENSOR_QUEUE_LEN - 1u));
+    s_tail = (uint8_t)((tail + 1u) & (SENSOR_RING_LEN - 1u));
     *tick = widen(low);
     return 1;
 }
@@ -161,7 +177,7 @@ int capture_sensor_checkpoint(uint64_t *tick, uint32_t *seq)
 {
     NVIC_DisableIRQ(GPIOTE_IRQn);
     *tick = capture_now64();
-    int empty = s_sensor_head == s_sensor_tail && !s_loss_pending && !NRF_GPIOTE->EVENTS_IN[CAP_GPIOTE_SENS];
+    int empty = s_head == s_tail && !s_loss_pending && !NRF_GPIOTE->EVENTS_IN[CAP_GPIOTE_SENS];
     *seq = s_sensor_seq;
     NVIC_EnableIRQ(GPIOTE_IRQn);
     return empty;
@@ -169,57 +185,15 @@ int capture_sensor_checkpoint(uint64_t *tick, uint32_t *seq)
 
 uint16_t capture_sensor_overflow(void)
 {
-    return s_sensor_overflow;
-}
-
-/* Master only. TIMER1 has no spare CC register, but the SENSOR channel (GPIOTE
- * ch1 -> PPI ch1 -> CC[2]) is idle in the master role, so re-aim it at the GPS
- * PPS pin: rising edge (the ATGM336H aligns it to the UTC second), no ISR — a
- * 1 Hz edge is polled from the main loop like DIO1. The IN1 interrupt is cleared
- * first so the sensor ISR ring never sees PPS edges. Pull-down: an unpopulated
- * GPS yields no edges. */
-void capture_pps_enable(void)
-{
-    NRF_GPIOTE->INTENCLR = (1UL << (GPIOTE_INTENCLR_IN0_Pos + CAP_GPIOTE_SENS));
-    NRF_GPIOTE->CONFIG[CAP_GPIOTE_SENS] = 0;
-    gpio_cfg_input_pulldown(PIN_GPS_PPS);
-    NRF_GPIOTE->CONFIG[CAP_GPIOTE_SENS] =
-        ((uint32_t)GPIOTE_CONFIG_MODE_Event       << GPIOTE_CONFIG_MODE_Pos)     |
-        ((uint32_t)PPS_PIN                        << GPIOTE_CONFIG_PSEL_Pos)     |
-        ((uint32_t)PPS_PRT                        << GPIOTE_CONFIG_PORT_Pos)     |
-        ((uint32_t)GPIOTE_CONFIG_POLARITY_LoToHi  << GPIOTE_CONFIG_POLARITY_Pos);
-    NRF_GPIOTE->EVENTS_IN[CAP_GPIOTE_SENS] = 0;
+    return s_overflow;
 }
 
 int capture_pps_get(uint64_t *tick)
 {
-    if (NRF_GPIOTE->EVENTS_IN[CAP_GPIOTE_SENS] == 0) {
+    if (NRF_GPIOTE->EVENTS_IN[CAP_GPIOTE_PPS] == 0) {
         return 0;
     }
-    NRF_GPIOTE->EVENTS_IN[CAP_GPIOTE_SENS] = 0;
-    *tick = widen(NRF_TIMER1->CC[CAP_CC_SENS]);
-    return 1;
-}
-
-void capture_usb_sof_enable(void)
-{
-    NRF_PPI->CH[CAP_PPI_USB_SOF].EEP = (uint32_t)&NRF_USBD->EVENTS_SOF;
-    NRF_PPI->CH[CAP_PPI_USB_SOF].TEP = (uint32_t)&NRF_TIMER1->TASKS_CAPTURE[CAP_CC_USB_SOF];
-    NRF_PPI->CHENSET = (1UL << CAP_PPI_USB_SOF);
-}
-
-int capture_usb_sof_sample(uint64_t *tick, uint16_t *frame)
-{
-    if (!(NRF_USBD->ENABLE & USBD_ENABLE_ENABLE_Msk)) { return 0; }
-    uint16_t first;
-    uint16_t second;
-    uint32_t low;
-    do {
-        first = (uint16_t)NRF_USBD->FRAMECNTR;
-        low = NRF_TIMER1->CC[CAP_CC_USB_SOF];
-        second = (uint16_t)NRF_USBD->FRAMECNTR;
-    } while (first != second);
-    *frame = first;
-    *tick = widen(low);
+    NRF_GPIOTE->EVENTS_IN[CAP_GPIOTE_PPS] = 0;
+    *tick = widen(NRF_TIMER1->CC[CAP_CC_PPS]);
     return 1;
 }

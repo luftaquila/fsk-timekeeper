@@ -1,8 +1,4 @@
-/* Board services for bring-up.
- *
- * Stage 0/1 stay on raw MDK registers via gpio.h (no nrfx drivers yet) so the
- * surface stays minimal. nrfx HAL/drivers arrive with the radio/capture.
- */
+/* Board services: clocks, timebase, LED, power gate (raw MDK registers). */
 #ifndef BOARD_H
 #define BOARD_H
 
@@ -12,34 +8,36 @@
 extern "C" {
 #endif
 
-/* Relocate the vector table to the app base (0x26000), drive EXT_POWER (P0.13)
- * HIGH to enable the external VCC/12V rail (DESIGN.md §8), and bring up the LED.
- * Call once at the top of main(). */
+/* Clear UICR.NFCPINS once (resets), relocate the vector table, start HFXO,
+ * start TIMER2, drive EXT_POWER high, set up the LED. Call once at the top of main(). */
 void board_init(void);
 
-/* Non-zero only while the 16 MHz peripheral clock is sourced from HFXO. Radio
- * timing and event capture must fail closed when this is false. */
+/* Non-zero only while the 16 MHz clock is sourced from HFXO. Timing work must
+ * fail closed when this is false. */
 int board_hfclk_xtal(void);
 
-/* Non-zero once UICR.NFCPINS.PROTECT is cleared, i.e. P0.09/P0.10 (GPS PPS/TXD)
- * are plain GPIO. board_init() clears it on a board's first boot and resets. */
-int board_nfc_pins_gpio(void);
+/* Keep HFXO running: when HFCLK is not on the crystal, request HFXO again
+ * (non-blocking) and count the restart. Call every main-loop pass in both roles. */
+void board_hfxo_service(void);
 
-/* EXT_POWER gate (P0.13) — enables the 12V boost / sensor & light rails. */
+/* HFXO stops board_hfxo_service() has seen since boot. The restart may finish
+ * within the same main-loop pass, before a later board_hfclk_xtal() check:
+ * timing code compares this count as well. */
+uint32_t board_hfxo_stops(void);
+
+/* EXT_POWER gate (P0.13) — enables the 12 V boost / sensor rails. */
 void board_ext_power_on(void);
-void board_ext_power_off(void);
 
-void board_led_on(void);
 void board_led_off(void);
 void board_led_toggle(void);
-void board_led_write(int on);
 
-/* Free-running 1 MHz timebase (TIMER2), started in board_init(). Shared by the
- * RadioLib HAL and the main loop for non-blocking timing. 32-bit, wraps ~71 min. */
+/* Free-running 1 MHz TIMER2 (32-bit, wraps every ~71.6 min) and a 32-bit ms
+ * count extended through that wrap. Main-loop context only (not ISR safe);
+ * board_millis() must run at least once per micros wrap. */
 uint32_t board_micros(void);
 uint32_t board_millis(void);
 
-/* Busy-wait using the timebase. */
+/* Busy-wait on TIMER2. */
 void board_delay_ms(uint32_t ms);
 
 #ifdef __cplusplus
