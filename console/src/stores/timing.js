@@ -6,6 +6,7 @@ import { useDeviceStore } from "./device";
 import { useSettingsStore } from "./settings";
 import { useHistoryStore } from "./history";
 import * as eventLog from "../lib/eventLog";
+import * as ppsLog from "../lib/ppsLog";
 import { createRun, evaluateRun, stopRun, endMasterSession, shouldInvalidateOnMasterBoot, runTouchedBy, EngineError, MASTER_REBOOTED } from "../lib/engine";
 import { wirelessQuality, missingRoles as missingRolesOf } from "../lib/quality";
 import { encodeRun, decodeRun } from "../lib/run-codec";
@@ -267,14 +268,19 @@ export const useTimingStore = defineStore("timing", () => {
     freezeWait = null;
   }
 
-  // Freeze the calibration of a decided run's ticks (the result and any confirmed laps).
-  function freezeNow(runId) {
+  // Freeze the calibration of a decided run's ticks (the result and any confirmed laps). The
+  // live edges belong to the connected master's boot: after a reboot the run's boot is in storage.
+  async function freezeNow(runId) {
     cancelFreeze();
+    const pending = run.value;
+    if (!pending || pending.runId !== runId || pending.calibration) return;
+    const device = useDeviceStore();
+    const edges = device.ppsBootId === pending.masterBootId ? device.ppsEdges : await ppsLog.loadEdges(pending.masterBootId);
     const current = run.value;
     if (!current || current.runId !== runId || current.calibration) return;
     const ticks = resultTicks(current);
     if (!ticks.length) return;
-    const calibration = freezeCalibration(timeline.value, ticks);
+    const calibration = freezeCalibration(edges, ticks);
     let ns = null;
     if (current.verification === "verified") {
       if (current.mode === "sprint") ns = durationNs(calibration.points, current.startTick, current.finishTick);

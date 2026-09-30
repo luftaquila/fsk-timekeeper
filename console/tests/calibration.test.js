@@ -75,6 +75,59 @@ describe("PPS timeline", () => {
     }
   });
 
+  it("does not bridge edges that disagree with the crystal (a PPS phase step between segments)", () => {
+    const osc = oscillator({ b: 0 });
+    const step = BigInt(F / 20); // the second segment's pulses come 50 ms late
+    const first = edgesOf(osc, range(0, 20), { seg: 1 });
+    const second = edgesOf(osc, range(40, 60), { seg: 2, n0: 0 }).map((e) => ({ ...e, tick: String(BigInt(e.tick) + step) }));
+    for (const utc of [true, false]) {
+      const edges = [...first, ...second].map((e) => (utc ? e : { ...e, utc: null }));
+      const timeline = buildTimeline(edges);
+      assert.equal(timeline.segs[1].island, 1);
+      assert.equal(timeAt(timeline, osc(30.25)).how, "extrap");
+      // across the gap the crystal counts, not the stepped PPS
+      const a = osc(5);
+      const b = osc(55);
+      const points = calibrationPoints(edges, [a, b]);
+      assert.ok(Math.abs(Number(durationNs(points, a, b)) - 50e9) < 1000, `${durationNs(points, a, b)}`);
+      assert.equal(pointsMethod(points), "gps-extrapolated");
+    }
+  });
+
+  it("checks a bridge against the neighbours' frequencies to the microsecond", () => {
+    const stepped = (osc, from, to, stepUs) =>
+      edgesOf(osc, range(from, to), { seg: 2, n0: 0 }).map((e) => ({ ...e, tick: String(BigInt(e.tick) + BigInt(Math.round((stepUs * F) / 1e6))) }));
+    const island = (edges) => buildTimeline(edges).segs[1].island;
+    const steady = oscillator({ b: 0 });
+    // a 100 us PPS step across a 20 s gap: 200 ppm would allow 4 ms, the neighbours 21 us
+    assert.equal(island([...edgesOf(steady, range(0, 60)), ...stepped(steady, 80, 140, 100)]), 1);
+    assert.equal(island([...edgesOf(steady, range(0, 60)), ...stepped(steady, 80, 140, 15)]), 0);
+    // a crystal warming 0.1 ppm/s over a 600 s gap is followed, not mistaken for a step
+    const warming = oscillator({ a: 20e-6, b: 1e-7 });
+    assert.equal(island([...edgesOf(warming, range(0, 60)), ...stepped(warming, 660, 720, 0)]), 0);
+    // one edge on a side gives no frequency: only the 200 ppm gate applies
+    assert.equal(island([...edgesOf(steady, [0]), ...stepped(steady, 20, 80, 1000)]), 0);
+  });
+
+  it("follows a crystal drifting across a bridged gap instead of averaging it", () => {
+    for (const { b, gap } of [
+      { b: 1e-8, gap: 600 }, // 0.01 ppm/s: a straight line between the ends is 450 us off mid-gap
+      { b: 1e-7, gap: 60 }, // 0.1 ppm/s: 45 us
+    ]) {
+      const osc = oscillator({ a: 20e-6, b });
+      const edges = [...edgesOf(osc, range(0, 60), { seg: 1 }), ...edgesOf(osc, range(60 + gap, 120 + gap), { seg: 2, n0: 0 })];
+      const timeline = buildTimeline(edges);
+      assert.equal(timeline.segs[1].island, 0);
+      let worst = 0;
+      for (let i = 1; i < 20; i++) {
+        const t = 60 + (gap * i) / 20;
+        assert.equal(timeAt(timeline, osc(t)).how, "bridge");
+        worst = Math.max(worst, Math.abs(seconds(timeline, osc(t)) - t) * 1e9);
+      }
+      assert.ok(worst < 1000, `b=${b} gap=${gap}: worst ${worst} ns`);
+    }
+  });
+
   it("extrapolates past the last edge with the nearest segment's frequency", () => {
     const osc = oscillator({ a: 50e-6, b: 0 });
     const edges = edgesOf(osc, range(0, 100));
@@ -85,6 +138,16 @@ describe("PPS timeline", () => {
     assert.equal(at.extrapTicks, beyond - BigInt(edges[edges.length - 1].tick));
     assert.ok(Math.abs(seconds(timeline, beyond) - 101.5) * 1e9 < 100);
     assert.equal(pointsMethod(calibrationPoints(edges, [osc(50), beyond])), "gps-extrapolated");
+  });
+
+  it("a one-edge segment extrapolates with the nearest measured frequency, not the nominal one", () => {
+    const osc = oscillator({ a: 30e-6, b: 0 });
+    // a lone qualified edge more than an hour after the last segment: its own island
+    const edges = [...edgesOf(osc, range(0, 60), { seg: 1, utc0: null }), ...edgesOf(osc, [8000], { seg: 2, utc0: null })];
+    const timeline = buildTimeline(edges);
+    assert.equal(timeline.segs[1].island, 1);
+    const drift = (seconds(timeline, osc(8060)) - seconds(timeline, osc(8000)) - 60) * 1e9;
+    assert.ok(Math.abs(drift) < 100, `${drift} ns over 60 s`); // nominal: +1.8 ms
   });
 
   it("separates islands beyond an hour without UTC and keeps T continuous at the midpoint", () => {

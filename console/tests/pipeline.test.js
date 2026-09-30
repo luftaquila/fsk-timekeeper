@@ -155,6 +155,21 @@ describe("pipeline with the fake master", () => {
     await device.disconnect();
   });
 
+  it("a run decided just before a master reboot freezes with that boot's stored PPS edges", { timeout: 20000 }, async () => {
+    const { device, settings, timing } = await boot();
+    const { fake, a, b } = await mapSprint(device, settings);
+    await waitFor(() => device.ppsEdges.length >= 2, 4000);
+    assert.equal(await timing.start("sprint", "rb"), true, toasts.error.join(" | "));
+    fake.setGps({ valid: false }); // no qualified edge after the result: the freeze waits
+    fake.crossing(a);
+    fake.crossing(b, { offsetMs: 1000 });
+    await waitFor(() => timing.run.verification === "verified");
+    fake.rebootMaster();
+    await waitFor(() => timing.run.durationNs != null, 6000);
+    assert.equal(timing.run.calibration.method, "gps-extrapolated");
+    await device.disconnect();
+  });
+
   it("laps with a target auto-stops and ignores finish-mapped sensors", { timeout: 20000 }, async () => {
     const { device, settings, timing, history } = await boot();
     const { fake, a, b } = await mapSprint(device, settings);
