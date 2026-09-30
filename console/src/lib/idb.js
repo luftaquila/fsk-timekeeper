@@ -66,16 +66,8 @@ export async function addAll(db, store, values) {
   return settled.map((s) => s.value);
 }
 
-export async function getByIndex(db, store, index, key) {
-  return request(transaction(db, store).objectStore(store).index(index).get(key));
-}
-
 export async function getAll(db, store, range = null, count = undefined) {
   return request(transaction(db, store).objectStore(store).getAll(range, count));
-}
-
-export async function getAllByIndex(db, store, index, range = null) {
-  return request(transaction(db, store).objectStore(store).index(index).getAll(range));
 }
 
 export async function count(db, store) {
