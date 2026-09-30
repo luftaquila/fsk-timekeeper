@@ -3,34 +3,45 @@ import { ref, computed } from "vue";
 import { useTimingStore } from "../stores/timing";
 import { useSettingsStore } from "../stores/settings";
 import { MODE_LABEL } from "../lib/constants";
-import { msToClockStr, fmtPpm } from "../lib/format";
+import { formatDuration } from "../lib/format";
+import { calibrationLabel } from "../lib/results";
+import { faultWindow } from "../lib/fault-text";
 import RunControlCard from "../components/RunControlCard.vue";
 import RunSetupCard from "../components/RunSetupCard.vue";
 import TimerCard from "../components/TimerCard.vue";
 
 const timing = useTimingStore();
 const settings = useSettingsStore();
-const source = timing.source;
 const note = ref(settings.state.lastNote || "");
 
 // The page follows the open run's mode; with no run, the selected mode.
 const mode = computed(() => timing.run?.mode ?? settings.state.mode);
+const verification = computed(() => timing.run?.verification ?? null);
 
-const startList = computed(() => source.crossings.filter((c) => c.role === "start"));
-const finishList = computed(() => source.crossings.filter((c) => c.role === "finish"));
+const startList = computed(() => timing.crossingRows("start"));
+const finishList = computed(() => timing.crossingRows("finish"));
 
-const laps = computed(() => source.rawLaps);
-const lapMs = computed(() => laps.value.map((l) => l.ms));
-const best = computed(() => (lapMs.value.length ? Math.min(...lapMs.value) : null));
-const last = computed(() => (lapMs.value.length ? lapMs.value[lapMs.value.length - 1] : null));
-const avg = computed(() => (lapMs.value.length ? lapMs.value.reduce((a, b) => a + b, 0) / lapMs.value.length : null));
-const total = computed(() => (lapMs.value.length ? lapMs.value.reduce((a, b) => a + b, 0) : null));
+// An invalid laps run shows only the laps confirmed before the loss, and no total.
+const laps = computed(() => (verification.value === "invalid" ? timing.lapRows.filter((l) => l.confirmed) : timing.lapRows));
+const lapNs = computed(() => laps.value.map((l) => l.ns).filter((ns) => ns != null));
+const best = computed(() => (lapNs.value.length ? lapNs.value.reduce((a, b) => (b < a ? b : a)) : null));
+const last = computed(() => (lapNs.value.length ? lapNs.value[lapNs.value.length - 1] : null));
+const avgText = computed(() => (lapNs.value.length ? formatDuration(lapNs.value.reduce((a, b) => a + b, 0n), BigInt(lapNs.value.length)) : "—"));
 const target = computed(() => timing.run?.lapTarget ?? settings.state.lapTarget);
 
-function delta(ms) {
-  if (best.value == null) return "";
-  const d = ms - best.value;
-  return d === 0 ? "best" : `+${(d / 1000).toFixed(3)}`;
+const status = computed(() => {
+  const v = verification.value;
+  if (!timing.run) return null;
+  if (v === "verified") return { cls: "badge-success", text: timing.run.closed ? "official" : "official so far" };
+  if (v === "invalid") return { cls: "badge-danger", text: "invalid" };
+  if (v === "dnf") return { cls: "badge-default", text: timing.run.dnfReason || "DNF" };
+  return { cls: "badge-warning", text: "pending" };
+});
+
+function delta(ns) {
+  if (best.value == null || ns == null) return "";
+  const d = ns - best.value;
+  return d === 0n ? "best" : `+${formatDuration(d)}`;
 }
 </script>
 
@@ -38,11 +49,11 @@ function delta(ms) {
   <div class="page-layout">
     <aside class="sidebar">
       <RunSetupCard v-model="note" />
-      <RunControlCard :source="source" :note="note" />
+      <RunControlCard :note="note" />
     </aside>
 
     <section class="content">
-      <TimerCard :source="source" :title="MODE_LABEL[mode]" :note="timing.armed ? timing.run.note : note" />
+      <TimerCard :title="MODE_LABEL[mode]" :note="timing.armed ? timing.run.note : note" />
 
       <div v-if="mode === 'sprint'" class="sensors">
         <div class="card">
@@ -51,9 +62,9 @@ function delta(ms) {
             <div v-if="!startList.length" class="empty-state">No crossing yet</div>
             <ul v-else class="rec-list">
               <li v-for="c in startList" :key="c.key" :class="{ confirmed: c.confirmed }">
-                <span class="mono">{{ msToClockStr(c.ms) }}</span>
+                <span class="mono">{{ formatDuration(c.ns) }}</span>
                 <span class="who mono">{{ c.node_id }}</span>
-                <span class="chk" :title="c.confirmed ? 'Confirmed by checkpoint' : 'Awaiting checkpoint'">{{ c.confirmed ? "✓" : "…" }}</span>
+                <span class="chk" :title="c.confirmed ? 'Confirmed' : 'Awaiting confirmation'">{{ c.confirmed ? "✓" : "…" }}</span>
               </li>
             </ul>
           </div>
@@ -64,9 +75,9 @@ function delta(ms) {
             <div v-if="!finishList.length" class="empty-state">No crossing yet</div>
             <ul v-else class="rec-list">
               <li v-for="c in finishList" :key="c.key" :class="{ confirmed: c.confirmed }">
-                <span class="mono">{{ c.ms != null ? `+${msToClockStr(c.ms)}` : "—" }}</span>
+                <span class="mono">{{ c.ns != null ? `+${formatDuration(c.ns)}` : "—" }}</span>
                 <span class="who mono">{{ c.node_id }}</span>
-                <span class="chk" :title="c.confirmed ? 'Confirmed by checkpoint' : 'Awaiting checkpoint'">{{ c.confirmed ? "✓" : "…" }}</span>
+                <span class="chk" :title="c.confirmed ? 'Confirmed' : 'Awaiting confirmation'">{{ c.confirmed ? "✓" : "…" }}</span>
               </li>
             </ul>
           </div>
@@ -81,26 +92,26 @@ function delta(ms) {
           </div>
           <div class="stat card">
             <div class="k">Best</div>
-            <div class="v mono">{{ best != null ? msToClockStr(best) : "—" }}</div>
+            <div class="v mono">{{ formatDuration(best) }}</div>
           </div>
           <div class="stat card">
             <div class="k">Last</div>
-            <div class="v mono">{{ last != null ? msToClockStr(last) : "—" }}</div>
+            <div class="v mono">{{ formatDuration(last) }}</div>
           </div>
           <div class="stat card">
             <div class="k">Average</div>
-            <div class="v mono">{{ avg != null ? msToClockStr(avg) : "—" }}</div>
+            <div class="v mono">{{ avgText }}</div>
           </div>
           <div class="stat card total">
-            <div class="k">Total{{ source.verification === "verified" ? " (official)" : "" }}</div>
-            <div class="v mono">{{ source.result != null ? msToClockStr(source.result) : total != null ? msToClockStr(total) : "—" }}</div>
+            <div class="k">Total{{ verification === "verified" && timing.run?.closed ? " (official)" : "" }}</div>
+            <div class="v mono">{{ formatDuration(timing.resultNs) }}</div>
           </div>
         </div>
 
         <div class="card">
-          <div class="card-header"><h3>🔄 Lap times</h3></div>
+          <div class="card-header"><h3>🔄 Lap times<span v-if="verification === 'invalid' && laps.length" class="sub"> — confirmed laps before the loss</span></h3></div>
           <div class="card-body">
-            <div v-if="!laps.length" class="empty-state">{{ source.crossings.length ? "First crossing recorded — waiting for lap 1" : "No crossing yet" }}</div>
+            <div v-if="!laps.length" class="empty-state">{{ startList.length ? "First crossing recorded — waiting for lap 1" : "No crossing yet" }}</div>
             <div v-else class="table-scroll">
               <table class="lap-table">
                 <thead>
@@ -112,10 +123,10 @@ function delta(ms) {
                   </tr>
                 </thead>
                 <tbody>
-                  <tr v-for="(lap, i) in [...laps].reverse()" :key="laps.length - i" :class="{ confirmed: lap.confirmed, best: lap.ms === best }">
+                  <tr v-for="(lap, i) in [...laps].reverse()" :key="laps.length - i" :class="{ confirmed: lap.confirmed, best: lap.ns != null && lap.ns === best }">
                     <td class="idx">{{ laps.length - i }}</td>
-                    <td class="mono">{{ msToClockStr(lap.ms) }}</td>
-                    <td class="mono d">{{ delta(lap.ms) }}</td>
+                    <td class="mono">{{ formatDuration(lap.ns) }}</td>
+                    <td class="mono d">{{ delta(lap.ns) }}</td>
                     <td class="chk">{{ lap.confirmed ? "✓" : "…" }}</td>
                   </tr>
                 </tbody>
@@ -128,14 +139,18 @@ function delta(ms) {
       <div class="card">
         <div class="card-header"><h3>🏆 Result</h3></div>
         <div class="card-body result-body">
-          <div class="result-time mono">{{ source.result != null ? msToClockStr(source.result) : "—" }}</div>
+          <div class="result-time mono">{{ formatDuration(timing.resultNs) }}</div>
           <div class="result-meta">
-            <span v-if="source.verification === 'verified'" class="badge badge-success">official</span>
-            <span v-else-if="source.verification === 'invalid'" class="badge badge-danger">invalid</span>
-            <span v-else-if="source.run" class="badge badge-warning">pending</span>
-            <span v-if="source.run" class="badge" :class="source.calib ? 'badge-primary' : 'badge-default'">{{ source.calib ? `GPS-calibrated ${fmtPpm(source.calib.ppb)}` : "nominal 16 MHz" }}</span>
-            <span v-if="source.run?.note" class="lbl">{{ source.run.note }}</span>
+            <span v-if="status" class="badge" :class="status.cls">{{ status.text }}</span>
+            <span v-if="timing.run && timing.calibrationMethod" class="badge" :class="timing.calibrationMethod === 'nominal' ? 'badge-default' : 'badge-primary'">{{ calibrationLabel(timing.calibrationMethod) }}</span>
+            <span v-if="timing.run?.note" class="lbl">{{ timing.run.note }}</span>
+            <span v-if="timing.run && timing.run.durable === false" class="lbl bad">not stored durably</span>
           </div>
+          <ul v-if="timing.run?.fault?.reasons?.length" class="fault-list">
+            <li v-for="(r, i) in timing.run.fault.reasons" :key="i">
+              {{ r.reason }}<span v-if="faultWindow(r, timing.run.boundaryTick)" class="win"> ({{ faultWindow(r, timing.run.boundaryTick) }})</span>
+            </li>
+          </ul>
         </div>
       </div>
     </section>
@@ -203,6 +218,11 @@ function delta(ms) {
   color: var(--text-tertiary);
   margin-left: 0.3rem;
 }
+.sub {
+  font-size: 0.8rem;
+  font-weight: 400;
+  color: var(--text-tertiary);
+}
 .lap-table {
   width: 100%;
   border-collapse: collapse;
@@ -259,6 +279,19 @@ function delta(ms) {
 .lbl {
   font-size: 0.85rem;
   color: var(--text-secondary);
+}
+.lbl.bad {
+  color: var(--accent-danger);
+}
+.fault-list {
+  flex-basis: 100%;
+  margin: 0;
+  padding-left: 1.2rem;
+  font-size: 0.85rem;
+  color: var(--accent-danger);
+}
+.fault-list .win {
+  color: var(--text-tertiary);
 }
 @media (max-width: 900px) {
   .stats {

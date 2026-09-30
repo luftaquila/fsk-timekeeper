@@ -2,6 +2,8 @@
 import { computed, ref, onMounted, onUnmounted } from "vue";
 import { useDeviceStore } from "../stores/device";
 import { fmtNum, fmtAgeMs, fmtPpm } from "../lib/format";
+import { telemetryAgeMs, telemetryFresh } from "../lib/quality";
+import { errorNames, resetNames } from "../lib/protocol";
 
 const device = useDeviceStore();
 const now = ref(Date.now());
@@ -24,17 +26,12 @@ const rows = computed(() =>
 const isMaster = (r) => r.node_id === "0";
 const nodeLabel = (r) => (isMaster(r) ? "Master" : r.node_id);
 
-function ageMs(r) {
-  return Number.isFinite(r.last_seen_at) ? Math.max(0, now.value - r.last_seen_at) : Infinity;
-}
-// STATUS arrives every 5 s; a tight window (>8 s degraded, >15 s lost) exposes a single miss.
+// The firmware decides the link state; an old report is no report.
 function linkState(r) {
-  const a = ageMs(r);
-  if (!isFinite(a) || a > 15000 || r.link_state === "lost") return "lost";
-  if (a > 8000 || r.link_state === "degraded") return "degraded";
-  return "online";
+  if (!telemetryFresh(r, now.value)) return "none";
+  return r.link_state || "lost";
 }
-const stateLabel = { online: "Online", degraded: "Delayed", lost: "Lost" };
+const stateLabel = { online: "Online", degraded: "Stale", lost: "Lost", none: "No report" };
 
 function fmtTemp(v) {
   return v == null ? "—" : `${(v / 10).toFixed(1)} °C`;
@@ -45,8 +42,7 @@ function fmtVolt(mv) {
 function clockDrift(r) {
   if (isMaster(r)) {
     const p = device.pps;
-    if (p?.valid === 1) return `${fmtPpm(p.ppb)} (GPS, ${p.span} s)`;
-    return r.usb_ref_valid === 1 ? `${fmtNum(r.usb_ref_ppm, 0)} ppm (USB)` : "measuring";
+    return p?.valid === 1 ? `${fmtPpm(p.ppb)} (GPS, ${p.span} s)` : "no GPS";
   }
   return `${fmtNum(r.skew_ppm)} ppm`;
 }
@@ -60,12 +56,22 @@ function timingHealth(r) {
   if (r.provisioned !== 1) return { state: "bad", label: "No key" };
   if (r.clock_source !== "xtal") return { state: "bad", label: "RC clock" };
   if (isMaster(r)) {
-    if (r.queue_overflow) return { state: "bad", label: `Queue backpressure ×${r.queue_overflow}` };
-    return { state: r.usb_ref_valid === 1 ? "good" : "warn", label: r.usb_ref_valid === 1 ? `OK · queue ${r.queue_depth ?? 0}` : "SOF pending" };
+    if (r.queue_overflow) return { state: "warn", label: `Queue backpressure ×${r.queue_overflow}` };
+    return { state: "good", label: `OK · queue ${r.queue_depth ?? 0}` };
   }
-  if (r.capture_overflow || r.event_drop) return { state: "bad", label: "Capture/delivery loss" };
+  if (r.capture_overflow || r.fifo_drop) return { state: "bad", label: "Capture/FIFO loss" };
   if (r.sync_valid !== 1 || r.skew_valid !== 1) return { state: "bad", label: "Sync invalid" };
   return { state: "good", label: `OK · sync ${r.sync_age_ms ?? "-"} ms` };
+}
+function errorsCell(r) {
+  const names = errorNames(r.err_flags);
+  const extra = [];
+  if (isMaster(r) && r.ver_drop) extra.push(`ver_drop ${r.ver_drop}`);
+  if (isMaster(r) && r.tx_drop) extra.push(`tx_drop ${r.tx_drop}`);
+  return [...names, ...extra].join(", ") || "—";
+}
+function resetCell(r) {
+  return Number.isInteger(r.reset_reason) ? resetNames(r.reset_reason).join(", ") : "—";
 }
 // Rough Li-ion SoC: 3.3 V → 0 %, 4.2 V → 100 %.
 function socPct(mv) {
@@ -94,15 +100,18 @@ function battTag(r) {
               <th>Node</th>
               <th>Link</th>
               <th class="tip" title="Key, HFXO, sync, capture and queue health combined">Timing</th>
+              <th class="tip" title="Errors since boot (err_flags); master: radio packets of another version (ver_drop), dropped USB lines (tx_drop)">Errors</th>
+              <th class="tip" title="Why the board last reset">Reset</th>
               <th class="tip" title="Signal strength measured by the master (dBm)">RSSI</th>
               <th class="tip" title="Signal-to-noise ratio (dB)">SNR</th>
-              <th class="tip" title="Sensor: skew vs master. Master: HFXO vs GPS PPS (applied to results) or vs USB SOF (diagnostic only)">Drift</th>
+              <th class="tip" title="Sensor: skew vs master. Master: HFXO vs GPS PPS">Drift</th>
               <th class="tip" title="Master GNSS fix and satellites in use">GPS</th>
               <th class="tip" title="Beacons missed since boot (current consecutive gap)">Missed</th>
               <th class="tip" title="Event delivery latency (ms)">Latency</th>
               <th class="tip" title="nRF die temperature">Temp</th>
               <th class="tip batt" title="Sensor: cell estimate. Master: charge rail">Battery</th>
               <th class="tip" title="Time since the master last heard this node">Heard</th>
+              <th class="tip" title="Time since the console received this report">Report</th>
             </tr>
           </thead>
           <tbody>
@@ -110,6 +119,8 @@ function battTag(r) {
               <td class="mono node">{{ nodeLabel(r) }}</td>
               <td><span class="lbadge" :class="linkState(r)">{{ stateLabel[linkState(r)] }}</span></td>
               <td><span class="health" :class="timingHealth(r).state">{{ timingHealth(r).label }}</span></td>
+              <td class="errs">{{ errorsCell(r) }}</td>
+              <td class="errs">{{ resetCell(r) }}</td>
               <td class="mono">{{ isMaster(r) ? "—" : `${fmtNum(r.rssi)} dBm` }}</td>
               <td class="mono">{{ isMaster(r) ? "—" : `${fmtNum(r.snr)} dB` }}</td>
               <td class="mono">{{ clockDrift(r) }}</td>
@@ -124,7 +135,8 @@ function battTag(r) {
                 <template v-if="r.batt_mv == null">—</template>
                 <template v-else>{{ fmtVolt(r.batt_mv) }}<span class="batt-tag">{{ battTag(r) }}</span></template>
               </td>
-              <td class="mono">{{ fmtAgeMs(ageMs(r)) }}</td>
+              <td class="mono">{{ isMaster(r) || r.last_seen_at == null ? "—" : fmtAgeMs(Math.max(0, now - r.last_seen_at)) }}</td>
+              <td class="mono">{{ fmtAgeMs(telemetryAgeMs(r, now)) }}</td>
             </tr>
           </tbody>
         </table>
@@ -194,9 +206,16 @@ function battTag(r) {
   background: rgba(245, 158, 11, 0.18);
   color: var(--accent-warning);
 }
-.lbadge.lost {
+.lbadge.lost,
+.lbadge.none {
   background: rgba(239, 68, 68, 0.18);
   color: var(--accent-danger);
+}
+.errs {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  white-space: normal;
+  min-width: 6rem;
 }
 .health.good {
   color: var(--accent-success);

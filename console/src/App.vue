@@ -7,6 +7,8 @@ import { useTimingStore } from "./stores/timing";
 import { useHistoryStore } from "./stores/history";
 import { useDeviceStore } from "./stores/device";
 import * as eventLog from "./lib/eventLog";
+import * as ppsLog from "./lib/ppsLog";
+import * as deviceLog from "./lib/deviceLog";
 
 const timing = useTimingStore();
 const history = useHistoryStore();
@@ -20,10 +22,14 @@ onMounted(async () => {
   eventLog.protect(minSeq);
   device.durable = durable;
   device.durableError = error?.message || null;
+  device.requestPersistence();
   await history.init();
-  timing.reevaluate();
+  await device.loadLog();
+  await timing.reevaluate();
   ready.value = true;
   eventLog.pruneStore().catch(() => {});
+  ppsLog.pruneEdges();
+  deviceLog.pruneEntries();
 });
 </script>
 
@@ -46,9 +52,19 @@ onMounted(async () => {
     <div v-if="!device.durable" class="banner" role="alert">
       Browser storage unavailable{{ device.durableError ? ` (${device.durableError})` : "" }} — events and results stay in memory and are lost on reload.
     </div>
+    <div v-else-if="device.storageWarning" class="banner warn" role="alert">The browser did not grant persistent storage — it may clear stored evidence and results under storage pressure.</div>
+    <div v-for="alarm in device.alarms" :key="alarm.key" class="banner" role="alert">
+      {{ alarm.text }}
+      <button class="banner-close" type="button" aria-label="Dismiss" @click="device.dismissAlarm(alarm.key)">×</button>
+    </div>
+    <div v-if="device.connected && device.identity && !device.contract.ok" class="banner" role="alert">{{ device.contract.reason }}</div>
     <div v-if="device.connected && device.unprovisioned" class="banner warn" role="alert">
       Master has no radio key (<code>X noprov</code>) — provision every board in Settings first.
     </div>
+    <div v-if="device.quarantine" class="banner warn" role="alert">
+      {{ device.quarantine.count }} invalid event{{ device.quarantine.count === 1 ? "" : "s" }} quarantined (latest: {{ device.quarantine.reason }}) — affected runs stay unconfirmed. See the device log.
+    </div>
+    <div v-if="device.verDrop" class="banner warn" role="alert">An outdated sensor is transmitting (ver_drop {{ device.verDrop.count }}) — update every board.</div>
 
     <QualityAlert />
 
@@ -87,6 +103,9 @@ onMounted(async () => {
   border: 1px solid rgba(239, 68, 68, 0.4);
   color: var(--text-primary);
   font-size: 0.875rem;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
 }
 .banner.warn {
   background: rgba(245, 158, 11, 0.12);
@@ -94,6 +113,14 @@ onMounted(async () => {
 }
 .banner code {
   font-family: var(--font-mono);
+}
+.banner-close {
+  margin-left: auto;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font-size: 1.1rem;
+  cursor: pointer;
 }
 @media (max-width: 1440px) {
   .banner {

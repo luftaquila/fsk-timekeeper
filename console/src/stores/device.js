@@ -1,18 +1,24 @@
-/* Master link: transport, line dispatch, telemetry, clock reads, provisioning, DFU. */
+/* Master link: transport, contract check, line dispatch, evidence ingest + ack, telemetry,
+ * PPS edges, clock reads, provisioning, device log, DFU. */
 import { defineStore } from "pinia";
 import { ref, reactive, computed } from "vue";
 import { useNotification } from "../composables/useNotification";
 import { createSerialTransport, isSerialSupported } from "../transport/serial";
 import { createFakeTransport } from "../transport/fake";
-import { parseLine, validateEvent, normalizeTelemetry, normalizePps, formatAck, isHexKey, NODE_MASTER } from "../lib/protocol";
+import { parseLine, parseEventLine, normalizeTelemetry, normalizePps, formatAck, isHexKey, contractOf, resetNames, NODE_MASTER } from "../lib/protocol";
 import { createWirelessClock } from "../lib/wireless-clock";
-import { WIRELESS_STATUS_MAX_AGE_MS, USB_PRODUCT } from "../lib/constants";
+import { WIRELESS_STATUS_MAX_AGE_MS, UNREADABLE_ALARM_REPEATS } from "../lib/constants";
 import { MASTER_TICKS_PER_MS as TICKS_PER_MS } from "../lib/event-timing";
+import { pipelineHealth as pipelineHealthOf } from "../lib/quality";
 import * as eventLog from "../lib/eventLog";
+import * as ppsLog from "../lib/ppsLog";
+import * as deviceLog from "../lib/deviceLog";
 import { useTimingStore } from "./timing";
 
 const CONSOLE_LIMIT = 300;
+const LOG_VIEW_LIMIT = 500;
 const PROVISION_TIMEOUT_MS = 3000;
+const GPS_REPORT_MAX_AGE_MS = 3000;
 
 export const useDeviceStore = defineStore("device", () => {
   const notyf = useNotification();
@@ -20,26 +26,38 @@ export const useDeviceStore = defineStore("device", () => {
   const connected = ref(false);
   const connecting = ref(false);
   const transportKind = ref(null); // "serial" | "fake"
-  const identity = ref(null); // { product, fw, devid, freqMhz, sf, bw, ticksPerMs }
-  const identityOk = ref(false);
+  const identity = ref(null); // parsed I line
+  const contract = ref(contractOf(null)); // { ok, reason }
+  const identityOk = computed(() => contract.value.ok);
   const lastLineAt = ref(0);
   const heartbeat = ref(null); // { tick: bigint, wallMs, uptimeMs, beaconSeq, nseen }
   const telemetry = reactive({}); // node_id -> normalized telemetry
   const masterBootId = ref(null);
-  const pps = ref(null); // latest GPS/PPS report (P line), see protocol.normalizePps
+  const pps = ref(null); // latest P report
+  const ppsEdges = ref([]); // qualified PPS edges of ppsBootId, sorted by tick
+  const ppsBootId = ref(null);
   const unprovisioned = ref(false);
   const lastError = ref(null);
   const dropped = reactive({ count: 0, reasons: {} });
-  const stats = reactive({ lines: 0, events: 0, duplicates: 0, acks: 0 });
+  const stats = reactive({ lines: 0, events: 0, duplicates: 0, acks: 0, quarantined: 0, gated: 0 });
   const consoleLines = ref([]);
   const dfuInProgress = ref(false);
   const durable = ref(true);
   const durableError = ref(null);
+  const storageWarning = ref(false); // navigator.storage.persist() refused
+  const alarms = ref([]); // fatal conditions: { key, text, at }
+  const quarantine = ref(null); // latest quarantined line: { count, reason, node, at }
+  const verDrop = ref(null); // { count, at } once D 0 ver_drop rose
+  const head = ref(null); // { hseq, firstSeenAt, lastSeenAt } of the latest E line
+  const logEntries = ref([]); // device log, newest first
 
   let transport = null;
   let wakeLock = null;
   let provisionPending = null; // { resolve, timer }
   let ackChain = Promise.resolve();
+  let lastVerDrop = null;
+  let identityLine = null;
+  const repeats = new Map(); // unreadable line key -> count
 
   const clock = createWirelessClock({
     send: ({ request_id }) => {
@@ -50,8 +68,14 @@ export const useDeviceStore = defineStore("device", () => {
 
   const supported = computed(() => isSerialSupported());
 
+  eventLog.onWriteFailure((error) => onStorageFailure(error));
+
   function masterFresh(now = Date.now()) {
     return connected.value && now - lastLineAt.value <= WIRELESS_STATUS_MAX_AGE_MS;
+  }
+
+  function pipelineHealth(now = Date.now()) {
+    return pipelineHealthOf({ master: telemetry[NODE_MASTER], head: head.value, connected: connected.value, now });
   }
 
   // Wall-clock estimate of a master tick from the latest heartbeat (display only).
@@ -78,90 +102,229 @@ export const useDeviceStore = defineStore("device", () => {
     dropped.reasons[reason] = (dropped.reasons[reason] || 0) + 1;
   }
 
+  async function log(entry) {
+    const row = await deviceLog.addEntry({ at: Date.now(), devid: identity.value?.devid ?? null, masterBootId: masterBootId.value, ...entry });
+    logEntries.value = [row, ...logEntries.value].slice(0, LOG_VIEW_LIMIT);
+    return row;
+  }
+
+  async function loadLog() {
+    logEntries.value = (await deviceLog.listEntries()).slice(0, LOG_VIEW_LIMIT);
+  }
+
+  async function clearLog() {
+    await deviceLog.clearEntries();
+    logEntries.value = [];
+  }
+
+  async function exportLog() {
+    return deviceLog.listEntries();
+  }
+
+  function raiseAlarm(key, text) {
+    if (alarms.value.some((a) => a.key === key)) return;
+    alarms.value = [...alarms.value, { key, text, at: Date.now() }];
+    notyf.error(text);
+  }
+
+  function dismissAlarm(key) {
+    alarms.value = alarms.value.filter((a) => a.key !== key);
+  }
+
+  function syncDurability() {
+    if (eventLog.isDurable() !== durable.value) {
+      durable.value = eventLog.isDurable();
+      durableError.value = eventLog.getInitError()?.message || null;
+    }
+  }
+
+  function onStorageFailure(error) {
+    durable.value = false;
+    durableError.value = error?.message || String(error);
+    raiseAlarm("storage", `Browser storage failed (${durableError.value}) — new evidence and results are kept in memory only.`);
+    log({ kind: "console", code: "storage_failure", text: durableError.value });
+    useTimingStore().markNonDurable();
+  }
+
+  async function requestPersistence() {
+    try {
+      if (typeof navigator === "undefined" || !navigator.storage?.persist) return null;
+      const granted = await navigator.storage.persist();
+      storageWarning.value = !granted;
+      return granted;
+    } catch {
+      return null;
+    }
+  }
+
   async function handleLine(raw) {
     const now = Date.now();
     lastLineAt.value = now;
     stats.lines++;
     const msg = parseLine(raw);
     if (!msg) return;
-    if ((msg.type !== "H" && msg.type !== "P") || consoleLines.value.length < CONSOLE_LIMIT) pushConsole("rx", raw.trim());
-    const timing = useTimingStore();
+    if ((msg.type !== "H" && msg.type !== "P") || consoleLines.value.length < CONSOLE_LIMIT) pushConsole("rx", String(raw).trim());
+    // Nothing is judged or acked before the master proved the contract; E lines come again.
+    if (["E", "D", "T", "P"].includes(msg.type) && !contract.value.ok) {
+      stats.gated++;
+      return;
+    }
     switch (msg.type) {
       case "I":
-        identity.value = msg;
-        identityOk.value = msg.product === USB_PRODUCT;
-        if (!identityOk.value) notyf.error(`Unexpected device identity: ${msg.product}`);
+        onIdentity(msg, String(raw).trim());
         break;
       case "H":
         if (/^\d+$/.test(msg.nowTick || "")) heartbeat.value = { tick: BigInt(msg.nowTick), wallMs: now, uptimeMs: msg.uptimeMs, beaconSeq: msg.beaconSeq, nseen: msg.nseen };
         break;
-      case "D": {
-        const t = normalizeTelemetry(msg.telemetry, now);
-        if (!t) {
-          drop("tel.node_id");
-          break;
-        }
-        telemetry[t.node_id] = t;
-        if (t.node_id === NODE_MASTER) {
-          if (t.provisioned === 1) unprovisioned.value = false;
-          if (t.master_boot_id != null) {
-            if (masterBootId.value != null && masterBootId.value !== t.master_boot_id) pps.value = null;
-            masterBootId.value = t.master_boot_id;
-            timing.onMasterBoot(t.master_boot_id);
-          }
-        }
-        timing.onTelemetry(t.node_id);
+      case "D":
+        onTelemetry(msg.telemetry, now);
         break;
-      }
       case "E":
-        await handleEvent(msg.event, now);
+        await handleEventLine(msg.raw, now);
         break;
       case "T":
         clock.accept({ request_id: msg.requestId, master_tick: msg.masterTick, master_boot_id: msg.masterBootId });
-        if (Number.isInteger(msg.masterBootId)) masterBootId.value = msg.masterBootId;
+        if (Number.isInteger(msg.masterBootId)) setMasterBoot(msg.masterBootId);
         break;
-      case "P": {
-        const p = normalizePps(msg.pps, now);
-        if (p) pps.value = p;
-        else drop("pps");
+      case "P":
+        onPps(msg.pps, now);
         break;
-      }
       case "A":
         if (msg.cmd === "K" && provisionPending) resolveProvision("ok");
         break;
       case "X":
-        lastError.value = { reason: msg.reason, at: now };
-        if (msg.reason === "noprov") unprovisioned.value = true;
-        else if (msg.reason === "keyfail" && provisionPending) resolveProvision("keyfail");
-        else if (msg.reason === "clock") clock.close("The master rejected the clock request (X clock).");
+        onErrorLine(msg, now);
         break;
       default:
         drop("unknown_line");
     }
   }
 
-  async function handleEvent(event, now) {
-    const check = validateEvent(event);
-    if (!check.ok) {
-      drop(check.reason);
+  function onIdentity(msg, raw) {
+    const repeated = identityLine === raw; // the same boot answering ?ID again
+    identityLine = raw;
+    identity.value = msg;
+    contract.value = contractOf(msg);
+    const reason = Number.isInteger(msg.resetReason) ? resetNames(msg.resetReason).join(", ") : "unknown";
+    if (!repeated) log({ kind: "boot", code: reason, text: raw, devid: msg.devid ?? null });
+    if (!contract.value.ok) notyf.error(contract.value.reason);
+    useTimingStore().onMasterVersion({ usbProto: msg.usbProto, radioProto: msg.radioProto });
+  }
+
+  function onTelemetry(raw, now) {
+    const t = normalizeTelemetry(raw, now);
+    if (!t) {
+      drop("tel.format");
       return;
     }
+    telemetry[t.node_id] = t;
+    if (t.node_id !== NODE_MASTER) return;
+    if (t.provisioned === 1) unprovisioned.value = false;
+    if (t.master_boot_id != null) setMasterBoot(t.master_boot_id);
+    if (t.ver_drop != null) {
+      if (lastVerDrop != null && t.ver_drop > lastVerDrop) verDrop.value = { count: t.ver_drop, at: now };
+      lastVerDrop = t.ver_drop;
+    }
+  }
+
+  function setMasterBoot(id) {
+    if (masterBootId.value === id) return;
+    if (masterBootId.value != null) pps.value = null;
+    masterBootId.value = id;
+    useTimingStore().onMasterBoot(id);
+    if (ppsBootId.value !== id) useEdgesOf(id);
+  }
+
+  // Load the qualified PPS edges of a master boot (restore / reconnect / new boot).
+  async function useEdgesOf(bootId) {
+    if (bootId == null || ppsBootId.value === bootId) return;
+    ppsBootId.value = bootId;
+    ppsEdges.value = [];
+    const stored = await ppsLog.loadEdges(bootId);
+    if (ppsBootId.value !== bootId) return;
+    const merged = new Map(stored.map((e) => [e.tick, e]));
+    for (const e of ppsEdges.value) merged.set(e.tick, e);
+    ppsEdges.value = [...merged.values()].sort((a, b) => (BigInt(a.tick) < BigInt(b.tick) ? -1 : 1));
+  }
+
+  function onPps(raw, now) {
+    const p = normalizePps(raw, now);
+    if (!p) {
+      drop("pps");
+      return;
+    }
+    pps.value = p;
+    const bootId = masterBootId.value;
+    if (!p.seg || bootId == null || ppsBootId.value !== bootId) return;
+    if (ppsEdges.value.some((e) => e.tick === p.tick)) return;
+    const edge = { master_boot_id: bootId, tick: p.tick, seg: p.seg, n: p.n, utc: p.utc, received_at: now };
+    const list = ppsEdges.value;
+    ppsEdges.value = list.length && BigInt(list[list.length - 1].tick) < BigInt(edge.tick) ? [...list, edge] : [...list, edge].sort((a, b) => (BigInt(a.tick) < BigInt(b.tick) ? -1 : 1));
+    ppsLog.saveEdge(edge);
+    useTimingStore().onPpsEdge(edge);
+  }
+
+  function onErrorLine(msg, now) {
+    lastError.value = { reason: msg.reason, at: now };
+    if (msg.reason === "noprov") {
+      if (!unprovisioned.value) log({ kind: "X", code: msg.reason, text: msg.text });
+      unprovisioned.value = true;
+      return;
+    }
+    log({ kind: "X", code: msg.reason, text: msg.text });
+    if (msg.reason === "keyfail" && provisionPending) resolveProvision("keyfail");
+    else if (msg.reason === "clock") clock.close("The master rejected the clock request (X clock).");
+  }
+
+  function noteHead(hseq, now) {
+    if (head.value?.hseq === hseq) head.value = { ...head.value, lastSeenAt: now };
+    else head.value = { hseq, firstSeenAt: now, lastSeenAt: now };
+  }
+
+  function noteUnreadable(key, raw, reason) {
+    const n = (repeats.get(key) || 0) + 1;
+    repeats.set(key, n);
+    drop(reason);
+    if (n === UNREADABLE_ALARM_REPEATS) {
+      raiseAlarm(`unreadable:${key}`, "The master sent an event the console cannot read.");
+      log({ kind: "console", code: "unreadable_event", text: raw });
+    }
+  }
+
+  async function handleEventLine(raw, now) {
     stats.events++;
-    // Serialize: seq order, IDB commit, then the ack, then the engine.
+    const p = parseEventLine(raw);
+    if (p.stage === "unreadable") return noteUnreadable(`raw:${p.raw}`, p.raw, "event.unreadable");
+    noteHead(p.hseq, now);
+    if (p.stage === "crc") return noteUnreadable(`hseq:${p.hseq}`, p.raw, "event.crc");
+    if (p.stage === "invalid" && p.masterBootId == null) return noteUnreadable(`hseq:${p.hseq}`, p.raw, "event.boot");
+    // Serialized: store (one transaction), then ack, then evaluate.
     ackChain = ackChain
       .then(async () => {
-        const { row, duplicate } = await eventLog.ingest(check.row, now);
-        if (eventLog.isDurable() !== durable.value) {
-          durable.value = eventLog.isDurable();
-          durableError.value = eventLog.getInitError()?.message || null;
+        if (p.stage === "invalid") {
+          const { duplicate, marker } = await eventLog.ingestQuarantine({ raw: p.raw, reason: p.reason, node: p.node, hseq: p.hseq, masterBootId: p.masterBootId }, now);
+          syncDurability();
+          if (await transmitLine(formatAck(p))) stats.acks++;
+          if (duplicate) {
+            stats.duplicates++;
+            return;
+          }
+          stats.quarantined++;
+          quarantine.value = { count: stats.quarantined, reason: p.reason, node: p.node, at: now };
+          log({ kind: "console", code: "quarantine", text: `${p.reason}: ${p.raw}` });
+          notyf.error(`Quarantined an invalid event from ${p.node === NODE_MASTER ? "the master" : p.node ? `sensor ${p.node}` : "an unknown node"} (${p.reason}).`);
+          useTimingStore().onEventRows([marker]);
+          return;
         }
-        // Only now may the master evict it from its RAM delivery queue.
-        if (await transmitLine(formatAck(row))) stats.acks++;
+        const { duplicate, rows } = await eventLog.ingestLine({ rows: p.rows, masterBootId: p.masterBootId, hseq: p.hseq }, now);
+        syncDurability();
+        // Only now may the master drop the line from its queue.
+        if (await transmitLine(formatAck(p))) stats.acks++;
         if (duplicate) {
           stats.duplicates++;
           return;
         }
-        useTimingStore().onEventRows([row]);
+        useTimingStore().onEventRows(rows);
       })
       .catch((e) => notyf.error(`Event handling failed: ${e.message}`));
     await ackChain;
@@ -175,7 +338,7 @@ export const useDeviceStore = defineStore("device", () => {
     p.resolve(result);
   }
 
-  // Send the fleet key; resolves "ok" | "keyfail" | "timeout".
+  // Send the fleet key; resolves "ok" | "keyfail" | "timeout". Works for any board role.
   function provisionKey(hex) {
     if (!isHexKey(hex)) return Promise.reject(new Error("The key must be 64 hex characters."));
     if (!transport?.connected) return Promise.reject(new Error("The master is not connected."));
@@ -200,14 +363,14 @@ export const useDeviceStore = defineStore("device", () => {
     return transmitLine("CP");
   }
 
-  // Calibration to freeze into a run: only a valid, fresh PPS estimate counts. null = nominal.
-  function ppsCalibration(now = Date.now()) {
+  // Latest GPS report for the START snapshot (reference only), or null when stale.
+  function gpsReport(now = Date.now()) {
     const p = pps.value;
-    if (!p || p.valid !== 1 || now - p.at > 3000) return null;
-    return { ppb: p.ppb, ppsTick: p.tick, utc: p.utc, fix: p.fix, sats: p.sats, span: p.span };
+    if (!p || now - p.at > GPS_REPORT_MAX_AGE_MS) return null;
+    return { valid: p.valid, ppb: p.ppb, fix: p.fix, sats: p.sats, span: p.span, utc: p.utc, tick: p.tick };
   }
 
-  /* Screen Wake Lock: keep the bridge tab awake while connected. */
+  /* Screen Wake Lock: keep the console awake while connected. */
   async function acquireWakeLock() {
     try {
       if ("wakeLock" in navigator && !wakeLock) wakeLock = await navigator.wakeLock.request("screen");
@@ -236,13 +399,23 @@ export const useDeviceStore = defineStore("device", () => {
     else notyf.error("The master was disconnected.");
   }
 
+  function resetSession() {
+    identity.value = null;
+    contract.value = contractOf(null);
+    heartbeat.value = null;
+    pps.value = null;
+    head.value = null;
+    unprovisioned.value = false;
+    lastVerDrop = null;
+    identityLine = null;
+    repeats.clear();
+  }
+
   function finishDisconnect() {
     connected.value = false;
     connecting.value = false;
     dfuInProgress.value = false;
-    identityOk.value = false;
-    heartbeat.value = null;
-    pps.value = null;
+    resetSession();
     releaseWakeLock();
     clock.close("The master was disconnected.");
     if (provisionPending) resolveProvision("timeout");
@@ -270,9 +443,7 @@ export const useDeviceStore = defineStore("device", () => {
       transportKind.value = kind;
       connected.value = true;
       connecting.value = false;
-      identity.value = null;
-      identityOk.value = false;
-      unprovisioned.value = false;
+      resetSession();
       lastLineAt.value = Date.now();
       acquireWakeLock();
       transmitLine("?ID");
@@ -319,11 +490,14 @@ export const useDeviceStore = defineStore("device", () => {
     transportKind,
     identity,
     identityOk,
+    contract,
     lastLineAt,
     heartbeat,
     telemetry,
     masterBootId,
     pps,
+    ppsEdges,
+    ppsBootId,
     unprovisioned,
     lastError,
     dropped,
@@ -332,17 +506,31 @@ export const useDeviceStore = defineStore("device", () => {
     dfuInProgress,
     durable,
     durableError,
+    storageWarning,
+    alarms,
+    quarantine,
+    verDrop,
+    head,
+    logEntries,
     masterFresh,
+    pipelineHealth,
     tickToWallMs,
     connect,
     disconnect,
     transmitLine,
     readClock,
     requestCheckpoint,
-    ppsCalibration,
+    gpsReport,
+    useEdgesOf,
     provisionKey,
     enterBootloader,
     fakeTransport,
     handleLine,
+    requestPersistence,
+    loadLog,
+    clearLog,
+    exportLog,
+    dismissAlarm,
+    syncDurability,
   };
 });

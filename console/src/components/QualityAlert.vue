@@ -2,6 +2,7 @@
 import { computed, ref } from "vue";
 import { useTimingStore } from "../stores/timing";
 import { MODE_LABEL, ROLE_LABEL } from "../lib/constants";
+import { faultWindow } from "../lib/fault-text";
 
 const timing = useTimingStore();
 const dismissed = ref(null);
@@ -10,13 +11,14 @@ const fault = computed(() => (timing.fault?.fault_id && timing.fault.fault_id !=
 
 function title(f) {
   const label = MODE_LABEL[f.mode] || f.mode;
-  return f.kind === "measurement" ? `${label}: run invalidated by a measurement fault` : `${label}: run stopped by a link quality fault`;
+  if (f.kind === "protocol") return `${label}: run closed by a protocol change`;
+  return f.kind === "measurement" ? `${label}: run invalidated by a measurement fault` : `${label}: run invalidated`;
 }
 
 function reasonText(reason) {
-  const node = reason?.node_id === "0" ? "Master" : reason?.node_id ? `Sensor ${reason.node_id}` : "";
-  const role = reason?.role ? `/${ROLE_LABEL[reason.role] || reason.role}` : "";
-  return `${node}${role}${node || role ? ": " : ""}${reason?.reason || "Unknown cause."}`;
+  const role = reason?.role ? `${ROLE_LABEL[reason.role] || reason.role}: ` : "";
+  const span = faultWindow(reason, timing.run?.boundaryTick);
+  return `${role}${reason?.reason || "Unknown cause."}${span ? ` (${span})` : ""}`;
 }
 
 function occurredAt(value) {

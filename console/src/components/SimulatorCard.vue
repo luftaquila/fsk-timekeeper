@@ -30,13 +30,17 @@ function act(fn) {
           <button class="btn btn-success btn-sm" @click="act((f) => f.crossing(node))">Crossing</button>
           <button class="btn btn-ghost btn-sm" @click="act((f) => f.checkpoint(node))">Checkpoint</button>
           <button class="btn btn-warning btn-sm" @click="act((f) => f.loss(node, 1))">Loss</button>
+          <button class="btn btn-warning btn-sm" @click="act((f) => f.loss(node, 1, { unknownTime: true }))">Loss (time unknown)</button>
+          <button class="btn btn-warning btn-sm" @click="act((f) => f.injectBadLine(node))">Invalid event</button>
+          <button class="btn btn-warning btn-sm" @click="act((f) => f.corruptNext())">Corrupt next line</button>
           <button class="btn btn-warning btn-sm" @click="act((f) => f.rebootSensor(node))">Reboot sensor</button>
           <button class="btn btn-danger btn-sm" @click="act((f) => f.masterClockFault())">Master clock fault</button>
           <button class="btn btn-danger btn-sm" @click="act((f) => f.rebootMaster())">Reboot master</button>
           <button class="btn btn-ghost btn-sm" @click="act((f) => f.addSensor((0x10000000 + Math.floor(Math.random() * 0xefffffff)).toString(16).toUpperCase()))">Add sensor</button>
           <button class="btn btn-ghost btn-sm" @click="act((f) => f.setGps({ ppb: f.gps.ppb ? 0 : 100000 }))">GPS {{ fake.gps.ppb ? "→ 0" : "+100" }} ppm</button>
           <button class="btn btn-ghost btn-sm" @click="act((f) => f.setGps({ valid: !f.gps.valid, fix: f.gps.valid ? 0 : 1 }))">GPS {{ fake.gps.valid ? "off" : "on" }}</button>
-$1        </template>
+          <button class="btn btn-ghost btn-sm" @click="act((f) => f.breakGpsSegment())">Break PPS segment</button>
+        </template>
       </div>
     </div>
   </div>
@@ -52,9 +56,5 @@ $1        </template>
 .node {
   width: auto;
   font-family: var(--font-mono);
-}
-.muted {
-  color: var(--text-tertiary);
-  font-size: 0.8rem;
 }
 </style>

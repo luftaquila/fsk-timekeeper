@@ -1,18 +1,21 @@
 <script setup>
 import { computed } from "vue";
+import { useTimingStore } from "../stores/timing";
 
-const props = defineProps({
-  source: { type: Object, required: true },
+defineProps({
   title: { type: String, required: true },
   note: { type: String, default: "" },
 });
 
+const timing = useTimingStore();
+
 const badge = computed(() => {
-  const v = props.source.verification;
-  if (!props.source.run) return null;
-  if (v === "verified") return { cls: "badge-success", text: props.source.run.closed ? "Verified" : "Verified so far" };
-  if (v === "invalid") return { cls: "badge-danger", text: "Invalid" };
-  return { cls: "badge-warning", text: props.source.armed ? "Measuring — awaiting confirmation" : "Pending" };
+  const run = timing.run;
+  if (!run) return null;
+  if (run.verification === "verified") return { cls: "badge-success", text: run.closed ? "Verified" : "Verified so far" };
+  if (run.verification === "invalid") return { cls: "badge-danger", text: "Invalid" };
+  if (run.verification === "dnf") return { cls: "badge-default", text: run.dnfReason === "DNS" ? "DNS — no start" : "DNF — no finish" };
+  return { cls: "badge-warning", text: run.armed ? "Measuring — awaiting confirmation" : "Pending" };
 });
 </script>
 
@@ -25,8 +28,8 @@ const badge = computed(() => {
       </div>
       <div class="timer-section">
         <div class="timer-display">
-          <span class="traffic-light" :class="source.lightColor"></span>
-          <span class="clock">{{ source.clockDisplay }}</span>
+          <span class="traffic-light" :class="timing.lightColor"></span>
+          <span class="clock">{{ timing.live.clockDisplay }}</span>
         </div>
         <span v-if="badge" class="badge" :class="badge.cls">{{ badge.text }}</span>
       </div>

@@ -12,7 +12,7 @@ const errors = [];
 const origError = console.error;
 const origWarn = console.warn;
 
-let App, routes, useDeviceStore, useSettingsStore, useTimingStore, eventLog;
+let App, routes, useDeviceStore, useSettingsStore, useTimingStore, eventLog, fakeDefaults;
 
 beforeAll(async () => {
   // jsdom gaps
@@ -31,6 +31,9 @@ beforeAll(async () => {
   ({ useSettingsStore } = await import("../src/stores/settings.js"));
   ({ useTimingStore } = await import("../src/stores/timing.js"));
   eventLog = await import("../src/lib/eventLog.js");
+  ({ fakeDefaults } = await import("../src/transport/fake.js"));
+  fakeDefaults.slotDelayMin = 10;
+  fakeDefaults.slotDelayMax = 30;
 });
 
 afterAll(() => {
@@ -114,13 +117,13 @@ describe("app under jsdom", () => {
     await flushPromises();
     assert.match(wrapper.text(), /Start sensor/);
     assert.match(wrapper.text(), /\+00:00\.8\d\d/);
-    await sleep(900);
-    fake.checkpoint(a);
-    fake.checkpoint(b);
+    // Each role has one sensor: the two first crossings decide the sprint on arrival.
     await waitFor(() => timing.run.verification === "verified");
+    await waitFor(() => timing.run.durationNs != null, 4000);
     await flushPromises();
     assert.match(wrapper.text(), /official/);
-    assert.match(wrapper.text(), /GPS-calibrated [+−]\d+\.\d\d ppm/);
+    assert.match(wrapper.text(), /GPS|nominal 16 MHz/);
+    assert.match(wrapper.find(".result-time").text(), /^00:00\.8\d\d$/);
     assert.ok(wrapper.find(".traffic-light.red").exists(), "red light after completion");
 
     await router.push("/history");

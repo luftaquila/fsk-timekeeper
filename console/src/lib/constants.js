@@ -1,8 +1,8 @@
 // Timing modes and instrument-wide constants. Pure module (no Vue).
 
 // Modes are named by mechanism, not by competition event.
-//  - sprint: two sensors, first start crossing opens the interval, first finish crossing closes it.
-//  - laps:   one sensor, first crossing = t0, every later crossing ends a lap; result = sum of laps.
+//  - sprint: first start crossing opens the interval, the first finish crossing after it closes it.
+//  - laps:   start-role crossings only; every crossing after the first ends a lap.
 export const MODES = ["sprint", "laps"];
 
 export const MODE_LABEL = {
@@ -19,11 +19,23 @@ export const REQUIRED_ROLES = Object.freeze({
   laps: ["start"],
 });
 
-// Telemetry older than this is treated as unknown (server contract).
+// A D line older than this is no report (= the firmware's LINK_OK_MS).
 export const WIRELESS_STATUS_MAX_AGE_MS = 12000;
-// A sensor sync anchor older than this cannot back a normal capture.
-export const WIRELESS_SYNC_MAX_AGE_MS = 7000;
 export const WIRELESS_MAX_SKEW_PPM = 100;
+
+// START refuses while the master's host queue is this full, or while the same E line keeps
+// arriving for longer than HEAD_STUCK_MS.
+export const QUEUE_HEALTH_RATIO = 0.75;
+export const HEAD_STUCK_MS = 5000;
+// Repeats of one unreadable E line before the fatal alarm.
+export const UNREADABLE_ALARM_REPEATS = 10;
+
+// A decided result waits at most this long for the next qualified PPS edge before freezing.
+export const CALIBRATION_WAIT_MS = 2000;
+
+export const LOG_RETENTION_MS = 30 * 24 * 3600 * 1000;
+export const LOG_MAX_ENTRIES = 5000;
+export const PPS_RETENTION_MS = 7 * 24 * 3600 * 1000;
 
 export const DEFAULT_DEBOUNCE_MS = 300;
 export const DEBOUNCE_MIN_MS = 0;
