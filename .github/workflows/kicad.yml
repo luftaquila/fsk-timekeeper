@@ -24,10 +24,8 @@ jobs:
           version: 1.0
 
       # Both checks run with --exit-code-violations so violations are annotated,
-      # but they do not block the artifact yet: the schematic still reports
-      # pin_to_pin (SuperMini symbol power-output GND/BAT+ pins) and
-      # power_pin_not_driven errors, and the board two starved_thermal errors.
-      # Drop `continue-on-error` once the design is clean.
+      # and continue-on-error keeps them from blocking the artifact. Known ERC
+      # items are excluded in the project file (erc.erc_exclusions).
       - name: Schematic ERC
         continue-on-error: true
         run: |

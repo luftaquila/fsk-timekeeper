@@ -260,7 +260,28 @@
     "equivalence_files": []
   },
   "erc": {
-    "erc_exclusions": [],
+    "erc_exclusions": [
+      [
+        "pin_to_pin|482600|787400|12fe299c-5aa5-4c59-a706-f0d13e5bb0a8|05961820-8e0a-4502-b657-609231da09c6|/b99e92f0-86c3-482a-a7ae-e3f31060cbed|/b99e92f0-86c3-482a-a7ae-e3f31060cbed|/b99e92f0-86c3-482a-a7ae-e3f31060cbed",
+        "SuperMini symbol declares its GND and BAT+ pins as power outputs"
+      ],
+      [
+        "pin_to_pin|482600|812800|05961820-8e0a-4502-b657-609231da09c6|3e255603-12eb-45fe-81e4-bc4104e73fba|/b99e92f0-86c3-482a-a7ae-e3f31060cbed|/b99e92f0-86c3-482a-a7ae-e3f31060cbed|/b99e92f0-86c3-482a-a7ae-e3f31060cbed",
+        "SuperMini symbol declares its GND and BAT+ pins as power outputs"
+      ],
+      [
+        "pin_to_pin|863600|736600|59b5a2c9-93d9-4c02-926c-51a119db880e|c1d5b064-7f4e-48ef-a4b0-340e106ce4b6|/b99e92f0-86c3-482a-a7ae-e3f31060cbed|/b99e92f0-86c3-482a-a7ae-e3f31060cbed|/b99e92f0-86c3-482a-a7ae-e3f31060cbed",
+        "SuperMini symbol declares its GND and BAT+ pins as power outputs"
+      ],
+      [
+        "pin_to_pin|863600|762000|6fadc3de-9c24-41da-9afc-bda3c433c69f|3e255603-12eb-45fe-81e4-bc4104e73fba|/b99e92f0-86c3-482a-a7ae-e3f31060cbed|/b99e92f0-86c3-482a-a7ae-e3f31060cbed|/b99e92f0-86c3-482a-a7ae-e3f31060cbed",
+        "SuperMini symbol declares its GND and BAT+ pins as power outputs"
+      ],
+      [
+        "power_pin_not_driven|2438400|838200|28d88b88-a141-4924-bcba-a086b8fd0472|00000000-0000-0000-0000-000000000000|/b99e92f0-86c3-482a-a7ae-e3f31060cbed|/b99e92f0-86c3-482a-a7ae-e3f31060cbed|",
+        "+12V is driven by the boost diode D1, a passive pin"
+      ]
+    ],
     "meta": {
       "version": 0
     },
