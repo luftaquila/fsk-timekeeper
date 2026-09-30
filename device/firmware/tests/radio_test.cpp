@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "../src/radio.cpp"
+#include "../src/protocol.h"
 
 /* ---- clock --------------------------------------------------------------- */
 static uint64_t now_us;
@@ -175,6 +176,28 @@ int main(int argc, char **argv)
         uint64_t t0 = now_us;
         assert(radio_begin() != 0);
         assert(now_us - t0 <= 5u * (RADIO_PROBE_MS + RADIO_SPI_TIMEOUT_MS + 5u) * 1000u); /* ~0.5 s, not ~10 s */
+    } else if (!strcmp(scenario, "receive")) {
+        power_on();
+        assert(radio_begin() == 0);
+        for (int i = 0; i < 60; i++) { chip.buf[i] = (uint8_t)(i * 7); }
+        chip.rx_lengths = { 60 };
+        set_line(PIN_LORA_DIO1, true);
+        uint8_t buf[WIRE_MAX];
+        assert(radio_receive(buf, sizeof(buf), NULL, NULL) == 60);
+        for (int i = 0; i < 60; i++) { assert(buf[i] == (uint8_t)(i * 7)); }
+    } else if (!strcmp(scenario, "receive_zero_length")) {
+        /* the length read fails (0) while the packet is long: never read past maxlen */
+        power_on();
+        assert(radio_begin() == 0);
+        chip.rx_lengths = { 0, 200 };
+        chip.frames.clear();
+        set_line(PIN_LORA_DIO1, true);
+        uint8_t buf[256];
+        assert(radio_receive(buf, WIRE_MAX, NULL, NULL) < 0);
+        for (const frame_t &f : chip.frames) {
+            if (f[0] == RADIOLIB_SX126X_CMD_READ_BUFFER) { assert(f.size() <= 3u + WIRE_MAX); }
+        }
+        assert(notes[EL_RX_FAIL] == 1);
     } else {
         fprintf(stderr, "unknown scenario: %s\n", scenario);
         return 2;

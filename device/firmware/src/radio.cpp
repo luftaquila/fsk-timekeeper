@@ -153,6 +153,13 @@ extern "C" int radio_receive(uint8_t *buf, int maxlen, float *rssi, float *snr)
         return 0;
     }
     size_t len = radio.getPacketLength();
+    /* A failed length read gives 0, and readData(buf, 0) takes the whole packet
+     * whatever its size. */
+    if (len == 0) {
+        radio_start_rx();
+        el_note(EL_RX_FAIL);
+        return -1;
+    }
     if (len > (size_t)maxlen) {
         len = (size_t)maxlen;
     }
