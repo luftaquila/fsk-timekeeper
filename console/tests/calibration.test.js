@@ -140,6 +140,16 @@ describe("PPS timeline", () => {
     assert.equal(pointsMethod(calibrationPoints(edges, [osc(50), beyond])), "gps-extrapolated");
   });
 
+  it("a one-edge segment extrapolates with the nearest measured frequency, not the nominal one", () => {
+    const osc = oscillator({ a: 30e-6, b: 0 });
+    // a lone qualified edge more than an hour after the last segment: its own island
+    const edges = [...edgesOf(osc, range(0, 60), { seg: 1, utc0: null }), ...edgesOf(osc, [8000], { seg: 2, utc0: null })];
+    const timeline = buildTimeline(edges);
+    assert.equal(timeline.segs[1].island, 1);
+    const drift = (seconds(timeline, osc(8060)) - seconds(timeline, osc(8000)) - 60) * 1e9;
+    assert.ok(Math.abs(drift) < 100, `${drift} ns over 60 s`); // nominal: +1.8 ms
+  });
+
   it("separates islands beyond an hour without UTC and keeps T continuous at the midpoint", () => {
     const osc = oscillator({ a: 10e-6, b: 0 });
     const edges = [...edgesOf(osc, range(0, 10), { seg: 1, utc0: null }), ...edgesOf(osc, range(8000, 8010), { seg: 2, utc0: null })];

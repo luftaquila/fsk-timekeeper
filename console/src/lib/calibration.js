@@ -89,9 +89,27 @@ function endWindow(seg, atEnd) {
   return { f: q(last.tick - first.tick, last.n - first.n), mid: q(last.n - first.n, 2n) };
 }
 
-// Ticks per second measured over at most WINDOW_S seconds at one end of a segment.
-function segmentFrequency(seg, atEnd) {
-  return endWindow(seg, atEnd)?.f ?? q(F_NOMINAL);
+// Ticks per second at one end of segs[index]: measured over at most WINDOW_S seconds there, else
+// at the facing end of the nearest segment in time that has a measured window (the crystal
+// runs on whatever the GPS does), else nominal.
+function segmentFrequency(segs, index, atEnd) {
+  const own = endWindow(segs[index], atEnd);
+  if (own) return own.f;
+  const seg = segs[index];
+  let best = null;
+  let bestGap = null;
+  segs.forEach((other, j) => {
+    if (j === index) return;
+    const before = j < index;
+    const w = endWindow(other, before);
+    if (!w) return;
+    const gap = before ? seg.edges[0].tick - other.edges[other.edges.length - 1].tick : other.edges[0].tick - seg.edges[seg.edges.length - 1].tick;
+    if (bestGap == null || gap < bestGap) {
+      best = w.f;
+      bestGap = gap;
+    }
+  });
+  return best ?? q(F_NOMINAL);
 }
 
 // Frequencies at L (last edge of a) and F (first edge of b), k seconds apart: the two end
@@ -165,8 +183,8 @@ export function buildTimeline(edges) {
     island += 1;
     seg.island = island;
     const mid = q(L.tick + F.tick, 2n);
-    const tMid = add(tL, div(sub(mid, q(L.tick)), segmentFrequency(prev, true)));
-    const tF = add(tMid, div(sub(q(F.tick), mid), segmentFrequency(seg, false)));
+    const tMid = add(tL, div(sub(mid, q(L.tick)), segmentFrequency(segs, i - 1, true)));
+    const tF = add(tMid, div(sub(q(F.tick), mid), segmentFrequency(segs, i, false)));
     seg.base = sub(tF, q(F.n));
   }
   const flat = [];
@@ -212,8 +230,8 @@ export function timeAt(timeline, tickValue) {
   if (!edges.length) return { t: q(tick, F_NOMINAL), how: "nominal", extrapTicks: null, island: null };
   const i = lastAtOrBefore(edges, tick);
   if (i >= 0 && edges[i].tick === tick) return { t: edges[i].t, how: "interp", extrapTicks: null, island: edges[i].island };
-  const forward = (e) => ({ t: add(e.t, div(q(tick - e.tick), segmentFrequency(timeline.segs[e.seg], true))), how: "extrap", extrapTicks: tick - e.tick, island: e.island });
-  const backward = (e) => ({ t: sub(e.t, div(q(e.tick - tick), segmentFrequency(timeline.segs[e.seg], false))), how: "extrap", extrapTicks: e.tick - tick, island: e.island });
+  const forward = (e) => ({ t: add(e.t, div(q(tick - e.tick), segmentFrequency(timeline.segs, e.seg, true))), how: "extrap", extrapTicks: tick - e.tick, island: e.island });
+  const backward = (e) => ({ t: sub(e.t, div(q(e.tick - tick), segmentFrequency(timeline.segs, e.seg, false))), how: "extrap", extrapTicks: e.tick - tick, island: e.island });
   if (i < 0) return backward(edges[0]);
   if (i === edges.length - 1) return forward(edges[i]);
   const a = edges[i];
