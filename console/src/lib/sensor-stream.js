@@ -1,4 +1,4 @@
-/* One sensor's evidence timeline for a run (PLAN §2.4 (1)).
+/* One sensor's evidence timeline for a run.
  *
  * capture_seq order is capture-time order. Walking the stream from the START checkpoint,
  * `known` is the tick through which every edge of this sensor is identified (delivered or
@@ -140,12 +140,9 @@ export function sensorStream(run, node, rows, { sessionEnd = null } = {}) {
   return { node_id: node, role: src.role, known, edges, holes };
 }
 
-/* Per-sensor debounce (leading edge, against the last accepted crossing) and hole
- * significance above `after` (exclusive). A hole wholly inside [c, c + D) of the last
- * accepted crossing c is harmless — its edges would be debounced anyway. The first other
- * hole cuts the list: crossings above cut are uncertain.
- * -> { accepted: bigint[], cut, final, cutHole, certain }
- */
+/* Per-sensor debounce (leading edge) and hole significance above `after` (exclusive): a hole
+ * wholly inside [c, c + D) of the last accepted crossing c is harmless; the first other hole cuts
+ * the list (crossings above cut are uncertain). -> { accepted: bigint[], cut, final, cutHole, certain } */
 export function acceptCrossings(stream, { after, debounceTicks }) {
   const items = [
     ...stream.edges.map((e) => ({ at: e.tick, order: 0, edge: e })),

@@ -33,10 +33,9 @@ uint32_t sec_boot_id(void);
 /* Non-cryptographic 32-bit random value (MAC slot contention). */
 uint32_t sec_random(void);
 
-/* Seal payload into out[] as [header | ciphertext | mac]. node_id is the
- * sender's id (ignored for downlink types, always the master). Returns the wire
- * length, or <0: -1 out too small, -3 counter exhausted, -4 unprovisioned or no
- * boot id. Advances the tx counter. */
+/* Seal payload into out[] as [header | ciphertext | mac]; node_id is the sender's (ignored for
+ * downlink, always the master). Returns the wire length, or -1 out too small, -3 counter
+ * exhausted, -4 unprovisioned or no boot id. Advances the tx counter. */
 int sec_seal(uint8_t *out, int out_cap, uint8_t type, uint32_t node_id,
              const void *payload, int payload_len);
 

@@ -209,7 +209,7 @@ static void emit_pps(void)
 }
 
 /* USB unplugged: stop every radio activity until VBUS returns, then reboot
- * into a new session (W1). A battery-less master simply loses power. */
+ * into a new session. A battery-less master simply loses power. */
 static void master_stopped(mp_state_t *power, int radio_up)
 {
     if (radio_up) { radio_standby(); }

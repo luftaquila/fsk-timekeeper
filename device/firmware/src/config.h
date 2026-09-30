@@ -49,14 +49,9 @@
  * sensor-to-sensor intervals; 0 until measured. */
 #define T_AIR_REF_TICKS 0u
 
-/* Frame timing (DESIGN §2.8). The master starts a beacon every
- * BEACON_PERIOD_MS on a TIMER1 grid. Sensor k owns slot k, which starts
- * SLOT_OFFSET_MS + k * SLOT_LEN_MS after the beacon RxDone; an uplink is ~77 ms
- * on air, and the last slot ends ~390 ms before the next beacon starts.
- * Standby keeps the TCXO running (radio.cpp), so RX and CAD start without its
- * 5 ms wait. A CAD may still end on the RC oscillator, so the budget keeps that
- * wait before a TX: one let through at SLOT_LATE_MS goes on air at most ~7 ms
- * later (SPI + TCXO) and ends by ~99 ms. */
+/* Frame timing (DESIGN §2.8): a beacon every BEACON_PERIOD_MS on a TIMER1 grid; slot k starts
+ * SLOT_OFFSET_MS + k * SLOT_LEN_MS after its RxDone and holds a ~77 ms uplink. A TX let through
+ * at SLOT_LATE_MS is on air <= ~7 ms later (SPI + TCXO start after a CAD) and ends by ~99 ms. */
 #define BEACON_PERIOD_MS   1000u
 #define SLOT_OFFSET_MS     50u
 #define SLOT_LEN_MS        100u
@@ -84,9 +79,8 @@
  * apart; otherwise they become losses of unknown time. */
 #define SYNC_HOLD_MAX_MS 60000u
 
-/* Skew correction of capture timestamps (DESIGN §2.5): applied only when the
- * estimate is plausible, built from enough samples over a long enough span, and
- * at most SKEW_MAX_EXTRAP_MS past the anchor. The raw estimate is still reported
+/* Skew correction (DESIGN §2.5): only for a plausible estimate from enough samples over a long
+ * enough span, at most SKEW_MAX_EXTRAP_MS past the anchor. The raw estimate is still reported
  * so an RC fallback (~10000 ppm) stays visible. */
 #define SKEW_CLAMP_PPM      100      /* max plausible XO drift; a real XO is < +-40 ppm */
 #define SKEW_MIN_SAMPLES    4u       /* offset samples required before trusting the slope */
@@ -100,10 +94,9 @@
 #define MASTER_EVENT_QUEUE_LEN 16u
 #define MASTER_USB_RETRY_MS    100u
 
-/* Radio recovery: reset after this many consecutive SPI no-responses or failed
- * CADs (a radio that reset itself fails the CAD start: it is back in GFSK), or
- * when a sensor has heard no beacon for BEACON_LOSS_RESET_MS; repeated resets
- * back off exponentially up to RADIO_RESET_BACKOFF_MAX_MS. */
+/* Radio recovery: reset after this many consecutive SPI no-responses or failed CADs (a radio
+ * that reset itself is back in GFSK and fails the CAD start), or when a sensor hears no beacon
+ * for BEACON_LOSS_RESET_MS; resets back off up to RADIO_RESET_BACKOFF_MAX_MS. */
 #define RADIO_NORESP_RESET         3u
 #define BEACON_LOSS_RESET_MS       10000u
 #define RADIO_RESET_BACKOFF_MAX_MS 60000u
@@ -126,10 +119,9 @@
 #define FAULT_REBOOT_MAX 3u
 #define FAULT_STABLE_MS  60000u
 
-/* GPS PPS qualification (master). Consecutive edges must be one nominal second
- * apart within PPS_MAX_DEV_PPM; RMC status A must be fresh; HFXO must run. RMC A
- * is a conservative, expiring qualification, not a PPS accuracy certificate.
- * The trailing ppb window is capped at PPS_MAX_SPAN_S. Wire ticks stay raw. */
+/* PPS qualification (master): consecutive edges one second apart within PPS_MAX_DEV_PPM, fresh
+ * RMC status A (an expiring prerequisite, not an accuracy certificate), HFXO running. The ppb
+ * window is capped at PPS_MAX_SPAN_S; wire ticks stay raw. */
 #define PPS_MAX_DEV_PPM     200u
 #define PPS_MIN_SPAN_S      8u
 #define PPS_MAX_SPAN_S      64u

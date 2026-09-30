@@ -1,4 +1,4 @@
-/* Master MAC (DESIGN §2.8, W2): a beacon every BEACON_PERIOD_MS on the TIMER1
+/* Master MAC (DESIGN §2.8): a beacon every BEACON_PERIOD_MS on the TIMER1
  * grid with the slot table and cumulative ACKs, then receive-only through the
  * slots. Checks transport integrity only (authentication, session, replay,
  * order); judging the evidence is the console's job. Main-loop context. */

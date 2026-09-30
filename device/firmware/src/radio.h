@@ -28,19 +28,17 @@ int radio_standby(void);
  * may be NULL), 0 = nothing, < 0 = receive error. Re-arms reception. */
 int radio_receive(uint8_t *buf, int maxlen, float *rssi, float *snr);
 
-/* Wait out a reception in progress. A preamble with no header after
- * header_wait_ms is noise (it may be a stale detection: the flags stay latched
- * until the next CAD or TX); a packet still arriving after max_ms returns
- * RADIO_RX_BUSY. */
+/* Wait out a reception in progress: a preamble with no header after header_wait_ms is noise
+ * (maybe stale: the flags stay latched until the next CAD or TX); a packet still arriving
+ * after max_ms returns RADIO_RX_BUSY. */
 #define RADIO_RX_IDLE   0 /* nothing on air for us */
 #define RADIO_RX_PACKET 1 /* a packet is ready for radio_receive() */
 #define RADIO_RX_BUSY   2 /* a packet is still arriving */
 int radio_rx_settle(uint32_t header_wait_ms, uint32_t max_ms);
 
-/* Listen-before-talk channel activity detection, bounded by CAD_TIMEOUT_MS.
- * Returns 1 = LoRa activity (the radio is back in receive), 0 = clear (standby,
- * ready to transmit). A scan error or timeout counts as clear so the beacon is
- * never starved by a flaky scan. */
+/* Listen-before-talk CAD, bounded by CAD_TIMEOUT_MS: 1 = LoRa activity (back in receive),
+ * 0 = clear (standby, ready to transmit). A scan error or timeout counts as clear so the beacon
+ * is never starved by a flaky scan. */
 int radio_cad(void);
 
 /* Consecutive SPI no-responses or failed CADs reached RADIO_NORESP_RESET. */

@@ -1,16 +1,15 @@
-/* A role (start / finish) combines its sensors' independently debounced crossings
- * (PLAN §2.4 (2)). The role is certain through T when every member is: identified through T
- * and no significant hole below T. */
+/* A role (start / finish) combines its sensors' independently debounced crossings. The
+ * role is certain through T when every member is: identified through T and no significant
+ * hole below T. */
 import { acceptCrossings } from "./sensor-stream";
 
 // A sensor whose evidence has ended (reboot, master session end, capture order fault): an
 // open-ended hole from its known tick on. Nothing it could still report is missing.
 const ended = (stream) => stream.holes.some((h) => h.hi === Infinity && h.lo <= stream.known);
 
-// streams: sensorStream() results of the role's members.
-// -> { accepted: [{node_id, tick}], certain, finalCut, cuts: [{node_id, cut, final, hole}], settled }
-// settled: every member is certain through finalCut or has ended, so no later report can move a
-// crossing the result needs before it.
+// streams: sensorStream() results of the role's members. -> { accepted: [{node_id, tick}], certain,
+// finalCut, cuts: [{node_id, cut, final, hole}], settled }; settled: every member is certain through
+// finalCut or has ended, so no later report can move a needed crossing before it.
 export function roleStream(streams, { after, debounceTicks }) {
   const accepted = [];
   const cuts = [];

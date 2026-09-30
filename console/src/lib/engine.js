@@ -1,4 +1,4 @@
-/* Run engine: START snapshot, evidence evaluation and run states (PLAN §2.4).
+/* Run engine: START snapshot, evidence evaluation and run states.
  *
  * A run is a plain JSON-able object:
  * {
@@ -165,10 +165,8 @@ function reasonOf(cut) {
   return { node_id: hole.master ? "0" : cut.node_id, role: cut.role, reason, lo: tickText(hole.lo), hi: tickText(hole.hi) };
 }
 
-/* Evaluate a run against every stored row since its cursor. Pure.
- * -> { run, crossings: [{node_id, role, tick, confirmed}], laps: [{startTick, endTick, confirmed}],
- *      certain: {start, finish} }
- */
+/* Evaluate a run against every stored row since its cursor. Pure. -> { run, crossings:
+ * [{node_id, role, tick, confirmed}], laps: [{startTick, endTick, confirmed}], certain: {start, finish} } */
 export function evaluateRun(run, rows, { now = Date.now() } = {}) {
   const boundary = BigInt(run.boundaryTick);
   const debounceTicks = BigInt(run.debounceMs) * MASTER_TICKS_PER_MS;

@@ -1,4 +1,4 @@
-/* MAC simulator (W2): one master and several sensors on a shared virtual air
+/* MAC simulator: one master and several sensors on a shared virtual air
  * run the production mac_master.c / mac_sensor.c with the real sync, FIFO,
  * registry, host queue and line formats. Only the hardware boundary is fake:
  * radio (airtime, collisions, loss, half duplex), TIMER1 captures, clocks with

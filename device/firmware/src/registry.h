@@ -23,8 +23,6 @@ typedef struct {
     /* diagnostics of the last uplink */
     float    rssi, snr;
     uint32_t lat_ms;
-    uint8_t  health;
-    uint16_t sync_age_ms;
     ul_diag_t diag;
 } reg_entry_t;
 

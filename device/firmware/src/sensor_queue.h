@@ -1,4 +1,4 @@
-/* Sensor evidence FIFO (DESIGN §2.8, W2). Pure logic.
+/* Sensor evidence FIFO (DESIGN §2.8). Pure logic.
  *
  * Records enter in capture-seq order and leave only when the master's
  * cumulative ACK covers the packet that carried them, so nothing expires. When

@@ -233,12 +233,9 @@ export function rowKey(row) {
   return `${row.master_boot_id}:${row.node_id}:${row.sensor_boot_id}:${row.kind}:${row.capture_seq}:${row.master_tick}`;
 }
 
-/* One E line -> { stage, ... }:
- *   "unreadable": hseq or crc cannot be read — never acked.
- *   "crc":        crc mismatch — never acked, the master re-sends.
- *   "invalid":    the master really sent this, but it breaks the contract — quarantined + acked.
- *   "valid":      rows ready to store (without seq / received_at).
- */
+/* One E line -> { stage, ... }: "unreadable" (hseq or crc unreadable) and "crc" (mismatch, the
+ * master re-sends) are never acked; "invalid" (sent, but breaks the contract) is quarantined and
+ * acked; "valid" gives rows ready to store (without seq / received_at). */
 export function parseEventLine(raw) {
   const line = String(raw ?? "").replace(/\s+$/, "");
   const t = line.split(" ");
