@@ -309,6 +309,43 @@ describe("dependency intervals and holes", () => {
     assert.equal(r.run.fault.reasons[0].hi, tick(2000));
   });
 
+  it("a hole decides the run only once every sensor of its role has reported through it", () => {
+    // laps: A loses edges after C2; C, the other start sensor, is still behind
+    const laps = makeLog();
+    laps.checkpoint("A", -100);
+    laps.checkpoint("C", -100);
+    const run = start(laps, "laps", [{ node_id: "A", role: "start" }, { node_id: "C", role: "start" }], { lapTarget: 2 });
+    laps.capture("A", 1000);
+    laps.capture("A", 5000);
+    laps.capture("A", 9000);
+    laps.loss("A", 9500, { endMs: 9600 });
+    let r = ev(run, laps);
+    assert.equal(r.run.verification, "pending");
+    assert.equal(r.run.closed, false);
+    laps.checkpoint("C", 10000);
+    r = ev(r.run, laps);
+    assert.equal(r.run.verification, "verified");
+    assert.deepEqual(r.run.crossingTicks, [tick(1000), tick(5000), tick(9000)]);
+
+    // sprint: A's hole comes before any start crossing; C reports one before it later
+    const sprint = makeLog();
+    sprint.checkpoint("A", -100);
+    sprint.checkpoint("C", -100);
+    sprint.checkpoint("B", -100);
+    const run2 = start(sprint, "sprint", [{ node_id: "A", role: "start" }, { node_id: "C", role: "start" }, { node_id: "B", role: "finish" }]);
+    sprint.loss("A", 200, { endMs: 700 });
+    sprint.capture("B", 3000);
+    r = ev(run2, sprint);
+    assert.equal(r.run.verification, "pending");
+    assert.equal(r.run.closed, false);
+    sprint.capture("C", 100);
+    sprint.checkpoint("C", 3000);
+    r = ev(r.run, sprint);
+    assert.equal(r.run.verification, "verified");
+    assert.equal(r.run.startTick, tick(100));
+    assert.equal(r.run.finishTick, tick(3000));
+  });
+
   it("one silent sensor keeps its role unconfirmed", () => {
     const log = makeLog();
     log.checkpoint("A", -100);
