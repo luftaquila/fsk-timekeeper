@@ -46,8 +46,8 @@ jobs:
       - name: Build
         run: make -C device/firmware
 
-      - name: GPS parser and reference qualification tests
-        timeout-minutes: 2
+      - name: Host tests (GPS, sync, queues, faults, MAC simulator)
+        timeout-minutes: 5
         run: make -C device/firmware test
 
       - uses: actions/setup-python@v6
