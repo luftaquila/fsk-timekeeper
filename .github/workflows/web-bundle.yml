@@ -9,6 +9,7 @@ on:
       - 'device/firmware/src/protocol.h'
       - 'device/firmware/src/proto_usb.h'
       - 'device/firmware/src/config.h'
+      - 'device/firmware/tests/usb_lines.txt'
       - '.github/workflows/web-bundle.yml'
   workflow_call:
   workflow_dispatch:
@@ -26,7 +27,7 @@ jobs:
           cache-dependency-path: console/package-lock.json
       - name: Install
         run: cd console && npm ci
-      # The constants test reads the firmware headers, so the whole repo is checked out.
+      # The constants and firmware-lines tests read firmware files, so the whole repo is checked out.
       - name: Test
         run: cd console && npm test
       - name: Build
