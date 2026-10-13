@@ -3602,10 +3602,6 @@
 		(uuid "83a4ee70-f830-4d35-b6e6-cb1e93170d7a")
 	)
 	(no_connect
-		(at 212.09 121.92)
-		(uuid "ab1512c2-8434-4526-92e3-a38601586be7")
-	)
-	(no_connect
 		(at 48.26 91.44)
 		(uuid "b6402e7f-0893-4e03-9f5d-2639f1334e5e")
 	)
@@ -3624,6 +3620,10 @@
 	(no_connect
 		(at 132.08 93.98)
 		(uuid "cc0b77ec-92eb-47a1-aafd-aaba04560b91")
+	)
+	(no_connect
+		(at 199.39 124.46)
+		(uuid "e14ca517-7785-4e61-9253-1a35fa6c1196")
 	)
 	(no_connect
 		(at 64.77 106.68)
@@ -3997,16 +3997,6 @@
 		)
 		(uuid "196d5125-8749-47f9-b789-ba9bf2da79d4")
 	)
-	(label "SENSE"
-		(at 212.09 124.46 0)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left bottom)
-		)
-		(uuid "1c181d65-2f17-4d00-89ba-99cf796d2c79")
-	)
 	(label "SENSOR"
 		(at 86.36 93.98 0)
 		(effects
@@ -4046,6 +4036,16 @@
 			(justify left bottom)
 		)
 		(uuid "4a7d4d08-c47b-4b61-9397-96fdc846489a")
+	)
+	(label "SENSE"
+		(at 212.09 121.92 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left bottom)
+		)
+		(uuid "7215751e-1ca3-41c7-a886-5900d4b3b0c6")
 	)
 	(label "SENSE"
 		(at 80.01 127 0)
@@ -4884,84 +4884,6 @@
 			(project "fsk-timekeeper"
 				(path "/b99e92f0-86c3-482a-a7ae-e3f31060cbed"
 					(reference "#PWR02")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "power:GND")
-		(at 199.39 124.46 0)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(in_pos_files yes)
-		(dnp no)
-		(fields_autoplaced yes)
-		(uuid "3fa423f5-885e-4169-9b40-cb94168968fb")
-		(property "Reference" "#PWR019"
-			(at 199.39 130.81 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Value" "GND"
-			(at 199.39 129.54 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Footprint" ""
-			(at 199.39 124.46 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 199.39 124.46 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
-			(at 199.39 124.46 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "4a96f512-ceff-4127-afcb-672d2b4f0278")
-		)
-		(instances
-			(project "fsk-timekeeper"
-				(path "/b99e92f0-86c3-482a-a7ae-e3f31060cbed"
-					(reference "#PWR019")
 					(unit 1)
 				)
 			)
@@ -6391,6 +6313,84 @@
 			(project "fsk-timekeeper"
 				(path "/b99e92f0-86c3-482a-a7ae-e3f31060cbed"
 					(reference "#PWR011")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "power:GND")
+		(at 212.09 124.46 0)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "9f3c35d2-5b9b-4586-a70e-f18b9dcd96af")
+		(property "Reference" "#PWR019"
+			(at 212.09 130.81 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Value" "GND"
+			(at 212.09 129.54 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" ""
+			(at 212.09 124.46 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 212.09 124.46 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
+			(at 212.09 124.46 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "941fe0e1-948b-4a03-a077-edd0421cfadf")
+		)
+		(instances
+			(project "fsk-timekeeper"
+				(path "/b99e92f0-86c3-482a-a7ae-e3f31060cbed"
+					(reference "#PWR019")
 					(unit 1)
 				)
 			)
