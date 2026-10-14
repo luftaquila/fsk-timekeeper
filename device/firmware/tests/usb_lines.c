@@ -20,13 +20,13 @@ static void events(void)
     u.kind = UL_KIND_EDGES;
     u.flags = HEALTH_EVENT_REQUIRED | EVENT_INTERPOLATED;
     u.ev_seq = 65535;
-    u.master_boot_id = 4294967295u;
+    u.master_boot_id = UINT64_MAX;
     u.capture_seq = 4294967294u; /* wraps inside the line */
     u.tick = 18446744073709000000ull;
     u.sync_age_ms = 65535;
     u.u.edges.count = UL_EDGES_MAX;
     for (unsigned i = 0; i < UL_EDGES_MAX - 1; i++) { u.u.edges.dt[i] = 100000u + i; }
-    mq_push_uplink(&q, 0xDEADBEEFu, 4294967295u, &u, -148.5f, -20.25f);
+    mq_push_uplink(&q, 0xDEADBEEFu, UINT64_MAX, &u, -148.5f, -20.25f);
 
     u.kind = UL_KIND_LOSS;
     u.flags = EVENT_TIME_UNKNOWN;
@@ -74,8 +74,8 @@ static void diagnostics(void)
     d.fifo_drop = 2;
     d.err_flags = ERR_RADIO_RESET | ERR_ACK;
     d.reset_reason = RESET_FAULT;
-    d.sensor_boot_id = 305419896u;
-    d.master_boot_id = 3735928559u;
+    d.sensor_boot_id = UINT64_C(9007199254740993);
+    d.master_boot_id = UINT64_MAX;
     pu_emit_diag(&d);
 
     memset(&d, 0, sizeof d);
@@ -89,7 +89,7 @@ static void diagnostics(void)
     d.queue_overflow = 1;
     d.ver_drop = 5;
     d.tx_drop = 9;
-    d.master_boot_id = 3735928559u;
+    d.master_boot_id = UINT64_MAX;
     pu_emit_diag(&d);
 }
 
@@ -101,7 +101,7 @@ int main(void)
     events();
     diagnostics();
     pu_emit_pps(123456789012345678ull, 1727500000u, -1234, 1, 1, 9, 64, 3, 17);
-    pu_emit_clock("0123456789abcdef0123456789abcdef", 99, 7);
+    pu_emit_clock("0123456789abcdef0123456789abcdef", 99, UINT64_MAX);
     pu_emit_ack("CP");
     pu_emit_err_count("radio_reset", 3);
     pu_emit_fault(0x00027F38u, 0x0002A001u, "hard", 0x00000400u);

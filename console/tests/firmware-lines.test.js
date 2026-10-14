@@ -1,4 +1,4 @@
-// The USB v2 contract on both sides: device/firmware/tests/usb_lines.txt holds lines printed
+// The USB v3 contract on both sides: device/firmware/tests/usb_lines.txt holds lines printed
 // by the firmware's own formatters with extreme values (`make test` checks the file against
 // them), and the console parses the same file.
 import { describe, it } from "vitest";
@@ -12,8 +12,8 @@ const LINES = readFileSync(resolve(__dirname, "../../device/firmware/tests/usb_l
 describe("firmware-formatted lines", () => {
   it("I: the contract accepts a master and names a sensor-role board", () => {
     const m = parseLine(LINES[0]);
-    assert.equal(m.usbProto, 2);
-    assert.equal(m.radioProto, 12);
+    assert.equal(m.usbProto, 3);
+    assert.equal(m.radioProto, 13);
     assert.equal(m.devid, "0123ABCD89EF4567");
     assert.equal(m.role, "M");
     assert.equal(m.ticksPerMs, 16000);
@@ -29,7 +29,9 @@ describe("firmware-formatted lines", () => {
     assert.deepEqual(c.rows.map((r) => r.capture_seq), [4294967294, 4294967295, 0, 1, 2]); // seq wraps
     assert.equal(c.rows[4].master_tick, "18446744073709400006");
     assert.equal(c.rows[0].flags, 15);
-    assert.equal(formatAck(c), "C 1 4294967295 AADCA20A");
+    assert.equal(c.rows[0].master_boot_id, "18446744073709551615");
+    assert.equal(c.rows[0].sensor_boot_id, "18446744073709551615");
+    assert.equal(formatAck(c), `C 1 18446744073709551615 ${LINES[3].slice(-8)}`);
 
     const unknown = parseEventLine(LINES[4]);
     assert.equal(unknown.stage, "valid");
@@ -54,6 +56,7 @@ describe("firmware-formatted lines", () => {
     assert.equal(s.fifo_drop, 2);
     assert.deepEqual(errorNames(s.err_flags), ["radio reset", "ACK anomaly"]);
     assert.equal(s.reset_reason, 64);
+    assert.equal(s.sensor_boot_id, "9007199254740993");
     const m = normalizeTelemetry(parseLine(LINES[9]).telemetry, 1000);
     assert.equal(m.queue_depth, 3);
     assert.equal(m.ver_drop, 5);
@@ -62,7 +65,7 @@ describe("firmware-formatted lines", () => {
     assert.equal(p.seg, 3);
     assert.equal(p.n, 17);
     assert.equal(p.ppb, -1234);
-    assert.equal(parseLine(LINES[11]).masterBootId, 7);
+    assert.equal(parseLine(LINES[11]).masterBootId, "18446744073709551615");
     assert.equal(parseLine(LINES[12]).cmd, "CP");
     assert.deepEqual(parseLine(LINES[13]).args, ["3"]);
     assert.deepEqual(parseLine(LINES[14]).args, ["00027F38", "0002A001", "hard", "00000400"]);

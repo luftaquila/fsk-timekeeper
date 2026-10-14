@@ -64,10 +64,10 @@ int sq_idle(const sensor_queue_t *q);
 /* Packet for this slot: the in-flight one, else built from the FIFO head
  * (up to UL_EDGES_MAX consecutive stamped edges with equal flags, or one loss).
  * Returns NULL when the head is still held or nothing is queued. */
-uplink_pl_t *sq_packet(sensor_queue_t *q, uint32_t master_boot_id);
+uplink_pl_t *sq_packet(sensor_queue_t *q, uint64_t master_boot_id);
 
 /* Make a checkpoint the in-flight packet (only when sq_idle()). */
-uplink_pl_t *sq_checkpoint(sensor_queue_t *q, uint32_t master_boot_id, uint32_t seq,
+uplink_pl_t *sq_checkpoint(sensor_queue_t *q, uint64_t master_boot_id, uint32_t seq,
                            uint64_t master, uint8_t flags, uint16_t sync_age_ms);
 
 /* Beacon ACK for this sensor boot: drops the in-flight packet when ack_seq is its ev_seq. */

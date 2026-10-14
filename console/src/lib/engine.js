@@ -3,7 +3,7 @@
  * A run is a plain JSON-able object:
  * {
  *   schema, radioProto, usbProto, runId, mode: "sprint" | "laps", note,
- *   boundaryTick: string, masterBootId: number,
+ *   boundaryTick: string, masterBootId: string,
  *   nodes: { [node_id]: { boot, seq, role, cpSeq } },   // START checkpoint per mapped sensor
  *   cursor: number,                                    // evidence = event-log rows with seq > cursor
  *   lapTarget: number|null, debounceMs: number,        // frozen at START

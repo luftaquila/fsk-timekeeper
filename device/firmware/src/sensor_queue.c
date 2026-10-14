@@ -137,7 +137,7 @@ static void take_ev_seq(sensor_queue_t *q)
     q->inflight = 1;
 }
 
-uplink_pl_t *sq_packet(sensor_queue_t *q, uint32_t master_boot_id)
+uplink_pl_t *sq_packet(sensor_queue_t *q, uint64_t master_boot_id)
 {
     if (q->inflight) { return &q->pkt; }
     flush_acc(q);
@@ -185,7 +185,7 @@ uplink_pl_t *sq_packet(sensor_queue_t *q, uint32_t master_boot_id)
     return &q->pkt;
 }
 
-uplink_pl_t *sq_checkpoint(sensor_queue_t *q, uint32_t master_boot_id, uint32_t seq,
+uplink_pl_t *sq_checkpoint(sensor_queue_t *q, uint64_t master_boot_id, uint32_t seq,
                            uint64_t master, uint8_t flags, uint16_t sync_age_ms)
 {
     if (!sq_idle(q)) { return NULL; }

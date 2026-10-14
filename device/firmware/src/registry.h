@@ -12,14 +12,13 @@
 typedef struct {
     int      used;
     uint32_t id;           /* 32-bit sender id */
-    uint16_t short_id;
     int      have_boot;    /* sensor_boot / ack_seq describe the current sensor boot */
-    uint32_t sensor_boot;  /* boot_id from the uplink header */
+    uint64_t sensor_boot;  /* boot_id from the uplink header */
     uint16_t ack_seq;      /* last ev_seq taken in order */
     uint32_t heard_ms;     /* last authenticated uplink */
     int      last_state;   /* PU_STATE_* last reported, -1 = none */
     sec_replay_t rx;       /* replay window for this sensor */
-    uint32_t sec_drop;     /* authenticated but refused (replay, other session) */
+    uint32_t sec_drop;     /* authenticated but refused by the replay window */
     /* diagnostics of the last uplink */
     float    rssi, snr;
     uint32_t lat_ms;
@@ -31,7 +30,6 @@ typedef struct {
 } registry_t;
 
 #define REG_FULL      1
-#define REG_COLLISION 2
 
 void reg_init(registry_t *r);
 
@@ -40,8 +38,7 @@ int reg_state(const reg_entry_t *e, uint32_t now_ms);
 
 reg_entry_t *reg_lookup(registry_t *r, uint32_t id);
 
-/* Entry for a new id: a free entry, else a LOST one. NULL with *why = REG_FULL,
- * or REG_COLLISION when a live sensor already uses its short id. */
+/* Entry for a new id: a free entry, else a LOST one. NULL with *why = REG_FULL. */
 reg_entry_t *reg_claim(registry_t *r, uint32_t id, uint32_t now_ms, int *why);
 
 /* Slot table for the next beacon: live entries only (LOST entries are free). */

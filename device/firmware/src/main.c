@@ -26,6 +26,7 @@
 #include "proto_usb.h"
 #include "radio.h"
 #include "secure.h"
+#include "retry.h"
 #include "usb.h"
 #include "nrf.h"
 
@@ -59,6 +60,7 @@ static void service(uint32_t now)
     pu_service(now);
     fault_service(now);
     board_hfxo_service();
+    sec_service(now);
 }
 
 /* ===== bring-up ========================================================== */
@@ -81,25 +83,13 @@ static int bring_up(int master)
     return 0;
 }
 
-typedef struct {
-    uint32_t at_ms;
-    uint32_t backoff_ms;
-} retry_t;
-
-static void retry_init(retry_t *r)
-{
-    r->backoff_ms = RADIO_BOOT_RETRY_MS;
-    r->at_ms = board_millis() + r->backoff_ms;
-}
-
 /* 1 once a due retry has brought the board up. */
 static int retry_bring_up(retry_t *r, int master, uint32_t now)
 {
-    if ((int32_t)(now - r->at_ms) < 0) { return 0; }
+    if (!retry_due(r, now)) { return 0; }
     el_note(EL_RADIO_RESET);
     if (bring_up(master) == 0) { return 1; }
-    r->backoff_ms = r->backoff_ms * 2u > RADIO_RESET_BACKOFF_MAX_MS ? RADIO_RESET_BACKOFF_MAX_MS : r->backoff_ms * 2u;
-    r->at_ms = board_millis() + r->backoff_ms;
+    retry_later(r, board_millis(), RADIO_RESET_BACKOFF_MAX_MS);
     return 0;
 }
 
@@ -111,7 +101,7 @@ static void run_sensor(int st)
 {
     if (st == 0) { mac_sensor_init(&g_sensor, node_sender_id(), fault_reset_reason()); }
     retry_t retry;
-    retry_init(&retry);
+    retry_init(&retry, board_millis(), RADIO_BOOT_RETRY_MS);
     uint32_t last_blink = board_millis();
     for (;;) {
         uint32_t now = board_millis();
@@ -155,7 +145,7 @@ static int master_clock_check(void)
 {
     static int faulted, reported;
     static uint64_t at;
-    static uint32_t boot;
+    static uint64_t boot;
     uint32_t stops = board_hfxo_stops();
     int stopped = stops != g_hfxo_stops;
     g_hfxo_stops = stops;
@@ -165,7 +155,7 @@ static int master_clock_check(void)
         faulted = 1;
         reported = 0;
     }
-    if (!faulted) { return 1; }
+    if (!faulted) { return sec_boot_ready(); }
     /* A full host queue holds the marker back until there is room: a retry on
      * every pass is no overflow. */
     if (!reported && !mq_full(&g_queue)) { reported = mq_push_timebase_end(&g_queue, boot, at); }
@@ -173,7 +163,7 @@ static int master_clock_check(void)
         sec_init();
         mac_master_session(&g_mac);
         faulted = 0;
-        return 1;
+        return sec_boot_ready();
     }
     return 0;
 }
@@ -181,6 +171,7 @@ static int master_clock_check(void)
 /* Node 0 self-report: die temperature, charge rail, security and queue counters. */
 static void emit_self(int timebase_ok)
 {
+    timebase_ok = timebase_ok && sec_ready() && !radio_needs_reset();
     pu_diag_t d = {0};
     d.is_master = 1;
     d.state = timebase_ok ? PU_STATE_OK : PU_STATE_LOST;
@@ -232,6 +223,51 @@ static void master_hello(void)
     if (fault_take_report(&pc, &lr, &cause, &cfsr)) { pu_emit_fault(pc, lr, cause, cfsr); }
 }
 
+/* Recheck for every command, including faults detected during a USB burst. */
+static void master_command(pu_cmd_t cmd, int st, uint32_t now, uint8_t idle_seq)
+{
+    if (cmd == PU_CMD_NONE) { return; }
+    int ready = st == 0 && master_clock_check() && sec_ready() && !radio_needs_reset();
+    switch (cmd) {
+    case PU_CMD_ID:
+        pu_emit_identity(node_devid_hi(), node_devid_lo(), 1, fault_reset_reason());
+        pu_emit_ack("ID");
+        break;
+    case PU_CMD_STATUS:
+        pu_emit_heartbeat(ready ? capture_now64() : 0, now,
+                          st == 0 ? (uint8_t)(g_mac.seq - 1u) : idle_seq,
+                          st == 0 ? (int)reg_count(&g_mac.reg) : 0);
+        if (st == 0) { mac_master_report(&g_mac, 0); }
+        emit_self(ready);
+        if (ready) { emit_pps(); }
+        pu_emit_ack("STATUS");
+        break;
+    case PU_CMD_PING:
+        pu_emit_ack("PING");
+        break;
+    case PU_CMD_SETKEY:
+        provision_key();
+        break;
+    case PU_CMD_EVENT_ACK:
+        (void)mq_ack(&g_queue, pu_ack_hseq(), pu_ack_boot(), pu_ack_crc());
+        break;
+    case PU_CMD_CLOCK:
+        if (!ready) { pu_emit_err("clock"); break; }
+        pu_emit_clock(pu_clock_token(), capture_now64(), sec_boot_id());
+        break;
+    case PU_CMD_CHECKPOINT:
+        if (!ready) { pu_emit_err("clock"); break; } /* no beacons without a timebase */
+        mac_master_checkpoint(&g_mac);
+        pu_emit_ack("CP");
+        break;
+    case PU_CMD_BAD:
+        pu_emit_err("badcmd");
+        break;
+    default:
+        break;
+    }
+}
+
 static void run_master(int st)
 {
     mq_init(&g_queue);
@@ -240,7 +276,7 @@ static void run_master(int st)
 
     mp_state_t power = MP_RUN;
     retry_t retry;
-    retry_init(&retry);
+    retry_init(&retry, board_millis(), RADIO_BOOT_RETRY_MS);
     uint32_t last = board_millis();
     uint8_t idle_seq = 0;
     for (;;) {
@@ -251,44 +287,7 @@ static void run_master(int st)
 
         int c;
         while ((c = usb_read_byte()) >= 0) {
-            switch (pu_feed(c)) {
-            case PU_CMD_ID:
-                pu_emit_identity(node_devid_hi(), node_devid_lo(), 1, fault_reset_reason());
-                pu_emit_ack("ID");
-                break;
-            case PU_CMD_STATUS:
-                pu_emit_heartbeat(st == 0 ? capture_now64() : 0, now,
-                                  st == 0 ? (uint8_t)(g_mac.seq - 1u) : idle_seq,
-                                  st == 0 ? (int)reg_count(&g_mac.reg) : 0);
-                if (st == 0) { mac_master_report(&g_mac, 0); }
-                emit_self(st == 0);
-                if (st == 0) { emit_pps(); }
-                pu_emit_ack("STATUS");
-                break;
-            case PU_CMD_PING:
-                pu_emit_ack("PING");
-                break;
-            case PU_CMD_SETKEY:
-                provision_key();
-                break;
-            case PU_CMD_EVENT_ACK:
-                (void)mq_ack(&g_queue, pu_ack_hseq(), pu_ack_boot(), pu_ack_crc());
-                break;
-            case PU_CMD_CLOCK:
-                if (st != 0) { pu_emit_err("clock"); break; }
-                pu_emit_clock(pu_clock_token(), capture_now64(), sec_boot_id());
-                break;
-            case PU_CMD_CHECKPOINT:
-                if (st != 0) { pu_emit_err("clock"); break; } /* no beacons without a timebase */
-                mac_master_checkpoint(&g_mac);
-                pu_emit_ack("CP");
-                break;
-            case PU_CMD_BAD:
-                pu_emit_err("badcmd");
-                break;
-            default:
-                break;
-            }
+            master_command(pu_feed(c), st, now, idle_seq);
         }
         mq_pump(&g_queue, now);
 
@@ -308,13 +307,14 @@ static void run_master(int st)
         }
         if (!master_clock_check()) { continue; }
         gps_poll();
-        if (gps_report_due()) { emit_pps(); }
+        if (sec_ready() && !radio_needs_reset() && gps_report_due()) { emit_pps(); }
 
         if (mac_master_step(&g_mac)) {
             uint8_t sent = (uint8_t)(g_mac.seq - 1u);
             /* Without a key sec_seal refuses: no beacon goes out; tell the PC. */
             if (!sec_provisioned() && (sent % 5u) == 0u) { pu_emit_err("noprov"); }
-            pu_emit_heartbeat(capture_now64(), now, sent, (int)reg_count(&g_mac.reg));
+            int ready = sec_ready() && !radio_needs_reset();
+            pu_emit_heartbeat(ready ? capture_now64() : 0, now, sent, (int)reg_count(&g_mac.reg));
             mac_master_report(&g_mac, 1);
             if ((uint8_t)(g_mac.seq % CHECKPOINT_PERIOD_BEACONS) == 0u) { emit_self(1); }
         }
@@ -341,4 +341,5 @@ int main(void)
     } else {
         run_sensor(st);
     }
+    return 0;
 }

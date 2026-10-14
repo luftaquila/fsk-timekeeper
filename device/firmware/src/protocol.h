@@ -1,4 +1,4 @@
-/* Sealed LoRa packet formats, radio protocol v12 (DESIGN §2.6, §2.8, §2.11).
+/* Sealed LoRa packet formats, radio protocol v13 (DESIGN §2.6, §2.8, §2.11).
  *
  * Wire = [cleartext header | ciphertext payload | 16-byte Poly1305 tag]
  * (secure.h). The type byte carries PROTO_VER in its high nibble, so every
@@ -18,8 +18,8 @@
 #define PKT_TYPE_BEACON   0x01u
 #define PKT_TYPE_UPLINK   0x02u
 
-/* v12 deals the slots of a cycle in turn (DESIGN §2.8); its packets are v11's. */
-#define PROTO_VER 12u
+/* v13: full slot identities and 64-bit boot ids. */
+#define PROTO_VER 13u
 
 #define SEC_VT(ver, type) ((uint8_t)(((uint8_t)(ver) << 4) | ((uint8_t)(type) & 0x0Fu)))
 #define SEC_VT_TYPE(b)    ((uint8_t)((b) & 0x0Fu))
@@ -31,24 +31,14 @@
 #define MAX_NODES 5u
 #define NODE_MASTER 0u
 
-/* Slot-table name of a sensor id: its low 16 bits, never 0 (0 = free entry).
- * The master refuses to register a second live sensor with the same short id. */
-static inline uint16_t node_short_id(uint32_t id)
-{
-    uint16_t s = (uint16_t)id;
-    if (s == 0u) { s = (uint16_t)(id >> 16); }
-    return s ? s : 1u;
-}
-
 /* ---- Beacon (master -> all) ----------------------------------------------- */
 
-/* Entry k of the table is registry entry k. short_id 0 = free entry. ack_seq is
- * the last ev_seq the master accepted in order from that sensor boot
- * (cumulative ACK); boot_tag = low byte of that boot's id. */
+/* Entry k names the complete sender and boot. node_id 0 = free entry.
+ * ack_seq is the last evidence packet accepted from exactly that boot. */
 typedef struct __attribute__((packed)) {
-    uint16_t short_id;
+    uint32_t node_id;
     uint16_t ack_seq;
-    uint8_t  boot_tag;
+    uint64_t boot_id;
 } beacon_slot_t;
 
 #define BEACON_TX_PREV_VALID 0x01u /* m_tx_prev is the TxDone of beacon seq-1 */
@@ -85,7 +75,7 @@ typedef struct __attribute__((packed)) {
     uint8_t  beacon_gap;       /* beacons missed in a row right now (saturating) */
     uint16_t batt_mv;          /* cell estimate */
     int16_t  temp_c10;         /* die temperature, 0.1 C */
-    uint16_t capture_overflow; /* ISR ring overflows since boot */
+    uint16_t capture_overflow; /* lost/ambiguous hardware captures since boot */
     uint16_t fifo_drop;        /* records discarded (session change) since boot */
     uint16_t err_flags;        /* ERR_* (proto_usb.h), sticky per boot */
     uint8_t  reset_reason;     /* RESET_* (proto_usb.h) */
@@ -95,7 +85,7 @@ typedef struct __attribute__((packed)) {
     uint8_t  kind;           /* UL_KIND_* */
     uint8_t  flags;          /* HEALTH_* | EVENT_* */
     uint16_t ev_seq;         /* transport sequence, 1.. per sensor boot */
-    uint32_t master_boot_id; /* master session the ticks belong to */
+    uint64_t master_boot_id; /* master session the ticks belong to */
     uint32_t capture_seq;
     uint64_t tick;           /* master time */
     uint16_t sync_age_ms;    /* anchor age when the first record was stamped */
@@ -114,19 +104,19 @@ typedef struct __attribute__((packed)) {
 
 /* ---- Wire sizes ---------------------------------------------------------- */
 
-/* Cleartext header: vt(1) + boot_id(4) + ctr(3), plus node_id(4) on uplinks. */
-#define SEC_HDR_DL    8
-#define SEC_HDR_UL    12
+/* Cleartext header: vt(1) + boot_id(8) + ctr(3), plus node_id(4) on uplinks. */
+#define SEC_HDR_DL    12
+#define SEC_HDR_UL    16
 #define SEC_MAC_LEN   16
 
 #define SEC_WIRE_LEN(hdr, pl) ((hdr) + (int)(pl) + SEC_MAC_LEN)
 
-#define WIRE_BEACON   SEC_WIRE_LEN(SEC_HDR_DL, sizeof(beacon_pl_t))  /* 60 B, ~56 ms */
-#define WIRE_UPLINK   SEC_WIRE_LEN(SEC_HDR_UL, sizeof(uplink_pl_t))  /* 86 B, ~77 ms */
-#define WIRE_MAX      96 /* RX buffer size */
+#define WIRE_BEACON   SEC_WIRE_LEN(SEC_HDR_DL, sizeof(beacon_pl_t))  /* 109 B, ~92 ms */
+#define WIRE_UPLINK   SEC_WIRE_LEN(SEC_HDR_UL, sizeof(uplink_pl_t))  /* 94 B, ~82 ms */
+#define WIRE_MAX      128 /* RX buffer size */
 
-static_assert(sizeof(beacon_pl_t) == 36, "beacon payload layout");
-static_assert(sizeof(uplink_pl_t) == 58, "uplink payload layout");
+static_assert(sizeof(beacon_pl_t) == 81, "beacon payload layout");
+static_assert(sizeof(uplink_pl_t) == 62, "uplink payload layout");
 static_assert(WIRE_UPLINK <= WIRE_MAX && WIRE_BEACON <= WIRE_MAX, "packets must fit the RX buffer");
 
 #endif /* PROTOCOL_H */

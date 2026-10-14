@@ -61,8 +61,8 @@
  * the sensors in the slot table, the last one is free for unregistered sensors (mac_sensor.c). */
 #define BEACON_PERIOD_MS   1000u
 #define SLOT_OFFSET_MS     50u
-#define SLOT_LEN_MS        100u
-#define SLOT_COUNT         7u
+#define SLOT_LEN_MS        110u
+#define SLOT_COUNT         6u
 #define SLOT_LATE_MS       10u  /* latest TX start within a slot, CAD included; later -> skip the slot */
 #define TX_SETUP_MS        7u   /* SPI + TCXO start after a CAD until the preamble is on air */
 #define SLOT_GUARD_MS      5u   /* spare at the end of a slot for the unmeasured parts of this budget */

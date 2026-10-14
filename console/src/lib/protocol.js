@@ -1,4 +1,4 @@
-/* FSK-WL USB line protocol v2 (newline-delimited ASCII, one space between tokens).
+/* FSK-WL USB line protocol v3 (newline-delimited ASCII, one space between tokens).
  *
  * Master -> host:
  *   I FSK-WL <usb_proto> <fw> <devid16> <M|S> <radio_proto> <freq_mhz> <sf> <bw> <ticks_per_ms> <reset_reason>
@@ -23,8 +23,8 @@ import { USB_PRODUCT } from "./constants";
 import { MASTER_TICKS_PER_MS } from "./event-timing";
 
 export const NODE_MASTER = "0";
-export const RADIO_PROTO_VERSION = 12;
-export const USB_PROTO_VERSION = 2;
+export const RADIO_PROTO_VERSION = 13;
+export const USB_PROTO_VERSION = 3;
 
 export const FLAG_SYNC = 0x01;
 export const FLAG_SKEW = 0x02;
@@ -103,8 +103,18 @@ export function tickToText(v) {
   return undefined;
 }
 
+// New wire ids are canonical decimal strings. Safe legacy numbers remain readable.
+export function bootIdText(value) {
+  if (typeof value === "number") {
+    return Number.isSafeInteger(value) && value >= 0 && value <= U32_MAX ? String(value) : null;
+  }
+  if (typeof value !== "string" || !/^\d{1,20}$/.test(value)) return null;
+  const n = BigInt(value);
+  return n <= MASTER_TICK_MAX ? String(n) : null;
+}
+
 export function validBootId(value) {
-  return Number.isInteger(value) && value >= 0 && value <= U32_MAX;
+  return bootIdText(value) !== null;
 }
 
 export function normalizeNodeId(token) {
@@ -166,14 +176,14 @@ export function parseLine(line) {
           ver_drop: num(t[23]),
           tx_drop: num(t[24]),
           reset_reason: num(t[25]),
-          sensor_boot_id: num(t[26]),
-          master_boot_id: num(t[27]),
+          sensor_boot_id: bootIdText(t[26]),
+          master_boot_id: bootIdText(t[27]),
         },
       };
     case "H":
       return { type: "H", nowTick: t[1], uptimeMs: num(t[2]), beaconSeq: num(t[3]), nseen: num(t[4]) };
     case "T":
-      return { type: "T", requestId: t[1], masterTick: t[2], masterBootId: num(t[3]) };
+      return { type: "T", requestId: t[1], masterTick: t[2], masterBootId: bootIdText(t[3]) };
     case "P":
       if (t.length !== 10) return { type: "P", pps: null };
       return {
@@ -246,7 +256,7 @@ export function parseEventLine(raw) {
   const crc = crcToken.toUpperCase();
   if (/[^\x20-\x7e]/.test(body) || crc32Hex(body) !== crc) return { stage: "crc", raw: line, hseq, crc };
 
-  const masterBootId = uint(t[6], U32_MAX);
+  const masterBootId = bootIdText(t[6]);
   const nodeToken = t[2] ?? "";
   const node = nodeToken === NODE_MASTER || /^[0-9A-Fa-f]{8}$/.test(nodeToken) ? normalizeNodeId(nodeToken) : null;
   const invalid = (reason) => ({ stage: "invalid", raw: line, hseq, crc, masterBootId, node, reason });
@@ -255,7 +265,7 @@ export function parseEventLine(raw) {
   const kind = t[3];
   const evSeq = uint(t[4], 0xffff);
   const flags = uint(t[5], 0xff);
-  const sensorBootId = uint(t[7], U32_MAX);
+  const sensorBootId = bootIdText(t[7]);
   const syncAge = uint(t[8], 0xffff);
   const rssi = /^-?\d+(\.\d+)?$/.test(t[9] ?? "") ? Number(t[9]) : NaN;
   const snr = /^-?\d+(\.\d+)?$/.test(t[10] ?? "") ? Number(t[10]) : NaN;
@@ -355,8 +365,8 @@ export function normalizeTelemetry(t, now = Date.now()) {
     ver_drop: nonNegOrNull(t.ver_drop),
     tx_drop: nonNegOrNull(t.tx_drop),
     reset_reason: nonNegOrNull(t.reset_reason),
-    sensor_boot_id: validBootId(t.sensor_boot_id) ? t.sensor_boot_id : null,
-    master_boot_id: validBootId(t.master_boot_id) ? t.master_boot_id : null,
+    sensor_boot_id: bootIdText(t.sensor_boot_id),
+    master_boot_id: bootIdText(t.master_boot_id),
     last_seen_at: heardAgeMs === null ? null : now - heardAgeMs,
     received_at: now,
   };

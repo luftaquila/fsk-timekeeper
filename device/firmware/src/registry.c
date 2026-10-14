@@ -29,7 +29,6 @@ reg_entry_t *reg_lookup(registry_t *r, uint32_t id)
 
 reg_entry_t *reg_claim(registry_t *r, uint32_t id, uint32_t now_ms, int *why)
 {
-    uint16_t sid = node_short_id(id);
     int free_slot = -1, lost_slot = -1;
     for (unsigned i = 0; i < MAX_NODES; i++) {
         const reg_entry_t *e = &r->e[i];
@@ -37,9 +36,6 @@ reg_entry_t *reg_claim(registry_t *r, uint32_t id, uint32_t now_ms, int *why)
             if (free_slot < 0) { free_slot = (int)i; }
         } else if (reg_state(e, now_ms) == PU_STATE_LOST) {
             if (lost_slot < 0) { lost_slot = (int)i; }
-        } else if (e->short_id == sid) {
-            *why = REG_COLLISION;
-            return NULL;
         }
     }
     int slot = free_slot >= 0 ? free_slot : lost_slot;
@@ -51,7 +47,6 @@ reg_entry_t *reg_claim(registry_t *r, uint32_t id, uint32_t now_ms, int *why)
     memset(e, 0, sizeof(*e));
     e->used = 1;
     e->id = id;
-    e->short_id = sid;
     e->heard_ms = now_ms;
     e->last_state = -1;
     return e;
@@ -62,13 +57,13 @@ void reg_slot_table(const registry_t *r, uint32_t now_ms, beacon_slot_t out[MAX_
     for (unsigned i = 0; i < MAX_NODES; i++) {
         const reg_entry_t *e = &r->e[i];
         if (e->used && reg_state(e, now_ms) != PU_STATE_LOST) {
-            out[i].short_id = e->short_id;
+            out[i].node_id = e->id;
             out[i].ack_seq = e->ack_seq;
-            out[i].boot_tag = (uint8_t)e->sensor_boot;
+            out[i].boot_id = e->sensor_boot;
         } else {
-            out[i].short_id = 0;
+            out[i].node_id = 0;
             out[i].ack_seq = 0;
-            out[i].boot_tag = 0;
+            out[i].boot_id = 0;
         }
     }
 }

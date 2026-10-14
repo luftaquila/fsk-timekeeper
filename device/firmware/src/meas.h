@@ -3,14 +3,15 @@
 
 #include <stdint.h>
 
-/* On-die housekeeping measurements (no external parts). One-shot, bounded
- * waits; a peripheral that never finishes is counted and reads 0. */
+/* Cached housekeeping. Refresh at most once a second, outside TX deadlines.
+ * A failed peripheral is counted and its cached reading becomes 0. */
+void meas_service(uint32_t now_ms);
 
-/* Die temperature in 0.1 C (a few C above ambient). ~36 us. */
+/* Cached die temperature in 0.1 C (a few C above ambient). */
 int16_t meas_temp_c10(void);
 
 /* VDDH rail in mV via the SAADC VDDHDIV5 input: the cell minus the diode drop on
- * a battery node, the charge rail on USB. ~tens of us; sags under TX. */
+ * a battery node, the charge rail on USB. Cached outside TX. */
 uint16_t meas_vddh_mv(void);
 
 #endif /* MEAS_H */

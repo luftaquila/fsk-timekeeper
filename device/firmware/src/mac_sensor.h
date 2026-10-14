@@ -6,6 +6,7 @@
 #define MAC_SENSOR_H
 
 #include <stdint.h>
+#include "retry.h"
 
 #include "protocol.h"
 #include "secure.h"
@@ -14,14 +15,12 @@
 
 typedef struct {
     uint32_t my_id;
-    uint16_t short_id;
-    uint8_t  boot_tag;       /* low byte of this sensor's boot_id */
     uint8_t  reset_reason;
     sync_t sync;
     sensor_queue_t q;
     sec_replay_t from_master;
     int      have_session;
-    uint32_t master_boot_id;
+    uint64_t master_boot_id;
     int      timing_ready;   /* health was complete once in this session */
     uint64_t timing_ready_tick;
     /* current beacon cycle */
@@ -31,8 +30,7 @@ typedef struct {
     int      entry;          /* own entry in the slot table, -1 = not registered */
     uint8_t  cp_pending, cp_answered;
     uint32_t last_beacon_ms;
-    uint32_t reset_after_ms; /* earliest next radio reset */
-    uint32_t reset_backoff_ms;
+    retry_t retry;
     uint32_t hfxo_stops;     /* board_hfxo_stops() already handled */
 } mac_sensor_t;
 

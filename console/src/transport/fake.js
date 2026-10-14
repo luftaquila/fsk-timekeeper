@@ -1,4 +1,4 @@
-/* Development fake of the FSK-WL master, USB line protocol v2. Same interface as serial.js.
+/* Development fake of the FSK-WL master, USB line protocol v3. Same interface as serial.js.
  *
  * Each sensor keeps its records (captures, losses, checkpoints) in order; a record reaches the
  * master queue one slot delay after it was made, consecutive captures bundled up to 5 per E
@@ -8,6 +8,7 @@
  * after `CP`, one `P` line per PPS edge with seg/n. Scenario helpers inject the rest.
  */
 import { crc32Hex } from "../lib/crc32";
+import { USB_PROTO_VERSION, RADIO_PROTO_VERSION, bootIdText } from "../lib/protocol";
 
 const TICKS_PER_MS = 16000n;
 const QUEUE_LEN = 16;
@@ -21,15 +22,15 @@ const TIME_UNKNOWN = 64;
 // Defaults for new fakes (tests shorten the slot delay before connecting).
 export const fakeDefaults = { slotDelayMin: 100, slotDelayMax: 700, periodicCheckpoints: true };
 
-function rnd32() {
-  return Math.floor(Math.random() * 0xffffffff);
+function rndBoot() {
+  return String((BigInt(Math.floor(Math.random() * 0x100000000)) << 32n) | BigInt(Math.floor(Math.random() * 0x100000000)));
 }
 
 export function createFakeTransport({ onLine, onDisconnect }) {
   const devid = "F4KEF4KE00000001";
   let role = "M";
-  const proto = { usb: 2, radio: 12, ticks: 16000 };
-  let masterBoot = rnd32();
+  const proto = { usb: USB_PROTO_VERSION, radio: RADIO_PROTO_VERSION, ticks: 16000 };
+  let masterBoot = rndBoot();
   let t0 = 0;
   let tickBase = 0n;
   let beaconSeq = 0;
@@ -73,7 +74,7 @@ export function createFakeTransport({ onLine, onDisconnect }) {
     const node = id.toUpperCase();
     if (!sensors.has(node)) {
       sensors.set(node, {
-        boot: rnd32(),
+        boot: rndBoot(),
         captureSeq: 0,
         evSeq: 0,
         records: [], // { kind, seq, endSeq, tick, endTick, flags, due }
@@ -233,7 +234,7 @@ export function createFakeTransport({ onLine, onDisconnect }) {
   }
   function rebootSensor(node) {
     const s = addSensor(node);
-    s.boot = rnd32();
+    s.boot = rndBoot();
     s.captureSeq = 0;
     s.records = [];
     s.lastTick = null;
@@ -252,7 +253,7 @@ export function createFakeTransport({ onLine, onDisconnect }) {
     enqueue((h) => `E ${h} 0 L 0 0 ${masterBoot} ${masterBoot} 0 0.00 0.00 0 0 ${tick} ${tick}`);
   }
   function rebootMaster() {
-    masterBoot = rnd32();
+    masterBoot = rndBoot();
     tickBase = 0n;
     t0 = Date.now();
     queue = [];
@@ -305,7 +306,7 @@ export function createFakeTransport({ onLine, onDisconnect }) {
         break;
       case "C": {
         const head = queue[0];
-        if (head && Number(t[1]) === head.hseq && Number(t[2]) === head.mboot && (t[3] || "").toUpperCase() === head.crc) {
+        if (head && Number(t[1]) === head.hseq && bootIdText(t[2]) === head.mboot && (t[3] || "").toUpperCase() === head.crc) {
           queue.shift();
           pump();
         }

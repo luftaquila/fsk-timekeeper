@@ -36,9 +36,10 @@ int radio_receive(uint8_t *buf, int maxlen, float *rssi, float *snr);
 #define RADIO_RX_BUSY   2 /* a packet is still arriving */
 int radio_rx_settle(uint32_t header_wait_ms, uint32_t max_ms);
 
-/* Listen-before-talk CAD, bounded by CAD_TIMEOUT_MS: 1 = LoRa activity (back in receive),
- * 0 = clear (standby, ready to transmit). A scan error or timeout counts as clear so the beacon
- * is never starved by a flaky scan. */
+/* CAD result; errors must never be interpreted as a clear channel. */
+#define RADIO_CAD_ERROR (-1)
+#define RADIO_CAD_CLEAR 0
+#define RADIO_CAD_BUSY  1
 int radio_cad(void);
 
 /* Consecutive SPI no-responses or failed CADs reached RADIO_NORESP_RESET. */

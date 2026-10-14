@@ -16,7 +16,7 @@
  * (beacon_lbt(): re-sensing, a last CAD, then a drain). */
 static_assert((SLOT_LATE_MS + TX_SETUP_MS + SLOT_GUARD_MS) * 1000u + LORA_TOA_US(WIRE_UPLINK) <= SLOT_LEN_MS * 1000u,
               "an uplink must fit its slot");
-static_assert((SLOT_OFFSET_MS + SLOT_COUNT * SLOT_LEN_MS + BEACON_LBT_MAX_MS + CAD_TIMEOUT_MS + RX_DRAIN_MAX_MS) * 1000u +
+static_assert((SLOT_OFFSET_MS + SLOT_COUNT * SLOT_LEN_MS + BEACON_LBT_MAX_MS + CAD_TIMEOUT_MS + RX_DRAIN_MAX_MS + TX_SETUP_MS) * 1000u +
               LORA_TOA_US(WIRE_BEACON) <= BEACON_PERIOD_MS * 1000u, "the slots must end before the next beacon");
 static_assert(SLOT_COUNT >= 2u && SLOT_COUNT <= 8u, "tx_slots holds every slot in 8 bits");
 static_assert(LORA_SF >= 7 && LORA_SYMBOL_US < 16000u, "LORA_TOA_US covers SF7..SF12 without LDRO");
@@ -25,20 +25,12 @@ void mac_sensor_init(mac_sensor_t *s, uint32_t my_id, uint8_t reset_reason)
 {
     memset(s, 0, sizeof(*s));
     s->my_id = my_id;
-    s->short_id = node_short_id(my_id);
-    s->boot_tag = (uint8_t)sec_boot_id();
     s->reset_reason = reset_reason;
     sync_init(&s->sync);
     sq_init(&s->q);
-    /* Start ev_seq at a boot-random value: a stale slot entry left by our previous
-     * boot must match both the 8-bit boot tag and this 16-bit seq to be taken as
-     * an ACK. */
-    s->q.next_ev_seq = (uint16_t)(sec_boot_id() >> 16);
-    if (s->q.next_ev_seq == 0u) { s->q.next_ev_seq = 1u; }
     s->entry = -1;
     s->last_beacon_ms = board_millis();
-    s->reset_after_ms = s->last_beacon_ms;
-    s->reset_backoff_ms = BEACON_LOSS_RESET_MS;
+    retry_init(&s->retry, s->last_beacon_ms, BEACON_LOSS_RESET_MS);
     s->hfxo_stops = board_hfxo_stops();
     radio_start_rx();
 }
@@ -53,7 +45,7 @@ static void on_beacon(mac_sensor_t *s, const uint8_t *buf, int n)
     if (!sec_replay(&s->from_master, m.boot_id, m.ctr)) { return; }
     board_led_toggle();
     s->last_beacon_ms = board_millis();
-    s->reset_backoff_ms = BEACON_LOSS_RESET_MS;
+    s->retry.delay_ms = BEACON_LOSS_RESET_MS;
 
     if (!s->have_session || m.boot_id != s->master_boot_id) {
         /* New master session (or first contact): the old timebase is gone and
@@ -71,14 +63,13 @@ static void on_beacon(mac_sensor_t *s, const uint8_t *buf, int n)
     sq_resolve(&s->q, &s->sync, capture_now64());
     if (b.cp_req != 0u && b.cp_req != s->cp_answered) { s->cp_pending = b.cp_req; }
 
-    /* Our entry has our short id and this boot's tag (the short id under another tag is our old
-     * boot or an id twin). Slots 0..SLOT_COUNT-2 go in turn to the live entries in table order;
-     * without an entry we announce ourselves in the last, free, slot with probability 1/2. */
+    /* Match the complete identity before applying an ACK or claiming slots.
+     * Unregistered sensors contend only in the last slot. */
     unsigned live = 0, rank = 0;
     s->entry = -1;
     for (unsigned k = 0; k < MAX_NODES; k++) {
-        if (b.slot[k].short_id == 0u) { continue; }
-        if (b.slot[k].short_id == s->short_id && b.slot[k].boot_tag == s->boot_tag) {
+        if (b.slot[k].node_id == 0u) { continue; }
+        if (b.slot[k].node_id == s->my_id && b.slot[k].boot_id == sec_boot_id()) {
             s->entry = (int)k;
             rank = live;
             sq_ack(&s->q, b.slot[k].ack_seq);
@@ -94,6 +85,8 @@ static void on_beacon(mac_sensor_t *s, const uint8_t *buf, int n)
     }
     s->cycle_rx = l_rx;
     s->cycle_seq = b.seq;
+    /* At least SLOT_OFFSET_MS before the first slot, subject to the final deadline check. */
+    meas_service(board_millis());
 }
 
 static void record_capture(mac_sensor_t *s, uint32_t seq, uint64_t tick, int xtal)
@@ -136,7 +129,13 @@ static void drain_captures(mac_sensor_t *s)
         if (capture_sensor_get(&tick, &seq, &xtal)) { record_capture(s, seq, tick, xtal); continue; }
         uint64_t t1, t2;
         uint32_t q1, q2;
-        if (capture_sensor_loss(&t1, &t2, &q1, &q2)) { record_loss(s, q1, q2, t1, t2); continue; }
+        int loss = capture_sensor_loss(&t1, &t2, &q1, &q2);
+        if (loss) {
+            if (loss == CAPTURE_LOSS_UNKNOWN) {
+                if (s->timing_ready) { sq_push_loss(&s->q, q1, q2, 0, 0, EVENT_TIME_UNKNOWN); }
+            } else { record_loss(s, q1, q2, t1, t2); }
+            continue;
+        }
         return;
     }
 }
@@ -209,11 +208,11 @@ static void slot_tx(mac_sensor_t *s)
     if (radio_cad()) { return; }
     if (capture_now64() - start > SLOT_LATE_MS * TPM) { radio_start_rx(); return; }
 
-    s->tx_slots = 0; /* one packet per cycle: the next beacon acks it */
     fill_diag(s, p);
     uint8_t tx[WIRE_UPLINK];
     int wlen = sec_seal(tx, sizeof(tx), PKT_TYPE_UPLINK, s->my_id, p, sizeof(*p));
-    if (wlen > 0) {
+    if (wlen > 0 && capture_now64() - start <= SLOT_LATE_MS * TPM) {
+        s->tx_slots = 0; /* one packet per cycle; the next beacon acks it */
         uint64_t tx_done;
         radio_transmit(tx, wlen);
         (void)capture_dio1_get(&tx_done); /* a TxDone must not pass for the next beacon's RxDone */
@@ -226,14 +225,11 @@ static void radio_recovery(mac_sensor_t *s)
     uint32_t now = board_millis();
     int starving = (uint32_t)(now - s->last_beacon_ms) > BEACON_LOSS_RESET_MS;
     if (!starving && !radio_needs_reset()) { return; }
-    if ((int32_t)(now - s->reset_after_ms) < 0) { return; }
+    if (!retry_due(&s->retry, now)) { return; }
     el_note(EL_RADIO_RESET);
-    radio_begin();
-    radio_start_rx();
+    if (radio_begin() == 0) { radio_start_rx(); }
     s->tx_slots = 0;
-    s->reset_after_ms = now + s->reset_backoff_ms;
-    s->reset_backoff_ms = s->reset_backoff_ms * 2u > RADIO_RESET_BACKOFF_MAX_MS
-                          ? RADIO_RESET_BACKOFF_MAX_MS : s->reset_backoff_ms * 2u;
+    retry_later(&s->retry, board_millis(), RADIO_RESET_BACKOFF_MAX_MS);
 }
 
 void mac_sensor_step(mac_sensor_t *s)

@@ -183,8 +183,9 @@ export const useDeviceStore = defineStore("device", () => {
         await handleEventLine(msg.raw, now);
         break;
       case "T":
+        if (msg.masterBootId == null) break;
         clock.accept({ request_id: msg.requestId, master_tick: msg.masterTick, master_boot_id: msg.masterBootId });
-        if (Number.isInteger(msg.masterBootId)) setMasterBoot(msg.masterBootId);
+        setMasterBoot(msg.masterBootId);
         break;
       case "P":
         onPps(msg.pps, now);

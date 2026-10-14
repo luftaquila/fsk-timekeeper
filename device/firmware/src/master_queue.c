@@ -31,7 +31,7 @@ static mq_item_t *tail_slot(mq_t *q)
     return &q->item[(q->head + q->count) % MASTER_EVENT_QUEUE_LEN];
 }
 
-static int commit(mq_t *q, mq_item_t *it, uint32_t hseq, uint32_t master_boot_id, int len)
+static int commit(mq_t *q, mq_item_t *it, uint32_t hseq, uint64_t master_boot_id, int len)
 {
     if (len < 0) { return 0; } /* cannot happen: PU_LINE_MAX holds the longest line */
     it->hseq = hseq;
@@ -42,7 +42,7 @@ static int commit(mq_t *q, mq_item_t *it, uint32_t hseq, uint32_t master_boot_id
     return 1;
 }
 
-int mq_push_uplink(mq_t *q, uint32_t node_id, uint32_t sensor_boot_id, const uplink_pl_t *u,
+int mq_push_uplink(mq_t *q, uint32_t node_id, uint64_t sensor_boot_id, const uplink_pl_t *u,
                    float rssi, float snr)
 {
     mq_item_t *it = tail_slot(q);
@@ -52,7 +52,7 @@ int mq_push_uplink(mq_t *q, uint32_t node_id, uint32_t sensor_boot_id, const upl
     return commit(q, it, hseq, u->master_boot_id, len);
 }
 
-int mq_push_timebase_end(mq_t *q, uint32_t master_boot_id, uint64_t tick)
+int mq_push_timebase_end(mq_t *q, uint64_t master_boot_id, uint64_t tick)
 {
     mq_item_t *it = tail_slot(q);
     if (!it) { return 0; }
@@ -61,7 +61,7 @@ int mq_push_timebase_end(mq_t *q, uint32_t master_boot_id, uint64_t tick)
     return commit(q, it, hseq, master_boot_id, len);
 }
 
-int mq_ack(mq_t *q, uint32_t hseq, uint32_t master_boot_id, uint32_t crc)
+int mq_ack(mq_t *q, uint32_t hseq, uint64_t master_boot_id, uint32_t crc)
 {
     /* A repeated ack of a line already popped (the host saw a re-send) is
      * harmless and ignored; anything else that does not match is counted. */

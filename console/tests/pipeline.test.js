@@ -1,4 +1,4 @@
-// Store-level integration: fake master (USB v2) -> device.handleLine -> IndexedDB event log ->
+// Store-level integration: fake master (USB v3) -> device.handleLine -> IndexedDB event log ->
 // `C` ack -> engine -> calibration freeze -> history. Runs in node with fake-indexeddb.
 import "fake-indexeddb/auto";
 import { describe, it, beforeEach, vi } from "vitest";
@@ -496,7 +496,7 @@ describe("pipeline with the fake master", () => {
     first.settings.setMapping(a, { role: "start" });
     assert.equal(await first.timing.start("laps", "old"), true, toasts.error.join(" | "));
     await first.device.disconnect();
-    const stored = { ...first.timing.run, schema: 2, usbProto: 1 };
+    const stored = { ...first.timing.run, radioProto: 12, usbProto: 2 };
     localStorage.setItem("tk.run.v3", encodeRun(stored));
     const again = await boot({ keepStorage: true });
     assert.equal(again.timing.run.closed, true);

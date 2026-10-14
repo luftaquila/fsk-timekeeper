@@ -10,6 +10,8 @@ const { freezeCalibration } = await import("../src/lib/calibration.js");
 const { resultNs, lapsNs } = await import("../src/lib/results.js");
 const { formatDuration } = await import("../src/lib/format.js");
 const eventLog = await import("../src/lib/eventLog.js");
+const { encodeRun, decodeRun } = await import("../src/lib/run-codec.js");
+const { RADIO_PROTO_VERSION, USB_PROTO_VERSION } = await import("../src/lib/protocol.js");
 
 const T0 = 1_000_000_000n;
 const tick = (ms) => String(T0 + BigInt(ms) * 16000n);
@@ -47,6 +49,22 @@ describe("history rows and CSV", () => {
   beforeEach(() => {
     setActivePinia(createPinia());
     eventLog._reset();
+  });
+
+  it("round-trips 64-bit sessions and preserves finished results from the previous protocol", async () => {
+    const current = run({ runId: "64bit", mode: "laps", radioProto: RADIO_PROTO_VERSION, usbProto: USB_PROTO_VERSION,
+      masterBootId: "18446744073709551615", nodes: { A: { boot: "9007199254740993", seq: 1, role: "start", cpSeq: 1 } }, closed: false });
+    assert.deepEqual(decodeRun(encodeRun(current)).run, current);
+    const old = run({ runId: "legacy", mode: "sprint", closed: true, armed: true, verification: "verified",
+      startTick: tick(10), finishTick: tick(4010), durationNs: "4000000000" });
+    const restored = decodeRun(encodeRun(old));
+    assert.equal(restored.protocolChanged, false);
+    assert.equal(restored.run.armed, false);
+    assert.equal(restored.run.verification, "verified");
+    assert.equal(restored.run.durationNs, old.durationNs);
+    const history = useHistoryStore();
+    await history.open(current);
+    assert.equal(history.rows[0].masterBootId, current.masterBootId);
   });
 
   it("an invalid laps run lists its confirmed laps and no total", async () => {

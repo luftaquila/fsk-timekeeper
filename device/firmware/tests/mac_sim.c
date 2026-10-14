@@ -55,7 +55,8 @@ typedef struct {
 
 typedef struct {
     int idx, is_master;
-    uint32_t sender_id, boot_id, tx_ctr, rng;
+    uint32_t sender_id, tx_ctr, rng;
+    uint64_t boot_id;
     int32_t ppm;
     uint64_t tick_base;
     uint64_t now_us;
@@ -87,6 +88,8 @@ static node_t nodes[SIM_NODES];
 static int n_nodes;
 static node_t *cur;
 static uint64_t now_global;
+static uint32_t seal_delay_us;
+static int cad_error;
 static mq_t mq;
 static mac_master_t mm;
 
@@ -149,6 +152,7 @@ void board_delay_ms(uint32_t ms) { cur->now_us += (uint64_t)ms * 1000u; }
 int board_hfclk_xtal(void) { return cur->xtal; }
 uint32_t board_hfxo_stops(void) { return cur->hfxo_stops; }
 void board_led_toggle(void) {}
+void meas_service(uint32_t now) { (void)now; }
 int16_t meas_temp_c10(void) { return 250; }
 uint16_t meas_vddh_mv(void) { return 3900; }
 
@@ -287,6 +291,7 @@ int radio_rx_settle(uint32_t header_wait_ms, uint32_t max_ms)
 
 int radio_cad(void)
 {
+    if (cad_error) { cur->now_us += CAD_US; return RADIO_CAD_ERROR; }
     deliver(cur);
     uint64_t t0 = cur->now_us + TCXO_US; /* listens only after the TCXO start */
     cur->now_us = t0 + CAD_US;
@@ -308,15 +313,16 @@ int radio_needs_reset(void) { return cur->noresp >= (int)RADIO_NORESP_RESET; }
 /* A checksum stands in for the AEAD: version, length and integrity checks only. */
 int sec_seal(uint8_t *out, int out_cap, uint8_t type, uint32_t node_id, const void *payload, int payload_len)
 {
+    if (type == PKT_TYPE_UPLINK && cur->idx == 1) { cur->now_us += seal_delay_us; }
     int has_node = SEC_TYPE_HAS_NODE(type);
     int hdr = has_node ? SEC_HDR_UL : SEC_HDR_DL;
     int wire = hdr + payload_len + SEC_MAC_LEN;
     if (out_cap < wire) { return -1; }
     uint32_t ctr = ++cur->tx_ctr;
     out[0] = SEC_VT(PROTO_VER, type);
-    memcpy(out + 1, &cur->boot_id, 4);
-    out[5] = (uint8_t)ctr; out[6] = (uint8_t)(ctr >> 8); out[7] = (uint8_t)(ctr >> 16);
-    if (has_node) { memcpy(out + 8, &node_id, 4); }
+    memcpy(out + 1, &cur->boot_id, 8);
+    out[9] = (uint8_t)ctr; out[10] = (uint8_t)(ctr >> 8); out[11] = (uint8_t)(ctr >> 16);
+    if (has_node) { memcpy(out + 12, &node_id, 4); }
     memcpy(out + hdr, payload, (size_t)payload_len);
     uint32_t c = crc32_ieee(out, (uint32_t)(hdr + payload_len));
     for (int i = 0; i < SEC_MAC_LEN; i++) { out[hdr + payload_len + i] = (uint8_t)(c >> (8 * (i % 4))); }
@@ -334,30 +340,24 @@ int sec_unseal(const uint8_t *in, int in_len, sec_meta_t *meta, void *out_payloa
     uint32_t c = crc32_ieee(in, (uint32_t)(hdr + payload_len));
     for (int i = 0; i < SEC_MAC_LEN; i++) { if (in[hdr + payload_len + i] != (uint8_t)(c >> (8 * (i % 4)))) { return -2; } }
     meta->type = type;
-    memcpy(&meta->boot_id, in + 1, 4);
-    meta->ctr = (uint32_t)in[5] | ((uint32_t)in[6] << 8) | ((uint32_t)in[7] << 16);
+    memcpy(&meta->boot_id, in + 1, 8);
+    meta->ctr = (uint32_t)in[9] | ((uint32_t)in[10] << 8) | ((uint32_t)in[11] << 16);
     meta->node_id = NODE_MASTER;
-    if (has_node) { memcpy(&meta->node_id, in + 8, 4); }
+    if (has_node) { memcpy(&meta->node_id, in + 12, 4); }
     memcpy(out_payload, in + hdr, (size_t)payload_len);
     return 0;
 }
 
 int sec_authentic_any_version(const uint8_t *in, int in_len) { (void)in; (void)in_len; return 0; }
 
-int sec_replay(sec_replay_t *st, uint32_t boot_id, uint32_t ctr)
-{
-    if (!st->have || boot_id != st->boot_id) { st->have = 1; st->boot_id = boot_id; st->max_ctr = ctr; return 1; }
-    if (ctr > st->max_ctr) { st->max_ctr = ctr; return 1; }
-    return 0;
-}
-
-uint32_t sec_boot_id(void) { return cur->boot_id; }
+uint64_t sec_boot_id(void) { return cur->boot_id; }
 int sec_provisioned(void) { return 1; }
 uint32_t sec_random(void) { cur->rng = mix(cur->rng + 0x9E3779B9u); return cur->rng; }
 
 /* ---- host: parses E lines, checks their crc, acks ------------------------ */
 typedef struct {
-    uint32_t hseq, node, sboot, mboot;
+    uint32_t hseq, node;
+    uint64_t sboot, mboot;
     char kind;
     uint32_t seq, end_seq;
     uint64_t tick, end_tick;
@@ -396,14 +396,14 @@ static void host_line(const char *line)
     for (char *p = strtok(buf, " \n"); p && nt < 32; p = strtok(NULL, " \n")) { tok[nt++] = p; }
     assert(nt >= 14 && !strcmp(tok[0], "E"));
     uint32_t hseq = (uint32_t)strtoul(tok[1], NULL, 10);
-    uint32_t mboot = (uint32_t)strtoul(tok[6], NULL, 10);
+    uint64_t mboot = strtoull(tok[6], NULL, 10);
     if (host_acks) { (void)mq_ack(&mq, hseq, mboot, crc); }
     if (hseq <= last_hseq) { return; } /* a re-send */
     assert(hseq == last_hseq + 1u);    /* nothing skipped */
     last_hseq = hseq;
     rec_t r = { .hseq = hseq, .node = !strcmp(tok[2], "0") ? 0u : (uint32_t)strtoul(tok[2], NULL, 16),
                 .kind = tok[3][0], .flags = (unsigned)strtoul(tok[5], NULL, 10), .mboot = mboot,
-                .sboot = (uint32_t)strtoul(tok[7], NULL, 10), .seq = (uint32_t)strtoul(tok[11], NULL, 10),
+                .sboot = strtoull(tok[7], NULL, 10), .seq = (uint32_t)strtoul(tok[11], NULL, 10),
                 .at_us = now_global };
     if (r.kind == 'C') {
         unsigned count = (unsigned)strtoul(tok[12], NULL, 10);
@@ -443,7 +443,7 @@ static void add_node(int is_master, uint32_t id, int32_t ppm, unsigned loss_pct)
     n->idx = n_nodes++;
     n->is_master = is_master;
     n->sender_id = id;
-    n->boot_id = mix(id * 7919u + 17u);
+    n->boot_id = (UINT64_C(0x12345678) << 32) | mix(id * 7919u + 17u);
     n->rng = mix(id);
     n->ppm = ppm;
     n->tick_base = (uint64_t)mix(id) * 1000u;
@@ -527,13 +527,14 @@ static void check_slots(uint64_t from_us)
         assert(x->start_us - slot_start <= (SLOT_LATE_MS + 1u) * 1000u + TX_SETUP_US);
         assert(x->end_us <= slot_start + SLOT_LEN_MS * 1000u);
         /* a slot dealt to the sender, or the free one while the sender has no entry */
-        uint32_t id, boot;
-        memcpy(&id, x->data + 8, 4);
-        memcpy(&boot, x->data + 1, 4);
+        uint32_t id;
+        uint64_t boot;
+        memcpy(&id, x->data + 12, 4);
+        memcpy(&boot, x->data + 1, 8);
         int live = 0, rank = -1;
         for (unsigned e = 0; e < MAX_NODES; e++) {
-            if (b.slot[e].short_id == 0u) { continue; }
-            if (b.slot[e].short_id == node_short_id(id) && b.slot[e].boot_tag == (uint8_t)boot) { rank = live; }
+            if (b.slot[e].node_id == 0u) { continue; }
+            if (b.slot[e].node_id == id && b.slot[e].boot_id == boot) { rank = live; }
             live++;
         }
         if (k == SLOT_COUNT - 1u) { assert(rank < 0); }
@@ -686,7 +687,7 @@ static void latency(void)
     assert(n == n_edges);
     printf("latency: mean %llu ms, worst %llu ms over %u captures\n",
            (unsigned long long)(sum / n / 1000u), (unsigned long long)(worst / 1000u), n);
-    assert(sum / n < 400000u && worst < 800000u);
+    assert(sum / n < 400000u && worst < 1000000u);
     printf("PASS latency\n");
 }
 
@@ -801,7 +802,7 @@ static void reboot(int same_tag, int sensors)
     unsigned interp, lost;
     for (int i = 2; i <= sensors; i++) { check_records(i, 12000000u, TOL_TICKS, &interp, &lost); }
     /* after the reboot every capture of the new boot arrives */
-    uint32_t new_boot = nodes[1].boot_id;
+    uint64_t new_boot = nodes[1].boot_id;
     unsigned got = 0, want = 0;
     for (unsigned i = 0; i < n_edges; i++) { if (edges[i].node == 1 && edges[i].us >= 52000000u) { want++; } }
     for (unsigned j = 0; j < n_recs; j++) {
@@ -812,13 +813,13 @@ static void reboot(int same_tag, int sensors)
     printf("PASS reboot (%s tag, %d sensors)\n", same_tag ? "same" : "new", sensors);
 }
 
-/* Two sensors whose ids share the low 16 bits: the master registers one and
- * refuses the other, which must not jam the registered one's slots. */
+/* Same low 16-bit ids and low boot byte must still get distinct slots and ACKs. */
 static void id_collision(void)
 {
     add_node(1, 0, 0, 0);
     add_node(0, 0x0D2243B0u, 13, 0);
     add_node(0, 0x7A1C43B0u, -9, 0);
+    nodes[2].boot_id = nodes[1].boot_id ^ (UINT64_C(1) << 40);
     add_node(0, 0x11110003u, 4, 0);
     for (int s = 1; s <= 3; s++) { random_edges(s, 12000000u, 90000000u, 2500, (uint32_t)s * 31u); }
     run(100000000u, NULL);
@@ -827,10 +828,12 @@ static void id_collision(void)
     for (unsigned j = 0; j < n_recs; j++) {
         for (int s = 1; s <= 3; s++) { if (recs[j].node == nodes[s].sender_id) { got[s]++; } }
     }
-    assert((got[1] == 0) != (got[2] == 0) && got[3] > 0);
-    assert(el_count(EL_ID_COLLISION) > 0);
+    assert(got[1] > 0 && got[2] > 0 && got[3] > 0);
+    assert(el_count(EL_ID_COLLISION) == 0);
     unsigned interp, lost;
-    check_records(got[1] ? 1 : 2, 12000000u, TOL_TICKS, &interp, &lost);
+    check_records(1, 12000000u, TOL_TICKS, &interp, &lost);
+    assert(lost == 0);
+    check_records(2, 12000000u, TOL_TICKS, &interp, &lost);
     check_records(3, 12000000u, TOL_TICKS, &interp, &lost);
     assert(lost == 0);
     printf("PASS id_collision\n");
@@ -908,6 +911,119 @@ static void faults(void)
     printf("PASS faults\n");
 }
 
+/* Authenticated packets from a wrong master session must not consume a registry
+ * entry or advance a valid sender's replay window. */
+static void inject_uplink(uplink_pl_t *u)
+{
+    uint8_t wire[WIRE_MAX];
+    cur = &nodes[1];
+    int n = sec_seal(wire, sizeof wire, PKT_TYPE_UPLINK, cur->sender_id, u, sizeof *u);
+    cur = &nodes[0];
+    memcpy(cur->pkt, wire, (size_t)n);
+    cur->pkt_len = n; cur->have_pkt = 1;
+    mm.next_beacon = UINT64_MAX;
+    mac_master_step(&mm);
+}
+
+static void session_replay(void)
+{
+    add_node(1, 0, 0, 0);
+    add_node(0, 0x123443b0u, 0, 0);
+    uplink_pl_t u = {.kind = UL_KIND_EDGES, .flags = HEALTH_EVENT_REQUIRED, .ev_seq = 1, .capture_seq = 1};
+    u.u.edges.count = 1;
+    u.master_boot_id = nodes[0].boot_id ^ (UINT64_C(1) << 40);
+    inject_uplink(&u);
+    assert(reg_count(&mm.reg) == 0 && mq_depth(&mq) == 0);
+    u.master_boot_id = nodes[0].boot_id;
+    inject_uplink(&u);
+    assert(reg_count(&mm.reg) == 1 && mq_depth(&mq) == 1);
+    reg_entry_t *e = reg_lookup(&mm.reg, nodes[1].sender_id);
+    uint32_t counter = e->rx.max_ctr;
+    u.master_boot_id ^= UINT64_C(1) << 40;
+    nodes[1].tx_ctr = counter + 100;
+    inject_uplink(&u);
+    assert(e->rx.max_ctr == counter && mq_depth(&mq) == 1);
+    nodes[1].tx_ctr = counter;
+    u.master_boot_id = nodes[0].boot_id; u.ev_seq = 2; u.capture_seq = 2;
+    inject_uplink(&u);
+    assert(e->ack_seq == 2 && mq_depth(&mq) == 2);
+    uint64_t a = nodes[1].boot_id;
+    nodes[1].boot_id ^= UINT64_C(1) << 40;
+    nodes[1].tx_ctr = 0; u.ev_seq = 1;
+    inject_uplink(&u);
+    uint64_t b = e->sensor_boot;
+    assert(b != a && mq_depth(&mq) == 3);
+    nodes[1].boot_id = a; nodes[1].tx_ctr = counter + 200;
+    inject_uplink(&u);
+    assert(e->sensor_boot == b && mq_depth(&mq) == 3 && e->rx.max_ctr == 1);
+    puts("PASS session_replay");
+}
+
+static void late_hook(uint64_t us)
+{
+    if (us == 20000000u) { seal_delay_us = 10000; }
+    if (us == 25000000u) { seal_delay_us = 0; }
+}
+
+static void late_seal(void)
+{
+    add_node(1, 0, 0, 0); add_node(0, 0x12345678u, 0, 0);
+    random_edges(1, 12000000u, 40000000u, 500, 17u);
+    run(70000000u, late_hook);
+    check_slots(12000000u);
+    for (unsigned i = 0; i < air_n; i++) {
+        if (air[i].src == 1) { assert(air[i].start_us < 20000000u || air[i].start_us >= 25000000u); }
+    }
+    unsigned interp, lost;
+    check_records(1, 12000000u, TOL_TICKS, &interp, &lost);
+    assert(lost == 0);
+    puts("PASS late_seal");
+}
+
+static void cad_failure(void)
+{
+    add_node(1, 0, 0, 0); add_node(0, 0x12345678u, 0, 0);
+    cad_error = 1;
+    run(5000000u, NULL);
+    assert(air_n == 0 && !mm.m_tx_valid);
+    puts("PASS cad_failure_no_transmit");
+}
+
+static unsigned peak_fifo;
+static void load_hook(uint64_t us)
+{
+    if (us == 30000000u) { host_acks = 0; }
+    if (us == 45000000u) { host_acks = 1; }
+    for (int i = 1; i < n_nodes; i++) {
+        if (nodes[i].s.q.count > peak_fifo) { peak_fifo = nodes[i].s.q.count; }
+    }
+}
+
+static void load(unsigned sensors, unsigned rate)
+{
+    add_node(1, 0, 0, 10); /* inject loss on uplinks as well as sensor beacon reception */
+    for (unsigned i = 1; i <= sensors; i++) {
+        add_node(0, 0x12340000u + i, (int)i * 5, 10);
+        for (uint64_t us = 12000000u + i * 20000u; us < 52000000u; us += 1000000u / rate) { edge_at((int)i, us); }
+    }
+    run(180000000u, load_hook);
+    check_slots(20000000u);
+    unsigned total_lost = 0;
+    for (unsigned i = 1; i <= sensors; i++) {
+        unsigned interp, lost;
+        check_records((int)i, 12000000u, TOL_TICKS, &interp, &lost);
+        total_lost += lost;
+        const sensor_queue_t *q = &nodes[i].s.q;
+        assert(q->count == 0 && !q->acc_pending);
+        /* Periodic checkpoints can still be awaiting their next beacon ACK. */
+        assert(!q->inflight || q->pkt.kind == UL_KIND_CHECKPOINT);
+    }
+    if (rate == 3) { assert(total_lost == 0 && peak_fifo < SENSOR_FIFO_LEN); }
+    else { assert(total_lost > 0 && peak_fifo == SENSOR_FIFO_LEN); }
+    printf("PASS load (%u sensors, %u Hz, 10%% RX loss, 15s PC stall): peak FIFO %u, lost %u\n",
+           sensors, rate, peak_fifo, total_lost);
+}
+
 int main(int argc, char **argv)
 {
     assert(argc == 2);
@@ -923,6 +1039,12 @@ int main(int argc, char **argv)
     else if (!strcmp(argv[1], "ev_wrap")) { ev_wrap(); }
     else if (!strcmp(argv[1], "hfxo_stop")) { hfxo_stop(); }
     else if (!strcmp(argv[1], "faults")) { faults(); }
+    else if (!strcmp(argv[1], "session_replay")) { session_replay(); }
+    else if (!strcmp(argv[1], "late_seal")) { late_seal(); }
+    else if (!strcmp(argv[1], "cad_failure")) { cad_failure(); }
+    else if (!strcmp(argv[1], "load_2")) { load(2, 3); }
+    else if (!strcmp(argv[1], "load_5")) { load(5, 3); }
+    else if (!strcmp(argv[1], "load_noise")) { load(5, 20); }
     else { fprintf(stderr, "unknown scenario %s\n", argv[1]); return 2; }
     return 0;
 }

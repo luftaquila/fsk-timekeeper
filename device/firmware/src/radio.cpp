@@ -207,7 +207,7 @@ extern "C" int radio_cad(void)
         el_note(EL_CAD_TIMEOUT);
         s_cad_fail++;
         radio_start_rx();
-        return 0;
+        return RADIO_CAD_ERROR;
     }
     uint32_t t0 = board_millis();
     while (gpio_read(PIN_LORA_DIO1) == 0) {
@@ -216,11 +216,18 @@ extern "C" int radio_cad(void)
             s_cad_fail++;
             radio.standby();
             radio_start_rx();
-            return 0;
+            return RADIO_CAD_ERROR;
         }
     }
+    int16_t result = track(radio.getChannelScanResult());
+    if (result != RADIOLIB_LORA_DETECTED && result != RADIOLIB_CHANNEL_FREE) {
+        s_cad_fail++;
+        el_note(EL_CAD_TIMEOUT);
+        radio_start_rx();
+        return RADIO_CAD_ERROR;
+    }
     s_cad_fail = 0;
-    if (radio.getChannelScanResult() == RADIOLIB_LORA_DETECTED) {
+    if (result == RADIOLIB_LORA_DETECTED) {
         radio_start_rx();
         return 1;
     }

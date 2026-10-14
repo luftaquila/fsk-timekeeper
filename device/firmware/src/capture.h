@@ -26,14 +26,16 @@ int capture_dio1_get(uint64_t *tick);
 /* Oldest SENSOR edge from the ring: capture seq (counts every edge, lost ones
  * included) and whether HFXO ran when it was taken. */
 int capture_sensor_get(uint64_t *tick, uint32_t *seq, int *clock_xtal);
-/* Edges the full ring had to drop, as a seq/tick range; it follows every edge
+/* Edges missed by the ISR or dropped by the full ring, as a seq/tick range; it follows every edge
  * still in the ring. Drain with capture_sensor_get() first, then this, until
- * both return 0. */
+ * both return 0. UNKNOWN means the tick range must not be used. */
+#define CAPTURE_LOSS_KNOWN 1
+#define CAPTURE_LOSS_UNKNOWN 2
 int capture_sensor_loss(uint64_t *first_tick, uint64_t *last_tick, uint32_t *first_seq, uint32_t *last_seq);
 /* Now and the seq of the last edge; returns 1 only when no edge is pending
  * anywhere (ring, loss, latched event), i.e. the pair may be a checkpoint. */
 int capture_sensor_checkpoint(uint64_t *tick, uint32_t *seq);
-/* Ring overflows since boot (diagnostic). */
+/* Missed/dropped hardware edges since boot (saturating diagnostic). */
 uint16_t capture_sensor_overflow(void);
 
 /* Latest PPS rising edge since the last call (1), or none (0). */

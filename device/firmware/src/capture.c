@@ -5,7 +5,7 @@
 #include "gpio.h"
 #include "nrf.h"
 
-/* TIMER1 = capture timebase (TIMER2 = board_micros). The SoftDevice is never
+/* TIMER1 = capture timebase, TIMER2 = board_micros, TIMER3 = sensor edge count. The SoftDevice is never
  * enabled, so every GPIOTE/PPI channel is free. */
 #define CAP_GPIOTE_DIO1 0
 #define CAP_GPIOTE_SENS 1
@@ -31,33 +31,56 @@ static volatile uint32_t s_ring_seq[SENSOR_RING_LEN];
 static volatile uint8_t s_ring_xtal[SENSOR_RING_LEN];
 static volatile uint32_t s_sensor_seq;
 static volatile uint32_t s_loss_first_seq, s_loss_last_seq, s_loss_first_tick, s_loss_last_tick;
-static volatile int s_loss_pending;
+static volatile int s_loss_pending, s_loss_unknown;
 static volatile uint8_t s_head;
 static volatile uint8_t s_tail;
 static volatile uint16_t s_overflow;
 
-/* SENSOR edge: ring the latched tick; when the ring is full, extend the loss range.
- * A pending range keeps growing until the main loop takes it, even once the ring
- * has room again, so every ring item precedes it and records leave in seq order. */
+static uint32_t sensor_count(void)
+{
+#ifdef CAPTURE_HOST_TEST
+    extern uint32_t capture_test_count(void);
+    return capture_test_count();
+#else
+    NRF_TIMER3->TASKS_CAPTURE[0] = 1;
+    return NRF_TIMER3->CC[0];
+#endif
+}
+
+/* Count every hardware edge even while the CPU is stalled. Only pair a tick
+ * with a sequence when the count and event stayed stable across the snapshot. */
 void GPIOTE_IRQHandler(void)
 {
-    if (NRF_GPIOTE->EVENTS_IN[CAP_GPIOTE_SENS]) {
-        NRF_GPIOTE->EVENTS_IN[CAP_GPIOTE_SENS] = 0;
-        uint32_t seq = ++s_sensor_seq;
-        uint32_t tick = NRF_TIMER1->CC[CAP_CC_SENS];
-        uint8_t head = s_head;
-        uint8_t next = (uint8_t)((head + 1u) & (SENSOR_RING_LEN - 1u));
-        if (next == s_tail || s_loss_pending) {
-            if (s_overflow != UINT16_MAX) { s_overflow++; }
-            if (!s_loss_pending) { s_loss_first_seq = seq; s_loss_first_tick = tick; }
-            s_loss_last_seq = seq; s_loss_last_tick = tick; s_loss_pending = 1;
-        } else {
-            s_ring_tick[head] = tick;
-            s_ring_seq[head] = seq;
-            s_ring_xtal[head] = (uint8_t)board_hfclk_xtal();
-            __DMB();
-            s_head = next;
+    if (!NRF_GPIOTE->EVENTS_IN[CAP_GPIOTE_SENS]) { return; }
+    NRF_GPIOTE->EVENTS_IN[CAP_GPIOTE_SENS] = 0;
+    uint32_t before = sensor_count();
+    uint32_t tick = NRF_TIMER1->CC[CAP_CC_SENS];
+    uint32_t seq = sensor_count();
+    uint32_t delta = seq - s_sensor_seq;
+    if (delta == 0u) { return; } /* a later edge already included by the previous ISR */
+    int unknown = delta != 1u || before != seq || NRF_GPIOTE->EVENTS_IN[CAP_GPIOTE_SENS];
+    uint32_t first = s_sensor_seq + 1u;
+    s_sensor_seq = seq;
+    uint8_t head = s_head;
+    uint8_t next = (uint8_t)((head + 1u) & (SENSOR_RING_LEN - 1u));
+    if (unknown || next == s_tail || s_loss_pending) {
+        if (delta > (uint32_t)(UINT16_MAX - s_overflow)) { s_overflow = UINT16_MAX; }
+        else { s_overflow = (uint16_t)(s_overflow + delta); }
+        if (!s_loss_pending) {
+            s_loss_first_seq = first;
+            s_loss_first_tick = tick;
+            s_loss_unknown = 0;
         }
+        s_loss_last_seq = seq;
+        s_loss_last_tick = tick;
+        s_loss_unknown |= unknown;
+        s_loss_pending = 1;
+    } else {
+        s_ring_tick[head] = tick;
+        s_ring_seq[head] = seq;
+        s_ring_xtal[head] = (uint8_t)board_hfclk_xtal();
+        __DMB();
+        s_head = next;
     }
 }
 
@@ -86,11 +109,17 @@ void capture_init(void)
 
 void capture_sensor_enable(void)
 {
+    NRF_TIMER3->TASKS_STOP = 1;
+    NRF_TIMER3->MODE = TIMER_MODE_MODE_Counter;
+    NRF_TIMER3->BITMODE = TIMER_BITMODE_BITMODE_32Bit;
+    NRF_TIMER3->TASKS_CLEAR = 1;
+    NRF_TIMER3->TASKS_START = 1;
     gpio_cfg_input_pullup(PIN_SENSOR_IN); /* NPN open collector */
     NRF_GPIOTE->CONFIG[CAP_GPIOTE_SENS] = gpiote_event(SENS_PIN, SENS_PRT, GPIOTE_CONFIG_POLARITY_HiToLo);
     NRF_GPIOTE->EVENTS_IN[CAP_GPIOTE_SENS] = 0;
     NRF_PPI->CH[CAP_PPI_SENS].EEP = (uint32_t)&NRF_GPIOTE->EVENTS_IN[CAP_GPIOTE_SENS];
     NRF_PPI->CH[CAP_PPI_SENS].TEP = (uint32_t)&NRF_TIMER1->TASKS_CAPTURE[CAP_CC_SENS];
+    NRF_PPI->FORK[CAP_PPI_SENS].TEP = (uint32_t)&NRF_TIMER3->TASKS_COUNT;
     NRF_PPI->CHENSET = (1UL << CAP_PPI_SENS);
 
     NRF_GPIOTE->INTENSET = (1UL << (GPIOTE_INTENSET_IN0_Pos + CAP_GPIOTE_SENS));
@@ -168,16 +197,20 @@ int capture_sensor_loss(uint64_t *first_tick, uint64_t *last_tick, uint32_t *fir
     if (!s_loss_pending) { NVIC_EnableIRQ(GPIOTE_IRQn); return 0; }
     *first_tick = widen(s_loss_first_tick); *last_tick = widen(s_loss_last_tick);
     *first_seq = s_loss_first_seq; *last_seq = s_loss_last_seq;
-    s_loss_pending = 0;
+    int result = s_loss_unknown ? CAPTURE_LOSS_UNKNOWN : CAPTURE_LOSS_KNOWN;
+    s_loss_pending = s_loss_unknown = 0;
     NVIC_EnableIRQ(GPIOTE_IRQn);
-    return 1;
+    return result;
 }
 
 int capture_sensor_checkpoint(uint64_t *tick, uint32_t *seq)
 {
     NVIC_DisableIRQ(GPIOTE_IRQn);
+    uint32_t before = sensor_count();
     *tick = capture_now64();
-    int empty = s_head == s_tail && !s_loss_pending && !NRF_GPIOTE->EVENTS_IN[CAP_GPIOTE_SENS];
+    uint32_t after = sensor_count();
+    int empty = before == after && after == s_sensor_seq && s_head == s_tail &&
+                !s_loss_pending && !NRF_GPIOTE->EVENTS_IN[CAP_GPIOTE_SENS];
     *seq = s_sensor_seq;
     NVIC_EnableIRQ(GPIOTE_IRQn);
     return empty;

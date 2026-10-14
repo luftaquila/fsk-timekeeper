@@ -249,13 +249,37 @@ static void ack_parser(void)
     pu_cmd_t cmd = PU_CMD_NONE;
     for (const char *p = good; *p; p++) { cmd = pu_feed(*p); }
     assert(cmd == PU_CMD_EVENT_ACK && pu_ack_hseq() == 17 && pu_ack_boot() == 3735928559u && pu_ack_crc() == 0x1A2B3C4Du);
-    const char *bad[] = { "C 17 3735928559 1A2B3C4\n", "C 17 4294967296 1A2B3C4D\n", "C x 1 1A2B3C4D\n", "C 1 2 1A2B3C4DZ\n" };
+    good = "C 18 18446744073709551615 1A2B3C4D\n";
+    for (const char *p = good; *p; p++) { cmd = pu_feed(*p); }
+    assert(cmd == PU_CMD_EVENT_ACK && pu_ack_boot() == UINT64_MAX);
+    const char *bad[] = { "C 17 3735928559 1A2B3C4\n", "C 17 18446744073709551616 1A2B3C4D\n", "C x 1 1A2B3C4D\n", "C 1 2 1A2B3C4DZ\n" };
     for (unsigned i = 0; i < 4; i++) {
         cmd = PU_CMD_NONE;
         for (const char *p = bad[i]; *p; p++) { cmd = pu_feed(*p); }
         assert(cmd == PU_CMD_BAD);
     }
     printf("PASS ack_parser\n");
+}
+
+static void longest_event_line(void)
+{
+    uplink_pl_t u = {0};
+    u.kind = UL_KIND_EDGES;
+    u.flags = HEALTH_EVENT_REQUIRED | EVENT_INTERPOLATED;
+    u.ev_seq = UINT16_MAX;
+    u.master_boot_id = UINT64_MAX;
+    u.capture_seq = UINT32_MAX - 4u;
+    u.tick = UINT64_MAX - 4u;
+    u.sync_age_ms = UINT16_MAX;
+    u.u.edges.count = UL_EDGES_MAX;
+    for (unsigned i = 0; i < UL_EDGES_MAX - 1u; i++) { u.u.edges.dt[i] = 1u; }
+    char line[PU_LINE_MAX];
+    uint32_t crc;
+    int n = pu_format_uplink(line, sizeof line, UINT32_MAX, UINT32_MAX, UINT64_MAX, &u, -127.5f, -32.0f, &crc);
+    assert(n > 0 && (unsigned)n < sizeof line);
+    assert(strstr(line, "18446744073709551615"));
+    line_crc_ok(line);
+    printf("PASS longest_event_line (%d bytes)\n", n);
 }
 
 static void control_retry(void)
@@ -287,25 +311,24 @@ static void registry(void)
     reg_init(&r);
     int why = 0;
     reg_entry_t *a = reg_claim(&r, 0x00010001u, 0, &why);
-    assert(a && a == &r.e[0] && a->short_id == 1);
+    assert(a && a == &r.e[0] && a->id == 0x00010001u);
     a->have_boot = 1; a->sensor_boot = 0x1234ABu; a->ack_seq = 9;
     assert(reg_lookup(&r, 0x00010001u) == a);
-    /* same short id as a live sensor: refused */
-    assert(!reg_claim(&r, 0x00020001u, 0, &why) && why == REG_COLLISION);
-    for (uint32_t i = 2; i <= MAX_NODES; i++) { assert(reg_claim(&r, i, 0, &why)); }
+    /* Full ids allow matching low words without collision exceptions. */
+    assert(reg_claim(&r, 0x00020001u, 0, &why));
+    for (uint32_t i = 3; i <= MAX_NODES; i++) { assert(reg_claim(&r, i, 0, &why)); }
     assert(!reg_claim(&r, 0x77u, 0, &why) && why == REG_FULL);
     beacon_slot_t t[MAX_NODES];
     reg_slot_table(&r, 1000, t);
-    assert(t[0].short_id == 1 && t[0].ack_seq == 9 && t[0].boot_tag == 0xAB);
+    assert(t[0].node_id == 0x00010001u && t[0].ack_seq == 9 && t[0].boot_id == 0x1234ABu);
     /* a LOST sensor frees its slot in the table, and a newcomer may take it */
     for (unsigned i = 1; i < MAX_NODES; i++) { r.e[i].heard_ms = LINK_STALE_MS + 1u; }
     reg_slot_table(&r, LINK_STALE_MS + 2u, t);
-    assert(t[0].short_id == 0 && t[1].short_id == 2);
+    assert(t[0].node_id == 0 && t[1].node_id == 0x00020001u);
     assert(reg_state(&r.e[1], LINK_STALE_MS + 2u) == PU_STATE_OK);
     assert(reg_state(&r.e[1], LINK_STALE_MS + 1u + LINK_OK_MS + 1u) == PU_STATE_STALE);
-    reg_entry_t *n = reg_claim(&r, 0x00020001u, LINK_STALE_MS + 2u, &why);
-    assert(n == &r.e[0] && n->short_id == 1 && !n->have_boot);
-    assert(node_short_id(0x00050000u) == 5 && node_short_id(0x12340000u) == 0x1234 && node_short_id(0x10000u) == 1);
+    reg_entry_t *n = reg_claim(&r, 0x00030001u, LINK_STALE_MS + 2u, &why);
+    assert(n == &r.e[0] && n->id == 0x00030001u && !n->have_boot);
     printf("PASS registry\n");
 }
 
@@ -318,6 +341,7 @@ int main(void)
     fifo_held_and_clear();
     host_queue();
     ack_parser();
+    longest_event_line();
     control_retry();
     registry();
     return 0;

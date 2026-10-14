@@ -6,6 +6,7 @@
 #define MAC_MASTER_H
 
 #include <stdint.h>
+#include "retry.h"
 
 #include "master_queue.h"
 #include "registry.h"
@@ -21,8 +22,7 @@ typedef struct {
     unsigned cp_left;
     uint32_t auth_drop;    /* AEAD failures (not attributable to a sensor) */
     uint32_t ver_drop;     /* packets of another radio protocol version */
-    uint32_t reset_after_ms;
-    uint32_t reset_backoff_ms;
+    retry_t retry;
 } mac_master_t;
 
 void mac_master_init(mac_master_t *m, mq_t *q);

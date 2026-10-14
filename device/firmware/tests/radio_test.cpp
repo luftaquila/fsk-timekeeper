@@ -172,6 +172,14 @@ int main(int argc, char **argv)
         assert(chip.fallback == RADIOLIB_SX126X_RX_TX_FALLBACK_MODE_STDBY_XOSC);
         assert(chip.mode == RADIOLIB_SX126X_STATUS_MODE_STDBY_XOSC);
         assert(!radio_needs_reset());
+    } else if (!strcmp(scenario, "cad_timeout")) {
+        power_on(); assert(radio_begin() == 0);
+        for (unsigned i = 0; i < RADIO_NORESP_RESET; i++) { assert(radio_cad() == RADIO_CAD_ERROR); }
+        assert(radio_needs_reset() && notes[EL_CAD_TIMEOUT] == RADIO_NORESP_RESET);
+    } else if (!strcmp(scenario, "cad_wrong_modem")) {
+        power_on(); assert(radio_begin() == 0);
+        chip.packet_type = RADIOLIB_SX126X_PACKET_TYPE_GFSK;
+        assert(radio_cad() == RADIO_CAD_ERROR);
     } else if (!strcmp(scenario, "begin_dead")) {
         chip.answers = false;
         power_on();

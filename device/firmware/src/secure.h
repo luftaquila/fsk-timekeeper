@@ -6,7 +6,7 @@
  * header, both bound into the nonce.
  *
  * Nonce = (domain | type | node_id | boot_id | ctr): ctr never repeats within a
- * boot and boot_id is fresh per power-up, so a nonce never repeats.
+ * boot and boot_id is fresh per power-up, making accidental reuse negligible (not impossible).
  */
 #ifndef SECURE_H
 #define SECURE_H
@@ -21,14 +21,17 @@ extern "C" {
  * key. Call before any sec_seal(); a master calls it again to open a new session.
  * If the RNG fails, sealing stays refused (a repeated boot_id could repeat a nonce). */
 void sec_init(void);
+void sec_service(uint32_t now_ms);
+int sec_boot_ready(void);
+int sec_ready(void);
 
 /* Reload the key after re-provisioning (no reboot needed). */
 void sec_reload(void);
 
-/* 1 when a key is loaded (seal/unseal work), 0 when unprovisioned. */
+/* 1 when a key is loaded; transmission also requires sec_ready(). */
 int sec_provisioned(void);
 
-uint32_t sec_boot_id(void);
+uint64_t sec_boot_id(void);
 
 /* Non-cryptographic 32-bit random value (MAC slot contention). */
 uint32_t sec_random(void);
@@ -42,7 +45,7 @@ int sec_seal(uint8_t *out, int out_cap, uint8_t type, uint32_t node_id,
 typedef struct {
     uint8_t  type;
     uint32_t node_id;
-    uint32_t boot_id;
+    uint64_t boot_id;
     uint32_t ctr;
 } sec_meta_t;
 
@@ -55,16 +58,18 @@ int sec_unseal(const uint8_t *in, int in_len, sec_meta_t *meta,
  * fleet key, i.e. a board of this fleet sent it. */
 int sec_authentic_any_version(const uint8_t *in, int in_len);
 
-/* Per-(sender, direction) replay window. */
+/* Bounded recent-session replay memory; eviction or registry replacement loses history. */
+#define SEC_RETIRED_BOOTS 8u
 typedef struct {
-    uint32_t boot_id;
+    uint64_t boot_id;
     uint32_t max_ctr;
     uint8_t  have;
+    uint8_t  retired_count, retired_next;
+    uint64_t retired[SEC_RETIRED_BOOTS];
 } sec_replay_t;
 
-/* 1 and update st if (boot_id, ctr) is fresh, 0 on replay. A new boot_id
- * re-baselines the window. */
-int sec_replay(sec_replay_t *st, uint32_t boot_id, uint32_t ctr);
+/* 1 and update st if (boot_id, ctr) is fresh, 0 on replay. An unseen boot_id starts a new window; the eight most recently retired ids are refused. */
+int sec_replay(sec_replay_t *st, uint64_t boot_id, uint32_t ctr);
 
 #ifdef __cplusplus
 }

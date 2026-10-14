@@ -1,4 +1,4 @@
-/* Master <-> PC USB-CDC line protocol v2 (DESIGN §8). Newline-delimited ASCII,
+/* Master <-> PC USB-CDC line protocol v3 (DESIGN §8). Newline-delimited ASCII,
  * first token = line type. Formatting is dependency-free (newlib-nano has no
  * %f / %llu) so 64-bit ticks survive intact. Node token: "0" = master, sensors
  * = 8 uppercase hex digits. crc = 8 uppercase hex digits of CRC-32/IEEE over the
@@ -34,7 +34,7 @@
 extern "C" {
 #endif
 
-#define PU_USB_PROTO 2u
+#define PU_USB_PROTO 3u
 
 /* Reset reason byte (I line, D line, sensor diagnostics). 0 = power-on/brown-out. */
 #define RESET_PIN    0x01u
@@ -91,8 +91,8 @@ typedef struct {
     uint32_t ver_drop;
     uint32_t tx_drop;
     uint8_t  reset_reason;
-    uint32_t sensor_boot_id;
-    uint32_t master_boot_id;
+    uint64_t sensor_boot_id;
+    uint64_t master_boot_id;
 } pu_diag_t;
 
 /* Control lines (I, A, X, T) that USB cannot take right now wait in a small
@@ -100,7 +100,7 @@ typedef struct {
 void pu_emit_identity(uint32_t devid_hi, uint32_t devid_lo, int is_master, uint8_t reset_reason);
 void pu_emit_heartbeat(uint64_t now_tick, uint32_t uptime_ms, uint8_t beacon_seq, int nseen);
 void pu_emit_diag(const pu_diag_t *d);
-void pu_emit_clock(const char *token, uint64_t tick, uint32_t master_boot_id);
+void pu_emit_clock(const char *token, uint64_t tick, uint64_t master_boot_id);
 void pu_emit_pps(uint64_t pps_tick, uint32_t utc_s, int32_t ppb, int pps_valid, uint8_t fix,
                  uint8_t sats, uint8_t span_s, uint32_t seg, uint32_t n);
 void pu_emit_ack(const char *cmd);
@@ -113,9 +113,9 @@ void pu_service(uint32_t now_ms);
 uint32_t pu_tx_drop(void);
 
 /* E line into buf (NUL-terminated, with "\n"). Returns the length, *crc = its crc. */
-int pu_format_uplink(char *buf, unsigned cap, uint32_t hseq, uint32_t node_id, uint32_t sensor_boot_id,
+int pu_format_uplink(char *buf, unsigned cap, uint32_t hseq, uint32_t node_id, uint64_t sensor_boot_id,
                      const uplink_pl_t *u, float rssi, float snr, uint32_t *crc);
-int pu_format_timebase_end(char *buf, unsigned cap, uint32_t hseq, uint32_t master_boot_id,
+int pu_format_timebase_end(char *buf, unsigned cap, uint32_t hseq, uint64_t master_boot_id,
                            uint64_t tick, uint32_t *crc);
 
 /* Parsed PC -> master command. */
@@ -137,7 +137,7 @@ pu_cmd_t pu_feed(int c);
 /* Arguments of the last parsed command; valid right after pu_feed() returns it. */
 const uint8_t *pu_setkey(void);
 uint32_t pu_ack_hseq(void);
-uint32_t pu_ack_boot(void);
+uint64_t pu_ack_boot(void);
 uint32_t pu_ack_crc(void);
 const char *pu_clock_token(void);
 

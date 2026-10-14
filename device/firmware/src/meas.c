@@ -4,7 +4,7 @@
 #include "errlog.h"
 #include "nrf.h"
 
-/* Every wait here finishes in well under 1 ms. */
+/* Normal waits are sub-millisecond; stop a stalled peripheral after 2 ms. */
 #define MEAS_WAIT_MAX_US 2000u
 
 static int wait_event(volatile uint32_t *event)
@@ -19,7 +19,7 @@ static int wait_event(volatile uint32_t *event)
     return 1;
 }
 
-int16_t meas_temp_c10(void)
+static int16_t read_temp_c10(void)
 {
     NRF_TEMP->EVENTS_DATARDY = 0;
     NRF_TEMP->TASKS_START = 1;
@@ -33,7 +33,7 @@ int16_t meas_temp_c10(void)
 /* EasyDMA target for the single sample. */
 static volatile int16_t s_adc_result;
 
-uint16_t meas_vddh_mv(void)
+static uint16_t read_vddh_mv(void)
 {
     NRF_SAADC->RESOLUTION = SAADC_RESOLUTION_VAL_12bit;
     NRF_SAADC->CH[0].CONFIG =
@@ -71,3 +71,20 @@ uint16_t meas_vddh_mv(void)
     /* SE 12-bit, ref 0.6 V, gain 1/6 -> 3.6 V full scale; input = VDDH / 5. */
     return (uint16_t)(((uint32_t)code * 18000u) / 4096u);
 }
+
+static int16_t s_temp;
+static uint16_t s_mv;
+static uint32_t s_at_ms;
+static int s_sampled;
+
+void meas_service(uint32_t now_ms)
+{
+    if (s_sampled && (uint32_t)(now_ms - s_at_ms) < 1000u) { return; }
+    s_temp = read_temp_c10();
+    s_mv = read_vddh_mv();
+    s_at_ms = board_millis();
+    s_sampled = 1;
+}
+
+int16_t meas_temp_c10(void) { return s_temp; }
+uint16_t meas_vddh_mv(void) { return s_mv; }

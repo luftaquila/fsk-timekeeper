@@ -1,6 +1,6 @@
 import { describe, it } from "vitest";
 import assert from "node:assert/strict";
-import { parseLine, parseEventLine, normalizeTelemetry, normalizePps, formatAck, rowKey, isHexKey, contractOf, errorNames, resetNames, CONTRACT_SENSOR_ROLE, CONTRACT_VERSION } from "../src/lib/protocol.js";
+import { parseLine, parseEventLine, normalizeTelemetry, normalizePps, formatAck, rowKey, bootIdText, isHexKey, contractOf, errorNames, resetNames, CONTRACT_SENSOR_ROLE, CONTRACT_VERSION } from "../src/lib/protocol.js";
 import { crc32, crc32Hex } from "../src/lib/crc32.js";
 
 const withCrc = (body) => `${body} ${crc32Hex(body)}`;
@@ -19,12 +19,13 @@ describe("crc32", () => {
 });
 
 describe("parseLine", () => {
-  it("parses I v2 and checks the contract", () => {
-    const i = parseLine("I FSK-WL 2 1.0.0 0123456789ABCDEF M 12 921.30 7 250.00 16000 4");
-    assert.deepEqual(i, { type: "I", product: "FSK-WL", usbProto: 2, fw: "1.0.0", devid: "0123456789ABCDEF", role: "M", radioProto: 12, freqMhz: 921.3, sf: 7, bw: 250, ticksPerMs: 16000, resetReason: 4, v1: false });
+  it("parses I v3 and checks the contract", () => {
+    const i = parseLine("I FSK-WL 3 1.0.0 0123456789ABCDEF M 13 921.30 7 250.00 16000 4");
+    assert.deepEqual(i, { type: "I", product: "FSK-WL", usbProto: 3, fw: "1.0.0", devid: "0123456789ABCDEF", role: "M", radioProto: 13, freqMhz: 921.3, sf: 7, bw: 250, ticksPerMs: 16000, resetReason: 4, v1: false });
     assert.deepEqual(contractOf(i), { ok: true, reason: null });
     assert.equal(contractOf({ ...i, role: "S" }).reason, CONTRACT_SENSOR_ROLE);
     assert.equal(contractOf({ ...i, radioProto: 11 }).reason, CONTRACT_VERSION);
+    assert.equal(contractOf({ ...i, radioProto: 12, usbProto: 2 }).reason, CONTRACT_VERSION);
     assert.equal(contractOf({ ...i, ticksPerMs: 16001 }).reason, CONTRACT_VERSION);
     const v1 = parseLine("I FSK-WL 1.0.0 0123456789ABCDEF 921.30 7 250.00 16000");
     assert.equal(v1.v1, true);
@@ -33,9 +34,9 @@ describe("parseLine", () => {
     assert.equal(contractOf(null).ok, false);
   });
 
-  it("parses H / T / A / X / P v2", () => {
+  it("parses H / T / A / X / P v3", () => {
     assert.deepEqual(parseLine("H 18446744073709551615 12345 200 3"), { type: "H", nowTick: "18446744073709551615", uptimeMs: 12345, beaconSeq: 200, nseen: 3 });
-    assert.deepEqual(parseLine("T 0123456789abcdef0123456789abcdef 99 7"), { type: "T", requestId: "0123456789abcdef0123456789abcdef", masterTick: "99", masterBootId: 7 });
+    assert.deepEqual(parseLine("T 0123456789abcdef0123456789abcdef 99 7"), { type: "T", requestId: "0123456789abcdef0123456789abcdef", masterTick: "99", masterBootId: "7" });
     assert.deepEqual(parseLine("A K OK\r"), { type: "A", cmd: "K" });
     assert.deepEqual(parseLine("X radio_reset 3"), { type: "X", reason: "radio_reset", args: ["3"], text: "X radio_reset 3" });
     const p = normalizePps(parseLine("P 123456789012345678 1727500000 12345 1 1 9 64 3 17").pps, 5000);
@@ -61,7 +62,7 @@ describe("parseLine", () => {
     assert.equal(t.reset_reason, 4);
     assert.deepEqual(resetNames(t.reset_reason), ["soft reset"]);
     assert.deepEqual(resetNames(0), ["power-on"]);
-    assert.equal(t.sensor_boot_id, 305419896);
+    assert.equal(t.sensor_boot_id, "305419896");
     const m = normalizeTelemetry(parseLine(D_MASTER).telemetry, 1);
     assert.equal(m.queue_depth, 3);
     assert.equal(m.queue_overflow, 1);
@@ -75,11 +76,30 @@ describe("parseLine", () => {
 });
 
 describe("parseEventLine", () => {
+  it("keeps adjacent 64-bit boot IDs distinct through parsing, row keys and ACKs", () => {
+    const ids = ["9007199254740992", "9007199254740993", "18446744073709551615"];
+    const packets = ids.map((id) => parseEventLine(withCrc(`E 1 0D2243B0 K 1 7 ${id} ${id} 0 0.00 0.00 1 9`)));
+    assert.equal(new Set(packets.map((p) => rowKey(p.rows[0]))).size, ids.length);
+    for (let i = 0; i < ids.length; i++) {
+      assert.equal(packets[i].masterBootId, ids[i]);
+      assert.equal(packets[i].rows[0].sensor_boot_id, ids[i]);
+      assert.equal(formatAck(packets[i]), `C 1 ${ids[i]} ${packets[i].crc}`);
+    }
+    assert.equal(bootIdText(0xffffffff), "4294967295"); // legacy history
+    assert.equal(bootIdText("00000000000000000000"), "0");
+    for (const id of ["18446744073709551616", "-1", "1e3", 9007199254740992]) {
+      assert.equal(bootIdText(id), null);
+    }
+    assert.equal(parseLine("T token 1 18446744073709551616").masterBootId, null);
+    assert.equal(parseEventLine(withCrc("E 1 0D2243B0 K 1 7 18446744073709551616 1 0 0.00 0.00 1 9")).reason, "master_boot_id");
+    assert.equal(parseEventLine(withCrc("E 1 0D2243B0 K 1 7 1 18446744073709551616 0 0.00 0.00 1 9")).reason, "sensor_boot_id");
+  });
+
   it("expands a capture bundle into one row per edge", () => {
     const p = parseEventLine(C_LINE);
     assert.equal(p.stage, "valid");
     assert.equal(p.hseq, 17);
-    assert.equal(p.masterBootId, 3735928559);
+    assert.equal(p.masterBootId, "3735928559");
     assert.equal(p.rows.length, 2);
     assert.deepEqual(
       p.rows.map((r) => [r.kind, r.capture_seq, r.master_tick, r.end_tick]),
@@ -89,7 +109,7 @@ describe("parseEventLine", () => {
       ],
     );
     assert.equal(p.rows[0].raw, C_LINE);
-    assert.equal(p.rows[0].usb_proto, 2);
+    assert.equal(p.rows[0].usb_proto, 3);
     assert.equal(rowKey(p.rows[1]), "3735928559:0D2243B0:305419896:capture:43:123456789028345678");
     assert.equal(formatAck(p), `C 17 3735928559 ${C_LINE.slice(-8)}`);
   });
@@ -119,7 +139,7 @@ describe("parseEventLine", () => {
     const bad = invalid("E 5 0D2243B0 K 1 7 1 2 0 0.00 0.00 1 x");
     assert.equal(bad.stage, "invalid");
     assert.equal(bad.node, "0D2243B0");
-    assert.equal(bad.masterBootId, 1);
+    assert.equal(bad.masterBootId, "1");
     assert.equal(invalid("E 5 0D2243B0 K 1 7 x 2 0 0.00 0.00 1 9").masterBootId, null);
   });
 

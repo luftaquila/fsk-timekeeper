@@ -8,6 +8,7 @@
 #include "errlog.h"
 #include "proto_usb.h"
 #include "radio.h"
+#include "meas.h"
 #include "secure.h"
 
 #define TPM ((uint64_t)TICKS_PER_MS)
@@ -19,8 +20,7 @@ void mac_master_init(mac_master_t *m, mq_t *q)
     reg_init(&m->reg);
     m->q = q;
     m->next_beacon = capture_now64();
-    m->reset_after_ms = board_millis();
-    m->reset_backoff_ms = 1000u;
+    retry_init(&m->retry, board_millis(), RADIO_BOOT_RETRY_MS);
     radio_start_rx();
 }
 
@@ -90,19 +90,20 @@ static void on_uplink(mac_master_t *m, const uint8_t *buf, int n, float rssi, fl
     uplink_pl_t u;
     if (sec_unseal(buf, n, &meta, &u, sizeof(u)) != 0) { m->auth_drop++; return; }
 
+    /* Reject other master sessions before allocating entries or changing replay state. */
+    if (u.master_boot_id != sec_boot_id()) { m->auth_drop++; return; }
+
     uint32_t now_ms = board_millis();
     reg_entry_t *e = reg_lookup(&m->reg, meta.node_id);
     if (!e) {
         int why = 0;
         e = reg_claim(&m->reg, meta.node_id, now_ms, &why);
         if (!e) {
-            el_note(why == REG_COLLISION ? EL_ID_COLLISION : EL_REGISTRY_FULL);
+            el_note(EL_REGISTRY_FULL);
             return;
         }
     }
     if (!sec_replay(&e->rx, meta.boot_id, meta.ctr)) { e->sec_drop++; return; }
-    /* Session binding: records name the master session their ticks belong to. */
-    if (u.master_boot_id != sec_boot_id()) { e->sec_drop++; return; }
 
     if (!e->have_boot || e->sensor_boot != meta.boot_id) {
         /* First uplink of this sensor boot (or of this master session): its
@@ -145,19 +146,26 @@ static void receive_one(mac_master_t *m)
 /* Listen before talk, bounded: finish a reception in progress, re-sense a busy
  * channel for up to BEACON_LBT_MAX_MS, then send regardless — every sensor syncs
  * on the beacon, and sync uses the real TxDone, not the nominal time. */
-static void beacon_lbt(mac_master_t *m)
+static int beacon_lbt(mac_master_t *m)
 {
     uint32_t t0 = board_millis();
     for (;;) {
         if (radio_rx_settle(RX_HEADER_WAIT_MS, RX_DRAIN_MAX_MS) == RADIO_RX_PACKET) { receive_one(m); }
-        if ((uint32_t)(board_millis() - t0) >= BEACON_LBT_MAX_MS) { return; }
-        if (!radio_cad()) { return; }
+        if ((uint32_t)(board_millis() - t0) >= BEACON_LBT_MAX_MS) { return 1; }
+        int cad = radio_cad();
+        if (cad == RADIO_CAD_ERROR) { return 0; }
+        if (cad == RADIO_CAD_CLEAR) { return 1; }
     }
 }
 
 static void send_beacon(mac_master_t *m)
 {
-    beacon_lbt(m);
+    if (!beacon_lbt(m)) {
+        m->m_tx_valid = 0;
+        m->seq++;
+        radio_start_rx();
+        return;
+    }
     beacon_pl_t b;
     b.seq = m->seq;
     b.flags = m->m_tx_valid ? BEACON_TX_PREV_VALID : 0u;
@@ -188,13 +196,10 @@ static void radio_recovery(mac_master_t *m)
 {
     if (!radio_needs_reset()) { return; }
     uint32_t now = board_millis();
-    if ((int32_t)(now - m->reset_after_ms) < 0) { return; }
+    if (!retry_due(&m->retry, now)) { return; }
     el_note(EL_RADIO_RESET);
-    radio_begin();
-    radio_start_rx();
-    m->reset_after_ms = now + m->reset_backoff_ms;
-    m->reset_backoff_ms = m->reset_backoff_ms * 2u > RADIO_RESET_BACKOFF_MAX_MS
-                          ? RADIO_RESET_BACKOFF_MAX_MS : m->reset_backoff_ms * 2u;
+    if (radio_begin() == 0) { radio_start_rx(); }
+    retry_later(&m->retry, board_millis(), RADIO_RESET_BACKOFF_MAX_MS);
 }
 
 int mac_master_step(mac_master_t *m)
@@ -203,10 +208,11 @@ int mac_master_step(mac_master_t *m)
     uint64_t now = capture_now64();
     if (now >= m->next_beacon) {
         send_beacon(m);
+        meas_service(board_millis());
         m->next_beacon += BEACON_PERIOD_TICKS;
         if (m->next_beacon <= capture_now64()) { m->next_beacon = capture_now64() + BEACON_PERIOD_TICKS; }
         sent = 1;
-        if (m->m_tx_valid) { m->reset_backoff_ms = 1000u; } /* the radio works again */
+        if (m->m_tx_valid) { m->retry.delay_ms = RADIO_BOOT_RETRY_MS; } /* the radio works again */
     }
     receive_one(m);
     radio_recovery(m);

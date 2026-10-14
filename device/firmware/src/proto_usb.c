@@ -177,8 +177,8 @@ void pu_emit_diag(const pu_diag_t *d)
     lb_sp(&b); lb_u32(&b, d->ver_drop);
     lb_sp(&b); lb_u32(&b, d->tx_drop);
     lb_sp(&b); lb_u32(&b, d->reset_reason);
-    lb_sp(&b); lb_u32(&b, d->sensor_boot_id);
-    lb_sp(&b); lb_u32(&b, d->master_boot_id);
+    lb_sp(&b); lb_u64(&b, d->sensor_boot_id);
+    lb_sp(&b); lb_u64(&b, d->master_boot_id);
     lb_finish(&b);
     write_periodic(line);
 }
@@ -202,13 +202,13 @@ void pu_emit_pps(uint64_t pps_tick, uint32_t utc_s, int32_t ppb, int pps_valid, 
     write_periodic(line);
 }
 
-void pu_emit_clock(const char *token, uint64_t tick, uint32_t master_boot_id)
+void pu_emit_clock(const char *token, uint64_t tick, uint64_t master_boot_id)
 {
     char line[80];
     lb_t b; lb_init(&b, line, sizeof(line));
     lb_str(&b, "T "); lb_str(&b, token);
     lb_sp(&b); lb_u64(&b, tick);
-    lb_sp(&b); lb_u32(&b, master_boot_id);
+    lb_sp(&b); lb_u64(&b, master_boot_id);
     lb_finish(&b);
     write_control(line);
 }
@@ -269,7 +269,7 @@ static int lb_seal(lb_t *b, char *buf, uint32_t *crc)
 }
 
 static void lb_event_head(lb_t *b, uint32_t hseq, uint32_t node_id, int is_master, char kind,
-                          uint16_t ev_seq, uint8_t flags, uint32_t master_boot_id, uint32_t sensor_boot_id,
+                          uint16_t ev_seq, uint8_t flags, uint64_t master_boot_id, uint64_t sensor_boot_id,
                           uint16_t sync_age_ms, float rssi, float snr, uint32_t capture_seq)
 {
     lb_str(b, "E "); lb_u32(b, hseq);
@@ -277,15 +277,15 @@ static void lb_event_head(lb_t *b, uint32_t hseq, uint32_t node_id, int is_maste
     lb_sp(b); lb_ch(b, kind);
     lb_sp(b); lb_u32(b, ev_seq);
     lb_sp(b); lb_u32(b, flags);
-    lb_sp(b); lb_u32(b, master_boot_id);
-    lb_sp(b); lb_u32(b, sensor_boot_id);
+    lb_sp(b); lb_u64(b, master_boot_id);
+    lb_sp(b); lb_u64(b, sensor_boot_id);
     lb_sp(b); lb_u32(b, sync_age_ms);
     lb_sp(b); lb_f2(b, rssi);
     lb_sp(b); lb_f2(b, snr);
     lb_sp(b); lb_u32(b, capture_seq);
 }
 
-int pu_format_uplink(char *buf, unsigned cap, uint32_t hseq, uint32_t node_id, uint32_t sensor_boot_id,
+int pu_format_uplink(char *buf, unsigned cap, uint32_t hseq, uint32_t node_id, uint64_t sensor_boot_id,
                      const uplink_pl_t *u, float rssi, float snr, uint32_t *crc)
 {
     /* The master forwards what the sensor sealed; a malformed record (unknown
@@ -313,7 +313,7 @@ int pu_format_uplink(char *buf, unsigned cap, uint32_t hseq, uint32_t node_id, u
     return lb_seal(&b, buf, crc);
 }
 
-int pu_format_timebase_end(char *buf, unsigned cap, uint32_t hseq, uint32_t master_boot_id,
+int pu_format_timebase_end(char *buf, unsigned cap, uint32_t hseq, uint64_t master_boot_id,
                            uint64_t tick, uint32_t *crc)
 {
     lb_t b; lb_init(&b, buf, cap);
@@ -328,12 +328,13 @@ int pu_format_timebase_end(char *buf, unsigned cap, uint32_t hseq, uint32_t mast
 static char s_line[80];      /* holds "K " + 64 hex + NUL */
 static unsigned s_len;
 static uint8_t s_key[32];
-static uint32_t s_ack_hseq, s_ack_boot, s_ack_crc;
+static uint32_t s_ack_hseq, s_ack_crc;
+static uint64_t s_ack_boot;
 static char s_clock_token[33];
 
 const uint8_t *pu_setkey(void) { return s_key; }
 uint32_t pu_ack_hseq(void) { return s_ack_hseq; }
-uint32_t pu_ack_boot(void) { return s_ack_boot; }
+uint64_t pu_ack_boot(void) { return s_ack_boot; }
 uint32_t pu_ack_crc(void) { return s_ack_crc; }
 const char *pu_clock_token(void) { return s_clock_token; }
 
@@ -372,6 +373,22 @@ static int parse_u32(const char **p, uint32_t *out)
     return 1;
 }
 
+static int parse_u64(const char **p, uint64_t *out)
+{
+    uint64_t value = 0;
+    const char *s = *p;
+    if (*s < '0' || *s > '9') { return 0; }
+    while (*s >= '0' && *s <= '9') {
+        unsigned digit = (unsigned)(*s - '0');
+        if (value > (UINT64_MAX - digit) / 10u) { return 0; }
+        value = value * 10u + digit;
+        s++;
+    }
+    *p = s;
+    *out = value;
+    return 1;
+}
+
 static int parse_hex8(const char **p, uint32_t *out)
 {
     uint32_t v = 0;
@@ -390,9 +407,10 @@ static int parse_hex8(const char **p, uint32_t *out)
 static int parse_event_ack(const char *s)
 {
     s += 2;
-    uint32_t hseq, boot, crc;
+    uint32_t hseq, crc;
+    uint64_t boot;
     if (!parse_u32(&s, &hseq) || *s++ != ' ') { return 0; }
-    if (!parse_u32(&s, &boot) || *s++ != ' ') { return 0; }
+    if (!parse_u64(&s, &boot) || *s++ != ' ') { return 0; }
     if (!parse_hex8(&s, &crc) || *s != '\0') { return 0; }
     s_ack_hseq = hseq;
     s_ack_boot = boot;
