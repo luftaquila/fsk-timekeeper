@@ -2,7 +2,7 @@
 
 Wireless LoRa timing instrument for Formula Student Korea dynamic events.
 
-* One USB master, up to five battery-powered sensors (two in practice), one 921.3 MHz channel (KR920)
+* One USB master, up to five battery-powered sensors (two in practice), one channel: 922.9 MHz by default (KR920)
 * Two modes: start → finish, laps (optional auto-stop)
 * Console: one HTML file, Chrome / Edge (Web Serial)
   * https://luftaquila.github.io/fsk-timekeeper/
@@ -11,7 +11,9 @@ Wireless LoRa timing instrument for Formula Student Korea dynamic events.
 ## Usage notes
 
 * The master is the board plugged into the console PC, and it must stay plugged in. Unplugged, it stops all radio activity; plugged back in, it starts a new session and any open run ends.
-* Radio protocol 13 / USB protocol 3: update the console and the firmware of every board together. The console refuses a master that reports another protocol version and says why.
+* Radio settings (frequency, output power, listen-before-talk) are stored on each board: set them in the console (Settings → Radio) on every master and sensor alike. A board on another frequency never hears the others.
+  * Apply succeeds only after storage and radio startup. `cfgapply` / `cfgpending` mean the settings are stored but application failed / awaits initialization; the board retries automatically. Stored values alone do not confirm a working radio.
+* Radio protocol 13 / USB protocol 4: update the console and the firmware of every board together. The console refuses a master that reports another protocol version and says why.
 * Flashing with several boards plugged in: `./flash.sh --serial <chip id>` (Windows: `.\flash.ps1 -Serial <chip id>`, not yet tested on Windows). The chip id is the 16-hex device id the console shows for the board; a board in the bootloader reports it too. A board still running a release from before chip-id serials reports 0001: give its port for that first update.
 
 > [!NOTE]

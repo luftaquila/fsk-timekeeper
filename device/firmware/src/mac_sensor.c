@@ -11,13 +11,15 @@
 
 #define TPM ((uint64_t)TICKS_PER_MS)
 
-/* An uplink let through at SLOT_LATE_MS ends SLOT_GUARD_MS before its slot does, and the last slot
- * ends before the next beacon even when this one went out as late as the master's LBT allows
- * (beacon_lbt(): re-sensing, a last CAD, then a drain). */
-static_assert((SLOT_LATE_MS + TX_SETUP_MS + SLOT_GUARD_MS) * 1000u + LORA_TOA_US(WIRE_UPLINK) <= SLOT_LEN_MS * 1000u,
-              "an uplink must fit its slot");
-static_assert((SLOT_OFFSET_MS + SLOT_COUNT * SLOT_LEN_MS + BEACON_LBT_MAX_MS + CAD_TIMEOUT_MS + RX_DRAIN_MAX_MS + TX_SETUP_MS) * 1000u +
-              LORA_TOA_US(WIRE_BEACON) <= BEACON_PERIOD_MS * 1000u, "the slots must end before the next beacon");
+/* An uplink let through at SLOT_LATE_MS ends SLOT_GUARD_MS before the LBT listen of the next slot
+ * starts, and the last slot ends before the next beacon even when this one went out as late as
+ * the master's LBT allows (beacon_lbt(): re-sensing, a last CAD, then a drain and a listen). */
+static_assert((SLOT_LATE_MS + TX_SETUP_MS + SLOT_GUARD_MS + LBT_LISTEN_MS) * 1000u + LORA_TOA_US(WIRE_UPLINK) <=
+              SLOT_LEN_MS * 1000u, "an uplink must fit its slot");
+static_assert((SLOT_OFFSET_MS + SLOT_COUNT * SLOT_LEN_MS + BEACON_LBT_MAX_MS + CAD_TIMEOUT_MS + RX_DRAIN_MAX_MS +
+               LBT_LISTEN_MS + TX_SETUP_MS) * 1000u + LORA_TOA_US(WIRE_BEACON) <= BEACON_PERIOD_MS * 1000u,
+              "the slots must end before the next beacon");
+static_assert(LBT_LISTEN_MS < SLOT_OFFSET_MS, "the listen before slot 0 starts after the beacon");
 static_assert(SLOT_COUNT >= 2u && SLOT_COUNT <= 8u, "tx_slots holds every slot in 8 bits");
 static_assert(LORA_SF >= 7 && LORA_SYMBOL_US < 16000u, "LORA_TOA_US covers SF7..SF12 without LDRO");
 
@@ -192,26 +194,34 @@ static void slot_tx(mac_sensor_t *s)
     unsigned j = 0;
     while (!((s->tx_slots >> j) & 1u)) { j++; }
     uint64_t start = s->cycle_rx + (uint64_t)(SLOT_OFFSET_MS + j * SLOT_LEN_MS) * TPM;
+    uint64_t late = start + SLOT_LATE_MS * TPM;
+    /* The RSSI listen takes the LBT_LISTEN_MS before the slot, so the slot keeps its time. */
+    uint64_t listen = radio_lbt_enabled() ? LBT_LISTEN_MS * TPM : 0u;
     uint64_t now = capture_now64();
-    if (now < start) { return; }
+    if (now + listen < start) { return; }
     s->tx_slots &= (uint8_t)~(1u << j); /* one try per slot */
-    if (now - start > SLOT_LATE_MS * TPM) { return; }
+    if (now > late) { return; }
 
+    /* Listen before talk. The slot is ours, so anything on air is a stranger:
+     * give the slot up rather than wait. The listen comes before the packet is
+     * built, so captures taken during it still ride along. A bare preamble
+     * detection (maybe a stale one) is left to the CAD. */
+    if (listen) {
+        if (radio_lbt_listen() != RADIO_LBT_QUIET) { return; }
+        drain_captures(s);
+    }
     uplink_pl_t *p = sq_packet(&s->q, s->master_boot_id);
     if (!p && checkpoint_due(s)) { p = make_checkpoint(s); }
     if (!p) { return; }
 
-    /* Listen before talk. The slot is ours, so anything on air is a stranger:
-     * give the slot up rather than wait. A bare preamble detection (maybe a stale
-     * one) is left to the CAD. */
     if (radio_rx_settle(0, 0) != RADIO_RX_IDLE) { return; }
     if (radio_cad()) { return; }
-    if (capture_now64() - start > SLOT_LATE_MS * TPM) { radio_start_rx(); return; }
+    if (capture_now64() > late) { radio_start_rx(); return; }
 
     fill_diag(s, p);
     uint8_t tx[WIRE_UPLINK];
     int wlen = sec_seal(tx, sizeof(tx), PKT_TYPE_UPLINK, s->my_id, p, sizeof(*p));
-    if (wlen > 0 && capture_now64() - start <= SLOT_LATE_MS * TPM) {
+    if (wlen > 0 && capture_now64() <= late) {
         s->tx_slots = 0; /* one packet per cycle; the next beacon acks it */
         uint64_t tx_done;
         radio_transmit(tx, wlen);
@@ -236,7 +246,7 @@ void mac_sensor_step(mac_sensor_t *s)
 {
     (void)capture_now64(); /* at least once per TIMER1 wrap, beacons or not (capture.h) */
     uint8_t buf[WIRE_MAX];
-    int n = radio_receive(buf, sizeof(buf), NULL, NULL);
+    int n = radio_needs_reset() ? 0 : radio_receive(buf, sizeof(buf), NULL, NULL);
     if (n >= WIRE_BEACON && SEC_VT_TYPE(buf[0]) == PKT_TYPE_BEACON) { on_beacon(s, buf, n); }
 
     uint32_t stops = board_hfxo_stops();
@@ -255,6 +265,7 @@ void mac_sensor_step(mac_sensor_t *s)
         }
     }
     drain_captures(s);
-    slot_tx(s);
+    if (radio_needs_reset()) { s->tx_slots = 0; }
+    else { slot_tx(s); }
     radio_recovery(s);
 }

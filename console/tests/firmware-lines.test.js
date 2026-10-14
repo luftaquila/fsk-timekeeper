@@ -1,18 +1,20 @@
-// The USB v3 contract on both sides: device/firmware/tests/usb_lines.txt holds lines printed
+// The USB v4 contract on both sides: device/firmware/tests/usb_lines.txt holds lines printed
 // by the firmware's own formatters with extreme values (`make test` checks the file against
 // them), and the console parses the same file.
 import { describe, it } from "vitest";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { parseLine, parseEventLine, normalizeTelemetry, normalizePps, contractOf, formatAck, errorNames, resetNames } from "../src/lib/protocol.js";
+import { parseLine, parseEventLine, normalizeTelemetry, normalizePps, contractOf, formatAck, errorNames, resetNames, radioOf } from "../src/lib/protocol.js";
 
 const LINES = readFileSync(resolve(__dirname, "../../device/firmware/tests/usb_lines.txt"), "utf8").trimEnd().split("\n");
 
 describe("firmware-formatted lines", () => {
   it("I: the contract accepts a master and names a sensor-role board", () => {
     const m = parseLine(LINES[0]);
-    assert.equal(m.usbProto, 3);
+    assert.equal(m.usbProto, 4);
+    assert.deepEqual(radioOf(m), { freqKhz: 922900, powerDbm: 12, lbt: 1 });
+    assert.deepEqual(radioOf(parseLine(LINES[1])), { freqKhz: 803000, powerDbm: -9, lbt: 0 });
     assert.equal(m.radioProto, 13);
     assert.equal(m.devid, "0123ABCD89EF4567");
     assert.equal(m.role, "M");

@@ -2,6 +2,7 @@
 import { computed, ref, onMounted, onUnmounted } from "vue";
 import { useDeviceStore } from "../stores/device";
 import { fmtAgeMs } from "../lib/format";
+import { radioOf } from "../lib/protocol";
 
 const device = useDeviceStore();
 const now = ref(Date.now());
@@ -14,6 +15,11 @@ onUnmounted(() => clearInterval(timer));
 const fresh = computed(() => device.masterFresh(now.value));
 const uptime = computed(() => (device.heartbeat ? fmtAgeMs(device.heartbeat.uptimeMs) : "—"));
 const lastLine = computed(() => (device.connected ? fmtAgeMs(now.value - device.lastLineAt) : "—"));
+const radio = computed(() => {
+  const r = radioOf(device.identity);
+  if (!r) return "…";
+  return `${(r.freqKhz / 1000).toFixed(3)} MHz · ${r.powerDbm} dBm · LBT ${r.lbt ? "on" : "off"} · SF${device.identity.sf} · BW${device.identity.bw}`;
+});
 </script>
 
 <template>
@@ -38,8 +44,8 @@ const lastLine = computed(() => (device.connected ? fmtAgeMs(now.value - device.
         <dd :class="device.contract.ok ? 'ok' : 'bad'">{{ device.contract.ok ? `USB v${device.identity.usbProto} · radio v${device.identity.radioProto}` : device.contract.reason }}</dd>
         <dt>Device ID</dt>
         <dd class="mono">{{ device.identity?.devid || "…" }}</dd>
-        <dt>Radio</dt>
-        <dd class="mono">{{ device.identity?.freqMhz != null ? `${device.identity.freqMhz} MHz · SF${device.identity.sf} · BW${device.identity.bw}` : "…" }}</dd>
+        <dt>Radio (stored)</dt>
+        <dd class="mono">{{ radio }}</dd>
         <dt>Uptime</dt>
         <dd class="mono">{{ uptime }}</dd>
         <dt>Sensors seen</dt>

@@ -5,7 +5,7 @@ import { ref, reactive, computed } from "vue";
 import { useNotification } from "../composables/useNotification";
 import { createSerialTransport, isSerialSupported } from "../transport/serial";
 import { createFakeTransport } from "../transport/fake";
-import { parseLine, parseEventLine, normalizeTelemetry, normalizePps, formatAck, isHexKey, contractOf, resetNames, NODE_MASTER } from "../lib/protocol";
+import { parseLine, parseEventLine, normalizeTelemetry, normalizePps, formatAck, isHexKey, isRadioConfig, radioCommand, contractOf, resetNames, NODE_MASTER } from "../lib/protocol";
 import { createWirelessClock } from "../lib/wireless-clock";
 import { WIRELESS_STATUS_MAX_AGE_MS, UNREADABLE_ALARM_REPEATS } from "../lib/constants";
 import { MASTER_TICKS_PER_MS as TICKS_PER_MS } from "../lib/event-timing";
@@ -53,10 +53,10 @@ export const useDeviceStore = defineStore("device", () => {
 
   let transport = null;
   let wakeLock = null;
-  let provisionPending = null; // { resolve, timer }
+  let provisionPending = null; // { cmd, fails, resolve, timer }: K or R awaiting A <cmd> / X <fail>
   let ackChain = Promise.resolve();
   let lastVerDrop = null;
-  let identityLine = null;
+  let identityKey = null;
   const repeats = new Map(); // unreadable line key -> count
 
   const clock = createWirelessClock({
@@ -191,7 +191,7 @@ export const useDeviceStore = defineStore("device", () => {
         onPps(msg.pps, now);
         break;
       case "A":
-        if (msg.cmd === "K" && provisionPending) resolveProvision("ok");
+        if (msg.cmd === provisionPending?.cmd) resolveProvision("ok");
         break;
       case "X":
         onErrorLine(msg, now);
@@ -202,8 +202,10 @@ export const useDeviceStore = defineStore("device", () => {
   }
 
   function onIdentity(msg, raw) {
-    const repeated = identityLine === raw; // the same boot answering ?ID again
-    identityLine = raw;
+    // The same boot answering ?ID again, or after R changed its radio settings.
+    const key = msg.v1 ? raw : [msg.product, msg.usbProto, msg.fw, msg.devid, msg.role, msg.radioProto, msg.ticksPerMs, msg.resetReason].join(" ");
+    const repeated = identityKey === key;
+    identityKey = key;
     identity.value = msg;
     contract.value = contractOf(msg);
     const reason = Number.isInteger(msg.resetReason) ? resetNames(msg.resetReason).join(", ") : "unknown";
@@ -273,7 +275,7 @@ export const useDeviceStore = defineStore("device", () => {
       return;
     }
     log({ kind: "X", code: msg.reason, text: msg.text });
-    if (msg.reason === "keyfail" && provisionPending) resolveProvision("keyfail");
+    if (provisionPending?.fails.includes(msg.reason)) resolveProvision(msg.reason);
     else if (msg.reason === "clock") clock.close("The master rejected the clock request (X clock).");
   }
 
@@ -339,19 +341,32 @@ export const useDeviceStore = defineStore("device", () => {
     p.resolve(result);
   }
 
-  // Send the fleet key; resolves "ok" | "keyfail" | "timeout". Works for any board role.
-  function provisionKey(hex) {
-    if (!isHexKey(hex)) return Promise.reject(new Error("The key must be 64 hex characters."));
+  // One provisioning command to the connected board (any role); resolves "ok", one of fails, or "timeout".
+  function provision(cmd, line, shown, fails) {
     if (!transport?.connected) return Promise.reject(new Error("The master is not connected."));
-    if (provisionPending) return Promise.reject(new Error("A key transfer is already in progress."));
+    if (provisionPending) return Promise.reject(new Error("A provisioning command is already in progress."));
     return new Promise((resolve) => {
       const timer = setTimeout(() => resolveProvision("timeout"), PROVISION_TIMEOUT_MS);
-      provisionPending = { resolve, timer };
-      pushConsole("tx", "K ****");
-      transport.write(`K ${hex}`).then((sent) => {
+      provisionPending = { cmd, fails, resolve, timer };
+      pushConsole("tx", shown);
+      transport.write(line).then((sent) => {
         if (!sent) resolveProvision("timeout");
       });
     });
+  }
+
+  // Send the fleet key; resolves "ok" | "keyfail" | "timeout".
+  function provisionKey(hex) {
+    if (!isHexKey(hex)) return Promise.reject(new Error("The key must be 64 hex characters."));
+    return provision("K", `K ${hex}`, "K ****", ["keyfail"]);
+  }
+
+  // "ok" means stored and applied; cfgapply/cfgpending mean stored but not running.
+  // The fresh I line reports the stored target settings, even on application failure.
+  function configureRadio(cfg) {
+    if (!isRadioConfig(cfg)) return Promise.reject(new Error("Radio settings out of range."));
+    const line = radioCommand(cfg);
+    return provision("R", line, line, ["cfgfail", "cfgapply", "cfgpending", "badcmd"]);
   }
 
   function readClock() {
@@ -408,7 +423,7 @@ export const useDeviceStore = defineStore("device", () => {
     head.value = null;
     unprovisioned.value = false;
     lastVerDrop = null;
-    identityLine = null;
+    identityKey = null;
     repeats.clear();
   }
 
@@ -524,6 +539,7 @@ export const useDeviceStore = defineStore("device", () => {
     gpsReport,
     useEdgesOf,
     provisionKey,
+    configureRadio,
     enterBootloader,
     fakeTransport,
     handleLine,

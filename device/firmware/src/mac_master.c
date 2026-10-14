@@ -145,13 +145,17 @@ static void receive_one(mac_master_t *m)
 
 /* Listen before talk, bounded: finish a reception in progress, re-sense a busy
  * channel for up to BEACON_LBT_MAX_MS, then send regardless — every sensor syncs
- * on the beacon, and sync uses the real TxDone, not the nominal time. */
+ * on the beacon, and sync uses the real TxDone, not the nominal time. With RSSI
+ * LBT on, each pass also listens after the drain, and a channel still loud at
+ * the end costs this beacon instead. */
 static int beacon_lbt(mac_master_t *m)
 {
     uint32_t t0 = board_millis();
     for (;;) {
         if (radio_rx_settle(RX_HEADER_WAIT_MS, RX_DRAIN_MAX_MS) == RADIO_RX_PACKET) { receive_one(m); }
-        if ((uint32_t)(board_millis() - t0) >= BEACON_LBT_MAX_MS) { return 1; }
+        int loud = radio_lbt_enabled() && radio_lbt_listen() != RADIO_LBT_QUIET;
+        if ((uint32_t)(board_millis() - t0) >= BEACON_LBT_MAX_MS) { return !loud; }
+        if (loud) { continue; }
         int cad = radio_cad();
         if (cad == RADIO_CAD_ERROR) { return 0; }
         if (cad == RADIO_CAD_CLEAR) { return 1; }
@@ -207,14 +211,15 @@ int mac_master_step(mac_master_t *m)
     int sent = 0;
     uint64_t now = capture_now64();
     if (now >= m->next_beacon) {
-        send_beacon(m);
+        if (!radio_needs_reset()) { send_beacon(m); }
+        else { m->m_tx_valid = 0; m->seq++; }
         meas_service(board_millis());
         m->next_beacon += BEACON_PERIOD_TICKS;
         if (m->next_beacon <= capture_now64()) { m->next_beacon = capture_now64() + BEACON_PERIOD_TICKS; }
         sent = 1;
         if (m->m_tx_valid) { m->retry.delay_ms = RADIO_BOOT_RETRY_MS; } /* the radio works again */
     }
-    receive_one(m);
+    if (!radio_needs_reset()) { receive_one(m); }
     radio_recovery(m);
     return sent;
 }

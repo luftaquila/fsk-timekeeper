@@ -41,7 +41,8 @@ SIZE    := $(PREFIX)size
 # Ours: full warnings.
 APP_C := \
 	src/main.c src/board.c src/meas.c src/capture.c src/crc32.c src/errlog.c \
-	src/fault.c src/power.c src/secure.c src/secure_replay.c src/entropy.c src/keystore.c src/proto_usb.c src/node_id.c \
+	src/fault.c src/power.c src/secure.c src/secure_replay.c src/entropy.c src/nvmc.c src/keystore.c \
+	src/radio_cfg.c src/proto_usb.c src/node_id.c \
 	src/usb.c src/usb_descriptors.c src/gps.c src/sync.c src/sensor_queue.c \
 	src/master_queue.c src/registry.c src/mac_sensor.c src/mac_master.c
 APP_CXX := src/radio_hal.cpp src/radio.cpp src/runtime.cpp

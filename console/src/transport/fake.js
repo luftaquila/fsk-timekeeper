@@ -1,4 +1,4 @@
-/* Development fake of the FSK-WL master, USB line protocol v3. Same interface as serial.js.
+/* Development fake of the FSK-WL master, USB line protocol v4. Same interface as serial.js.
  *
  * Each sensor keeps its records (captures, losses, checkpoints) in order; a record reaches the
  * master queue one slot delay after it was made, consecutive captures bundled up to 5 per E
@@ -8,7 +8,7 @@
  * after `CP`, one `P` line per PPS edge with seg/n. Scenario helpers inject the rest.
  */
 import { crc32Hex } from "../lib/crc32";
-import { USB_PROTO_VERSION, RADIO_PROTO_VERSION, bootIdText } from "../lib/protocol";
+import { USB_PROTO_VERSION, RADIO_PROTO_VERSION, bootIdText, isRadioConfig } from "../lib/protocol";
 
 const TICKS_PER_MS = 16000n;
 const QUEUE_LEN = 16;
@@ -36,6 +36,7 @@ export function createFakeTransport({ onLine, onDisconnect }) {
   let beaconSeq = 0;
   let hseq = 0;
   let provisioned = true;
+  let radio = { freqKhz: 922900, powerDbm: 12, lbt: 1 };
   let open = false;
   let queue = []; // { hseq, mboot, crc, line }
   let timers = [];
@@ -164,7 +165,7 @@ export function createFakeTransport({ onLine, onDisconnect }) {
     return `D 0 OK 0 0 0 0 0.00 0.00 0 305 4980 0 ${provisioned ? 1 : 0} 1 1 XTAL 0 0 0 ${depth} ${queueOverflow} ${errFlags} ${verDrop} ${txDrop} 0 0 ${masterBoot}`;
   }
   function identity() {
-    return `I FSK-WL ${proto.usb} 1.0.0 ${devid} ${role} ${proto.radio} 921.30 7 250.00 ${proto.ticks} 0`;
+    return `I FSK-WL ${proto.usb} 1.0.0 ${devid} ${role} ${proto.radio} ${radio.freqKhz} 7 250.00 ${proto.ticks} 0 ${radio.powerDbm} ${radio.lbt}`;
   }
   function heartbeat() {
     return `H ${nowTick()} ${Date.now() - t0} ${beaconSeq % 256} ${sensors.size}`;
@@ -300,6 +301,15 @@ export function createFakeTransport({ onLine, onDisconnect }) {
           emit("A K OK");
         } else emit("X keyfail");
         break;
+      case "R": {
+        const c = { freqKhz: Number(t[1]), powerDbm: Number(t[2]), lbt: Number(t[3]) };
+        if (t.length === 4 && /^-?\d+$/.test(t[2] || "") && isRadioConfig(c)) {
+          radio = c;
+          emit(identity());
+          emit("A R OK");
+        } else emit("X badcmd");
+        break;
+      }
       case "T":
         if (/^[0-9a-f]{32}$/.test(t[1] || "") && !masterClockFaulted) emit(`T ${t[1]} ${nowTick()} ${masterBoot}`);
         else emit("X clock");

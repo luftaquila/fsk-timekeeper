@@ -1,7 +1,8 @@
-/* FSK-WL USB line protocol v3 (newline-delimited ASCII, one space between tokens).
+/* FSK-WL USB line protocol v4 (newline-delimited ASCII, one space between tokens).
  *
  * Master -> host:
- *   I FSK-WL <usb_proto> <fw> <devid16> <M|S> <radio_proto> <freq_mhz> <sf> <bw> <ticks_per_ms> <reset_reason>
+ *   I FSK-WL <usb_proto> <fw> <devid16> <M|S> <radio_proto> <freq_khz> <sf> <bw> <ticks_per_ms> <reset_reason>
+ *     <power_dbm> <lbt>
  *   H <now_tick> <uptime_ms> <beacon_seq> <nseen>
  *   E <hseq> <node> <C|L|K> <ev_seq> <flags> <master_boot_id> <sensor_boot_id> <sync_age_ms> <rssi> <snr>
  *     <capture_seq> <payload...> <crc>   C: <count> <tick>...  L: <end_seq> <tick> <end_tick>  K: <tick>
@@ -14,6 +15,7 @@
  *   A <cmd> OK
  *   X <code> [args...]
  * Host -> master: ?ID ?STATUS PING CP K <64hex> T <32hex> C <hseq> <master_boot_id> <crc>
+ *   R <freq_khz> <power_dbm> <0|1>   (store/apply: I, then A R OK; X cfgapply/cfgpending if not running)
  *
  * 64-bit ticks stay decimal strings (BigInt on use). Node "0" is the master; sensors are
  * 8 upper-case hex digits. The E line crc covers the text before " <crc>".
@@ -24,7 +26,13 @@ import { MASTER_TICKS_PER_MS } from "./event-timing";
 
 export const NODE_MASTER = "0";
 export const RADIO_PROTO_VERSION = 13;
-export const USB_PROTO_VERSION = 3;
+export const USB_PROTO_VERSION = 4;
+
+// What the Ra-01SH is rated for (firmware config.h); the board stores what R sends.
+export const RADIO_FREQ_MIN_KHZ = 803000;
+export const RADIO_FREQ_MAX_KHZ = 930000;
+export const RADIO_POWER_MIN_DBM = -9;
+export const RADIO_POWER_MAX_DBM = 22;
 
 export const FLAG_SYNC = 0x01;
 export const FLAG_SKEW = 0x02;
@@ -202,11 +210,13 @@ export function parseLine(line) {
         devid: t[4],
         role: t[5],
         radioProto: num(t[6]),
-        freqMhz: num(t[7]),
+        freqKhz: num(t[7]),
         sf: num(t[8]),
         bw: num(t[9]),
         ticksPerMs: num(t[10]),
         resetReason: num(t[11]),
+        powerDbm: num(t[12]),
+        lbt: num(t[13]),
         v1: false,
       };
     }
@@ -394,4 +404,23 @@ export function normalizePps(p, now = Date.now()) {
 
 export function isHexKey(s) {
   return typeof s === "string" && /^[0-9a-fA-F]{64}$/.test(s);
+}
+
+// { freqKhz, powerDbm, lbt } within what the firmware accepts.
+export function isRadioConfig(c) {
+  return (
+    Number.isInteger(c?.freqKhz) && c.freqKhz >= RADIO_FREQ_MIN_KHZ && c.freqKhz <= RADIO_FREQ_MAX_KHZ &&
+    Number.isInteger(c.powerDbm) && c.powerDbm >= RADIO_POWER_MIN_DBM && c.powerDbm <= RADIO_POWER_MAX_DBM &&
+    (c.lbt === 0 || c.lbt === 1)
+  );
+}
+
+export function radioCommand(c) {
+  return `R ${c.freqKhz} ${c.powerDbm} ${c.lbt}`;
+}
+
+// Stored target radio settings from I, not proof of a running receiver; null on an older board.
+export function radioOf(identity) {
+  const c = identity ? { freqKhz: identity.freqKhz, powerDbm: identity.powerDbm, lbt: identity.lbt } : null;
+  return isRadioConfig(c) ? c : null;
 }

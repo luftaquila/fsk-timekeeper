@@ -12,8 +12,8 @@ const FW = resolve(__dirname, "../../device/firmware/src");
 function defines(file) {
   const out = {};
   for (const line of readFileSync(resolve(FW, file), "utf8").split("\n")) {
-    const m = /^\s*#define\s+([A-Z0-9_]+)\s+(0x[0-9A-Fa-f]+|\d+)u?\b/.exec(line);
-    if (m) out[m[1]] = Number(m[2]);
+    const m = /^\s*#define\s+([A-Z0-9_]+)\s+(?:(0x[0-9A-Fa-f]+|\d+)u?\b|\((-\d+)\))/.exec(line);
+    if (m) out[m[1]] = Number(m[2] ?? m[3]);
   }
   return out;
 }
@@ -45,5 +45,9 @@ describe("firmware <-> console constants", () => {
     assert.equal(c.MASTER_EVENT_QUEUE_LEN, protocol.MASTER_QUEUE_CAPACITY);
     assert.equal(c.LINK_OK_MS, WIRELESS_STATUS_MAX_AGE_MS);
     assert.equal(c.LINK_STALE_MS, protocol.LINK_STALE_MS);
+    assert.equal(c.RADIO_FREQ_MIN_KHZ, protocol.RADIO_FREQ_MIN_KHZ);
+    assert.equal(c.RADIO_FREQ_MAX_KHZ, protocol.RADIO_FREQ_MAX_KHZ);
+    assert.equal(c.RADIO_POWER_MIN_DBM, protocol.RADIO_POWER_MIN_DBM);
+    assert.equal(c.RADIO_POWER_MAX_DBM, protocol.RADIO_POWER_MAX_DBM);
   });
 });

@@ -5,6 +5,7 @@ import BridgeCard from "../components/BridgeCard.vue";
 import MappingCard from "../components/MappingCard.vue";
 import DiagnosticsCard from "../components/DiagnosticsCard.vue";
 import ProvisionCard from "../components/ProvisionCard.vue";
+import RadioCard from "../components/RadioCard.vue";
 import DfuCard from "../components/DfuCard.vue";
 import SerialConsole from "../components/SerialConsole.vue";
 import DeviceLogCard from "../components/DeviceLogCard.vue";
@@ -42,6 +43,7 @@ function onDebounce(e) {
     <MappingCard />
     <DiagnosticsCard />
     <ProvisionCard />
+    <RadioCard />
     <DfuCard />
     <DeviceLogCard />
     <SerialConsole />

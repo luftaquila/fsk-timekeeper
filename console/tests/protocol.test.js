@@ -1,6 +1,6 @@
 import { describe, it } from "vitest";
 import assert from "node:assert/strict";
-import { parseLine, parseEventLine, normalizeTelemetry, normalizePps, formatAck, rowKey, bootIdText, isHexKey, contractOf, errorNames, resetNames, CONTRACT_SENSOR_ROLE, CONTRACT_VERSION } from "../src/lib/protocol.js";
+import { parseLine, parseEventLine, normalizeTelemetry, normalizePps, formatAck, rowKey, bootIdText, isHexKey, isRadioConfig, radioCommand, radioOf, contractOf, errorNames, resetNames, CONTRACT_SENSOR_ROLE, CONTRACT_VERSION } from "../src/lib/protocol.js";
 import { crc32, crc32Hex } from "../src/lib/crc32.js";
 
 const withCrc = (body) => `${body} ${crc32Hex(body)}`;
@@ -19,10 +19,13 @@ describe("crc32", () => {
 });
 
 describe("parseLine", () => {
-  it("parses I v3 and checks the contract", () => {
-    const i = parseLine("I FSK-WL 3 1.0.0 0123456789ABCDEF M 13 921.30 7 250.00 16000 4");
-    assert.deepEqual(i, { type: "I", product: "FSK-WL", usbProto: 3, fw: "1.0.0", devid: "0123456789ABCDEF", role: "M", radioProto: 13, freqMhz: 921.3, sf: 7, bw: 250, ticksPerMs: 16000, resetReason: 4, v1: false });
+  it("parses I v4 and checks the contract", () => {
+    const i = parseLine("I FSK-WL 4 1.0.0 0123456789ABCDEF M 13 922900 7 250.00 16000 4 -9 0");
+    assert.deepEqual(i, { type: "I", product: "FSK-WL", usbProto: 4, fw: "1.0.0", devid: "0123456789ABCDEF", role: "M", radioProto: 13, freqKhz: 922900, sf: 7, bw: 250, ticksPerMs: 16000, resetReason: 4, powerDbm: -9, lbt: 0, v1: false });
+    assert.deepEqual(radioOf(i), { freqKhz: 922900, powerDbm: -9, lbt: 0 });
+    assert.equal(radioOf(parseLine("I FSK-WL 3 1.0.0 0123456789ABCDEF M 13 921.30 7 250.00 16000 4")), null);
     assert.deepEqual(contractOf(i), { ok: true, reason: null });
+    assert.equal(contractOf({ ...i, usbProto: 3 }).reason, CONTRACT_VERSION);
     assert.equal(contractOf({ ...i, role: "S" }).reason, CONTRACT_SENSOR_ROLE);
     assert.equal(contractOf({ ...i, radioProto: 11 }).reason, CONTRACT_VERSION);
     assert.equal(contractOf({ ...i, radioProto: 12, usbProto: 2 }).reason, CONTRACT_VERSION);
@@ -109,7 +112,7 @@ describe("parseEventLine", () => {
       ],
     );
     assert.equal(p.rows[0].raw, C_LINE);
-    assert.equal(p.rows[0].usb_proto, 3);
+    assert.equal(p.rows[0].usb_proto, 4);
     assert.equal(rowKey(p.rows[1]), "3735928559:0D2243B0:305419896:capture:43:123456789028345678");
     assert.equal(formatAck(p), `C 17 3735928559 ${C_LINE.slice(-8)}`);
   });
@@ -147,5 +150,17 @@ describe("parseEventLine", () => {
     assert.equal(isHexKey("a".repeat(64)), true);
     assert.equal(isHexKey("a".repeat(63)), false);
     assert.equal(isHexKey("g".repeat(64)), false);
+  });
+});
+
+describe("radio settings", () => {
+  it("accepts the Ra-01SH range only and formats R", () => {
+    assert.ok(isRadioConfig({ freqKhz: 803000, powerDbm: -9, lbt: 0 }));
+    assert.ok(isRadioConfig({ freqKhz: 930000, powerDbm: 22, lbt: 1 }));
+    for (const bad of [{ freqKhz: 802999, powerDbm: 0, lbt: 1 }, { freqKhz: 930001, powerDbm: 0, lbt: 1 }, { freqKhz: 922900, powerDbm: 23, lbt: 1 },
+      { freqKhz: 922900, powerDbm: -10, lbt: 1 }, { freqKhz: 922900, powerDbm: 0, lbt: 2 }, { freqKhz: 922900.5, powerDbm: 0, lbt: 1 }, null]) {
+      assert.equal(isRadioConfig(bad), false, JSON.stringify(bad));
+    }
+    assert.equal(radioCommand({ freqKhz: 922900, powerDbm: -3, lbt: 1 }), "R 922900 -3 1");
   });
 });

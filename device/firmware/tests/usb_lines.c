@@ -95,8 +95,10 @@ static void diagnostics(void)
 
 int main(void)
 {
-    pu_emit_identity(0x0123ABCDu, 0x89EF4567u, 1, RESET_PIN | RESET_FAULT);
-    pu_emit_identity(0x0123ABCDu, 0x89EF4567u, 0, 0);
+    const radio_cfg_t radio = RADIO_CFG_DEFAULT;
+    const radio_cfg_t low = { RADIO_FREQ_MIN_KHZ, RADIO_POWER_MIN_DBM, 0 };
+    pu_emit_identity(0x0123ABCDu, 0x89EF4567u, 1, RESET_PIN | RESET_FAULT, &radio);
+    pu_emit_identity(0x0123ABCDu, 0x89EF4567u, 0, 0, &low);
     pu_emit_heartbeat(UINT64_MAX, 12345, 200, 3);
     events();
     diagnostics();

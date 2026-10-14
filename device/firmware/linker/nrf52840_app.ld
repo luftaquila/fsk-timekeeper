@@ -4,6 +4,7 @@
  *   0x00000000  MBR (Nordic master boot record)         — untouched
  *   0x00001000  S140 v6.1.1 SoftDevice                   — present, NOT used
  *   0x00026000  application (this image)                 — FLASH below
+ *   0x000F2000  radio settings page (radio_cfg.c)        — outside FLASH, survives DFU
  *   0x000F3000  fleet-key page (keystore.c)              — outside FLASH, survives DFU
  *   0x000F4000  Adafruit bootloader + MBR params + settings — untouched
  *
@@ -21,7 +22,7 @@ GROUP(-lgcc -lc)
 
 MEMORY
 {
-  FLASH (rx) : ORIGIN = 0x00026000, LENGTH = 0x000CD000
+  FLASH (rx) : ORIGIN = 0x00026000, LENGTH = 0x000CC000
   RAM  (rwx) : ORIGIN = 0x20000000, LENGTH = 0x00040000
 }
 

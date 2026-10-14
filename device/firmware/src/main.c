@@ -25,6 +25,7 @@
 #include "power.h"
 #include "proto_usb.h"
 #include "radio.h"
+#include "radio_cfg.h"
 #include "secure.h"
 #include "retry.h"
 #include "usb.h"
@@ -52,6 +53,24 @@ static void provision_key(void)
     } else {
         pu_emit_err("keyfail");
     }
+}
+
+/* `R <freq_khz> <power_dbm> <lbt>` on any board: store the radio settings and use
+ * them at once (a radio that is not up takes them at its next bring-up). The I
+ * line that follows shows the stored target settings. Only a running receiver
+ * earns A R OK; otherwise report failed or deferred application. */
+static void provision_radio(int master, int radio_up)
+{
+    const radio_cfg_t *c = pu_radio_cfg();
+    if (radio_cfg_write(c) != 0) {
+        pu_emit_err("cfgfail");
+        return;
+    }
+    radio_set_config(c);
+    int applied = radio_up && radio_begin() == 0 && radio_start_rx() == 0;
+    pu_emit_identity(node_devid_hi(), node_devid_lo(), master, fault_reset_reason(), radio_config());
+    if (applied) { pu_emit_ack("R"); }
+    else { pu_emit_err(radio_up ? "cfgapply" : "cfgpending"); }
 }
 
 static void service(uint32_t now)
@@ -110,8 +129,9 @@ static void run_sensor(int st)
         while ((c = usb_read_byte()) >= 0) {
             switch (pu_feed(c)) {
             case PU_CMD_SETKEY: provision_key(); break;
+            case PU_CMD_RADIO: provision_radio(0, st == 0); break;
             case PU_CMD_ID:
-                pu_emit_identity(node_devid_hi(), node_devid_lo(), 0, fault_reset_reason());
+                pu_emit_identity(node_devid_hi(), node_devid_lo(), 0, fault_reset_reason(), radio_config());
                 pu_emit_ack("ID");
                 break;
             case PU_CMD_PING: pu_emit_ack("PING"); break;
@@ -217,7 +237,7 @@ static void master_stopped(mp_state_t *power, int radio_up)
  * that hangs must not keep the cause from the host. */
 static void master_hello(void)
 {
-    pu_emit_identity(node_devid_hi(), node_devid_lo(), 1, fault_reset_reason());
+    pu_emit_identity(node_devid_hi(), node_devid_lo(), 1, fault_reset_reason(), radio_config());
     uint32_t pc, lr, cfsr;
     const char *cause;
     if (fault_take_report(&pc, &lr, &cause, &cfsr)) { pu_emit_fault(pc, lr, cause, cfsr); }
@@ -230,7 +250,7 @@ static void master_command(pu_cmd_t cmd, int st, uint32_t now, uint8_t idle_seq)
     int ready = st == 0 && master_clock_check() && sec_ready() && !radio_needs_reset();
     switch (cmd) {
     case PU_CMD_ID:
-        pu_emit_identity(node_devid_hi(), node_devid_lo(), 1, fault_reset_reason());
+        pu_emit_identity(node_devid_hi(), node_devid_lo(), 1, fault_reset_reason(), radio_config());
         pu_emit_ack("ID");
         break;
     case PU_CMD_STATUS:
@@ -247,6 +267,9 @@ static void master_command(pu_cmd_t cmd, int st, uint32_t now, uint8_t idle_seq)
         break;
     case PU_CMD_SETKEY:
         provision_key();
+        break;
+    case PU_CMD_RADIO:
+        provision_radio(1, st == 0);
         break;
     case PU_CMD_EVENT_ACK:
         (void)mq_ack(&g_queue, pu_ack_hseq(), pu_ack_boot(), pu_ack_crc());
@@ -327,6 +350,9 @@ int main(void)
     board_init();
     node_init();
     sec_init();   /* boot_id + key before any sealed TX */
+    radio_cfg_t radio;
+    radio_cfg_load(&radio);
+    radio_set_config(&radio);
     usb_init();
 
     int master = role_decide_master();

@@ -5,13 +5,21 @@
 
 #include <stdint.h>
 
+#include "radio_cfg.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/* Reset (NRST) and configure the radio with the config.h parameters. Also the
- * recovery path. A radio that does not answer after NRST costs ~0.5 s here.
- * Returns 0 on success, else the RadioLib error code. */
+/* Settings that radio_begin() applies from now on and that radio_lbt_enabled()
+ * reports; the config.h defaults until set. Marks initialization pending. */
+void radio_set_config(const radio_cfg_t *cfg);
+const radio_cfg_t *radio_config(void);
+
+/* Reset (NRST) and configure the radio with the config.h parameters and the
+ * radio_set_config() settings. Also the recovery path. A radio that does not
+ * answer after NRST costs ~0.5 s here. Returns 0 on success, else the RadioLib
+ * error code. Initialization remains pending until radio_start_rx() succeeds. */
 int radio_begin(void);
 
 /* Blocking transmit (<= ~5x airtime). Leaves the radio in standby. 0 on success. */
@@ -42,7 +50,18 @@ int radio_rx_settle(uint32_t header_wait_ms, uint32_t max_ms);
 #define RADIO_CAD_BUSY  1
 int radio_cad(void);
 
-/* Consecutive SPI no-responses or failed CADs reached RADIO_NORESP_RESET. */
+/* RSSI listen-before-talk, when the settings enable it: receive for LBT_LISTEN_MS
+ * (the radio must be in RX) and report QUIET only when every instantaneous RSSI
+ * stayed at or below LBT_THRESHOLD_DBM. A failed read is LOUD: errors must never
+ * pass for a quiet channel. */
+#define RADIO_LBT_QUIET 0
+#define RADIO_LBT_LOUD  1
+int radio_lbt_enabled(void);
+int radio_lbt_listen(void);
+
+/* Initialization/RX startup is pending, or consecutive SPI no-responses or
+ * failed CADs reached RADIO_NORESP_RESET. Successful SPI reads do not clear
+ * pending initialization. */
 int radio_needs_reset(void);
 
 #ifdef __cplusplus

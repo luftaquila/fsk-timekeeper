@@ -1,11 +1,12 @@
-/* Master <-> PC USB-CDC line protocol v3 (DESIGN §8). Newline-delimited ASCII,
+/* Master <-> PC USB-CDC line protocol v4 (DESIGN §8). Newline-delimited ASCII,
  * first token = line type. Formatting is dependency-free (newlib-nano has no
  * %f / %llu) so 64-bit ticks survive intact. Node token: "0" = master, sensors
  * = 8 uppercase hex digits. crc = 8 uppercase hex digits of CRC-32/IEEE over the
  * line text before the space that precedes it.
  *
  *   Master -> PC:
- *     I FSK-WL <usb_proto> <fw> <devid16> <M|S> <radio_proto> <freq_mhz> <sf> <bw> <ticks_per_ms> <reset_reason>
+ *     I FSK-WL <usb_proto> <fw> <devid16> <M|S> <radio_proto> <freq_khz> <sf> <bw> <ticks_per_ms> <reset_reason>
+ *       <power_dbm> <lbt>                  (the stored radio settings, radio_cfg.h)
  *     H <now_tick> <uptime_ms> <beacon_seq> <nsensors>
  *     E <hseq> <node> <C|L|K> <ev_seq> <flags> <master_boot_id> <sensor_boot_id>
  *       <sync_age_ms> <rssi> <snr> <capture_seq> <payload> <crc>
@@ -20,8 +21,11 @@
  *     P <pps_tick> <utc_s> <ppb> <pps_valid> <fix> <sats> <span_s> <seg> <n>
  *     A <cmd> OK
  *     X <reason> | X <code> <count> | X fault <pc> <lr> <cause> <cfsr>
- *   PC -> master (K, ?ID and PING are also accepted by sensors):
+ *   PC -> master (K, R, ?ID and PING are also accepted by sensors):
  *     ?ID | ?STATUS | PING | K <64-hex> | T <32-hex> | CP
+ *     R <freq_khz> <power_dbm> <0|1>   (store/apply; I reports stored target settings)
+ *       A R OK: stored and RX started; X cfgfail: storage failed;
+ *       I then X cfgapply: stored, radio startup failed; X cfgpending: stored, bring-up pending
  *     C <hseq> <master_boot_id> <crc>   (host stored this E line; pops the queue head on exact match)
  */
 #ifndef PROTO_USB_H
@@ -29,12 +33,13 @@
 
 #include <stdint.h>
 #include "protocol.h"
+#include "radio_cfg.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-#define PU_USB_PROTO 3u
+#define PU_USB_PROTO 4u
 
 /* Reset reason byte (I line, D line, sensor diagnostics). 0 = power-on/brown-out. */
 #define RESET_PIN    0x01u
@@ -97,7 +102,8 @@ typedef struct {
 
 /* Control lines (I, A, X, T) that USB cannot take right now wait in a small
  * retry queue (pu_service); periodic lines (H, D, P) are dropped and counted. */
-void pu_emit_identity(uint32_t devid_hi, uint32_t devid_lo, int is_master, uint8_t reset_reason);
+void pu_emit_identity(uint32_t devid_hi, uint32_t devid_lo, int is_master, uint8_t reset_reason,
+                      const radio_cfg_t *radio);
 void pu_emit_heartbeat(uint64_t now_tick, uint32_t uptime_ms, uint8_t beacon_seq, int nseen);
 void pu_emit_diag(const pu_diag_t *d);
 void pu_emit_clock(const char *token, uint64_t tick, uint64_t master_boot_id);
@@ -125,6 +131,7 @@ typedef enum {
     PU_CMD_STATUS,
     PU_CMD_PING,
     PU_CMD_SETKEY,    /* K <64-hex> (see pu_setkey) */
+    PU_CMD_RADIO,     /* R <freq_khz> <power_dbm> <0|1>, within radio_cfg_valid() (see pu_radio_cfg) */
     PU_CMD_EVENT_ACK, /* C <hseq> <master_boot_id> <crc> (see pu_ack_*) */
     PU_CMD_CLOCK,     /* T <32-hex> (see pu_clock_token) */
     PU_CMD_CHECKPOINT,/* CP */
@@ -136,6 +143,7 @@ pu_cmd_t pu_feed(int c);
 
 /* Arguments of the last parsed command; valid right after pu_feed() returns it. */
 const uint8_t *pu_setkey(void);
+const radio_cfg_t *pu_radio_cfg(void);
 uint32_t pu_ack_hseq(void);
 uint64_t pu_ack_boot(void);
 uint32_t pu_ack_crc(void);

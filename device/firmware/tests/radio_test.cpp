@@ -28,12 +28,14 @@ typedef std::vector<uint8_t> frame_t;
 static struct {
     bool answers = true;        /* drives MISO; a dead radio reads 0xFF */
     bool busy = false;          /* BUSY stuck high */
+    bool reject_rx = false;     /* an answered SetRx failure, not a SPI timeout */
     uint8_t reg[0x10000];
     uint8_t buf[256];
     uint8_t packet_type = 0;    /* GFSK after reset */
     uint8_t mode = RADIOLIB_SX126X_STATUS_MODE_STDBY_RC;
     uint8_t fallback = RADIOLIB_SX126X_RX_TX_FALLBACK_MODE_STDBY_RC;
     std::vector<uint8_t> rx_lengths; /* answers of GetRxBufferStatus, last one repeats */
+    uint8_t rssi_raw = 200;     /* GetRssiInst: -raw/2 dBm */
     std::vector<frame_t> frames;
 } chip;
 
@@ -61,6 +63,10 @@ static void chip_transfer(const uint8_t *out, uint8_t *in, size_t len)
     chip.frames.emplace_back(out, out + len);
     if (!chip.answers) { memset(in, 0xFF, len); return; }
     memset(in, chip_status(), len);
+    if (chip.reject_rx && out[0] == RADIOLIB_SX126X_CMD_SET_RX) {
+        memset(in, RADIOLIB_SX126X_STATUS_CMD_INVALID, len);
+        return;
+    }
     uint16_t addr = len >= 3 ? (uint16_t)(out[1] << 8 | out[2]) : 0;
     switch (out[0]) {
     case RADIOLIB_SX126X_CMD_READ_REGISTER:
@@ -77,6 +83,7 @@ static void chip_transfer(const uint8_t *out, uint8_t *in, size_t len)
         break;
     case RADIOLIB_SX126X_CMD_SET_PACKET_TYPE: chip.packet_type = out[1]; break;
     case RADIOLIB_SX126X_CMD_GET_PACKET_TYPE: if (len > 2) { in[2] = chip.packet_type; } break;
+    case RADIOLIB_SX126X_CMD_GET_RSSI_INST: if (len > 2) { in[2] = chip.rssi_raw; } break;
     case RADIOLIB_SX126X_CMD_GET_DEVICE_ERRORS:
     case RADIOLIB_SX126X_CMD_GET_IRQ_STATUS:
         for (size_t i = 2; i < len; i++) { in[i] = 0; }
@@ -171,9 +178,60 @@ int main(int argc, char **argv)
         assert(chip.packet_type == RADIOLIB_SX126X_PACKET_TYPE_LORA);
         assert(chip.fallback == RADIOLIB_SX126X_RX_TX_FALLBACK_MODE_STDBY_XOSC);
         assert(chip.mode == RADIOLIB_SX126X_STATUS_MODE_STDBY_XOSC);
+        assert(radio_needs_reset());
+        assert(radio_start_rx() == 0);
         assert(!radio_needs_reset());
+    } else if (!strcmp(scenario, "init_recovery")) {
+        power_on();
+        assert(radio_begin() == 0 && radio_start_rx() == 0);
+        chip.answers = false;
+        assert(radio_begin() != 0 && radio_needs_reset());
+        chip.answers = true;
+        assert(radio_standby() == 0 && radio_needs_reset());
+        assert(radio_start_rx() == 0 && radio_needs_reset()); /* begin never completed */
+        assert(radio_begin() == 0 && radio_needs_reset());
+        chip.reject_rx = true;
+        assert(radio_start_rx() != 0 && radio_needs_reset());
+        assert(radio_standby() == 0 && radio_needs_reset());
+        assert(s_noresp == 0); /* sticky initialization failure survives answered commands */
+        assert(radio_begin() == 0);
+        assert(radio_start_rx() != 0 && radio_needs_reset()); /* failed recovery stays pending */
+        chip.reject_rx = false;
+        assert(radio_begin() == 0 && radio_start_rx() == 0 && !radio_needs_reset());
+        chip.reject_rx = true;
+        assert(radio_start_rx() != 0 && !radio_needs_reset()); /* ordinary RX re-arm policy unchanged */
+    } else if (!strcmp(scenario, "config_range")) {
+        /* the band limits are accepted, and the frequency reaches the chip */
+        const radio_cfg_t cfgs[] = { { RADIO_FREQ_MIN_KHZ, RADIO_POWER_MIN_DBM, 0 },
+                                     { RADIO_FREQ_MAX_KHZ, RADIO_POWER_MAX_DBM, 1 }, RADIO_CFG_DEFAULT };
+        for (const radio_cfg_t &c : cfgs) {
+            radio_set_config(&c);
+            power_on();
+            chip.frames.clear();
+            assert(radio_begin() == 0 && radio_lbt_enabled() == c.lbt);
+            uint32_t frf = 0;
+            for (const frame_t &f : chip.frames) {
+                if (f[0] == RADIOLIB_SX126X_CMD_SET_RF_FREQUENCY) {
+                    frf = (uint32_t)f[1] << 24 | (uint32_t)f[2] << 16 | (uint32_t)f[3] << 8 | f[4];
+                }
+            }
+            double want = c.freq_khz * 1000.0 * (1u << RADIOLIB_SX126X_DIV_EXPONENT) / 32e6;
+            assert(frf + 64u > want && frf < want + 64u); /* float MHz in RadioLib: ~60 Hz steps */
+        }
+    } else if (!strcmp(scenario, "lbt_listen")) {
+        power_on(); assert(radio_begin() == 0 && radio_start_rx() == 0);
+        uint64_t t0 = now_us;
+        chip.rssi_raw = (uint8_t)(-2 * LBT_THRESHOLD_DBM); /* exactly the threshold: quiet */
+        assert(radio_lbt_listen() == RADIO_LBT_QUIET);
+        assert(now_us - t0 >= LBT_LISTEN_MS * 1000u && now_us - t0 < (LBT_LISTEN_MS + 1u) * 1000u);
+        chip.rssi_raw = (uint8_t)(-2 * LBT_THRESHOLD_DBM - 1); /* 0.5 dB louder */
+        assert(radio_lbt_listen() == RADIO_LBT_LOUD);
+        chip.rssi_raw = 220;
+        chip.answers = false; /* a read that fails is never quiet */
+        assert(radio_lbt_listen() == RADIO_LBT_LOUD);
+        assert(notes[EL_SPI_TIMEOUT] > 0);
     } else if (!strcmp(scenario, "cad_timeout")) {
-        power_on(); assert(radio_begin() == 0);
+        power_on(); assert(radio_begin() == 0 && radio_start_rx() == 0);
         for (unsigned i = 0; i < RADIO_NORESP_RESET; i++) { assert(radio_cad() == RADIO_CAD_ERROR); }
         assert(radio_needs_reset() && notes[EL_CAD_TIMEOUT] == RADIO_NORESP_RESET);
     } else if (!strcmp(scenario, "cad_wrong_modem")) {
@@ -185,6 +243,7 @@ int main(int argc, char **argv)
         power_on();
         uint64_t t0 = now_us;
         assert(radio_begin() != 0);
+        assert(radio_needs_reset());
         assert(now_us - t0 <= 5u * (RADIO_PROBE_MS + RADIO_SPI_TIMEOUT_MS + 5u) * 1000u); /* ~0.5 s, not ~10 s */
     } else if (!strcmp(scenario, "receive")) {
         power_on();

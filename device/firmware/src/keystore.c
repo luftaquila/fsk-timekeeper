@@ -3,12 +3,11 @@
 #include <string.h>
 
 #include "crc32.h"
-#include "errlog.h"
-#include "nrf.h"
+#include "nvmc.h"
 
 /* Top page of the application flash region (0x26000..0xF4000). The linker's
- * FLASH length stops at 0xF3000 (nrf52840_app.ld), so the app image never
- * covers this page and the key survives DFU. */
+ * FLASH length stops below the radio settings page at 0xF2000 (nrf52840_app.ld),
+ * so the app image never covers this page and the key survives DFU. */
 #define KEY_PAGE_ADDR  0x000F3000u
 #define KEYSTORE_MAGIC 0x4B50534Bu /* 'KPSK' */
 #define KEYSTORE_VER   1u
@@ -35,17 +34,6 @@ int keystore_load(uint8_t key_out[KEYSTORE_KEY_LEN])
     return 1;
 }
 
-/* The CPU stalls during NVMC operations; the bound only catches a controller
- * that never reports ready. */
-static int nvmc_wait(void)
-{
-    for (uint32_t i = 0; i < 20000000u; i++) {
-        if (NRF_NVMC->READY != NVMC_READY_READY_Busy) { return 1; }
-    }
-    el_note(EL_HW_TIMEOUT);
-    return 0;
-}
-
 int keystore_write(const uint8_t key[KEYSTORE_KEY_LEN])
 {
     keystore_t ks;
@@ -53,25 +41,7 @@ int keystore_write(const uint8_t key[KEYSTORE_KEY_LEN])
     ks.version = KEYSTORE_VER;
     memcpy(ks.key, key, KEYSTORE_KEY_LEN);
     ks.crc = crc32_ieee(&ks, KEYSTORE_CRC_LEN);
-
-    int ok = 1;
-    NRF_NVMC->CONFIG = (NVMC_CONFIG_WEN_Een << NVMC_CONFIG_WEN_Pos);
-    ok &= nvmc_wait();
-    NRF_NVMC->ERASEPAGE = KEY_PAGE_ADDR;
-    ok &= nvmc_wait();
-
-    /* word-by-word (flash writes are 32-bit, word-aligned) */
-    NRF_NVMC->CONFIG = (NVMC_CONFIG_WEN_Wen << NVMC_CONFIG_WEN_Pos);
-    ok &= nvmc_wait();
-    const uint32_t *src = (const uint32_t *)(const void *)&ks;
-    volatile uint32_t *dst = (volatile uint32_t *)KEY_PAGE_ADDR;
-    unsigned words = (sizeof(keystore_t) + 3u) / 4u;
-    for (unsigned i = 0; i < words && ok; i++) {
-        dst[i] = src[i];
-        ok &= nvmc_wait();
-    }
-    NRF_NVMC->CONFIG = (NVMC_CONFIG_WEN_Ren << NVMC_CONFIG_WEN_Pos);
-    ok &= nvmc_wait();
+    int ok = nvmc_page_write(KEY_PAGE_ADDR, &ks, sizeof(ks)) == 0;
 
     /* verify the readback, then wipe the RAM copies */
     uint8_t check[KEYSTORE_KEY_LEN];

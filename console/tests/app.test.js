@@ -2,7 +2,7 @@
 // Mounts the real app (router, stores, every view) under jsdom and drives it with the
 // fake master: catches template/runtime errors that the pure-lib tests cannot.
 import "fake-indexeddb/auto";
-import { describe, it, beforeAll, afterAll } from "vitest";
+import { describe, it, beforeAll, afterAll, vi } from "vitest";
 import assert from "node:assert/strict";
 import { mount, flushPromises } from "@vue/test-utils";
 import { createPinia } from "pinia";
@@ -88,6 +88,44 @@ describe("app under jsdom", () => {
     assert.match(wrapper.text(), /Connected/);
     assert.match(wrapper.text(), /FSK-WL 1\.0\.0/);
     assert.ok(wrapper.find(".link-dot.ok").exists());
+
+    // radio settings: the board answers R with its new I line (not a new boot), then A R OK
+    assert.match(wrapper.text(), /922\.900 MHz · 12 dBm · LBT on/);
+    const boots = device.logEntries.filter((e) => e.kind === "boot").length;
+    assert.ok(boots >= 1);
+    assert.equal(await device.configureRadio({ freqKhz: 923100, powerDbm: -3, lbt: 0 }), "ok");
+    await flushPromises();
+    assert.match(wrapper.text(), /923\.100 MHz · -3 dBm · LBT off/);
+    assert.equal(device.logEntries.filter((e) => e.kind === "boot").length, boots);
+    // Apply errors still report the stored target, but must never look like success.
+    const write = fake.write;
+    for (const [code, message] of [
+      ["cfgapply", /Settings stored, but radio startup failed/],
+      ["cfgpending", /Application is pending until board initialization succeeds/],
+      ["cfgfail", /Settings could not be stored/],
+    ]) {
+      const spy = vi.spyOn(fake, "write").mockImplementation(async (line) => {
+        if (!line.startsWith("R ")) return write(line);
+        if (code !== "cfgfail") {
+          await device.handleLine(`I FSK-WL 4 1.0.0 ${device.identity.devid} M 13 923100 7 250.00 16000 0 -3 0`);
+        }
+        await device.handleLine(`X ${code}`);
+        return true;
+      });
+      try {
+        assert.equal(await device.configureRadio({ freqKhz: 923100, powerDbm: -3, lbt: 0 }), code);
+        await wrapper.find("input.freq").setValue("923.100");
+        await wrapper.find("input.power").setValue("-3");
+        const apply = wrapper.findAll("button").find((btn) => btn.text() === "Apply to connected board");
+        await apply.trigger("click");
+        await flushPromises();
+        assert.match(wrapper.text(), message);
+        assert.doesNotMatch(wrapper.text(), /Radio settings stored and applied/);
+        assert.equal(device.logEntries.filter((e) => e.kind === "boot").length, boots);
+      } finally {
+        spy.mockRestore();
+      }
+    }
     const [a, b] = [...fake.sensors.keys()];
     assert.ok(wrapper.text().includes(a) && wrapper.text().includes(b), "diagnostics/mapping list the fake sensors");
     settings.setMapping(a, { role: "start" });

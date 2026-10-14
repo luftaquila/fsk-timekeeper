@@ -115,20 +115,23 @@ uint32_t pu_tx_drop(void) { return s_tx_drop; }
 #define FW_VERSION "0.0.0"
 #endif
 
-void pu_emit_identity(uint32_t devid_hi, uint32_t devid_lo, int is_master, uint8_t reset_reason)
+void pu_emit_identity(uint32_t devid_hi, uint32_t devid_lo, int is_master, uint8_t reset_reason,
+                      const radio_cfg_t *radio)
 {
-    char line[112];
+    char line[128];
     lb_t b; lb_init(&b, line, sizeof(line));
     lb_str(&b, "I FSK-WL "); lb_u32(&b, PU_USB_PROTO);
     lb_str(&b, " " FW_VERSION " ");
     lb_hex8(&b, devid_hi); lb_hex8(&b, devid_lo);
     lb_sp(&b); lb_ch(&b, is_master ? 'M' : 'S');
     lb_sp(&b); lb_u32(&b, PROTO_VER);
-    lb_sp(&b); lb_f2(&b, LORA_FREQ_MHZ);
+    lb_sp(&b); lb_u32(&b, radio->freq_khz);
     lb_sp(&b); lb_u32(&b, (uint32_t)LORA_SF);
     lb_sp(&b); lb_f2(&b, LORA_BW_KHZ);
     lb_sp(&b); lb_u32(&b, TICKS_PER_MS);
     lb_sp(&b); lb_u32(&b, reset_reason);
+    lb_sp(&b); lb_i32(&b, radio->power_dbm);
+    lb_sp(&b); lb_u32(&b, radio->lbt);
     lb_finish(&b);
     write_control(line);
 }
@@ -328,11 +331,13 @@ int pu_format_timebase_end(char *buf, unsigned cap, uint32_t hseq, uint64_t mast
 static char s_line[80];      /* holds "K " + 64 hex + NUL */
 static unsigned s_len;
 static uint8_t s_key[32];
+static radio_cfg_t s_radio;
 static uint32_t s_ack_hseq, s_ack_crc;
 static uint64_t s_ack_boot;
 static char s_clock_token[33];
 
 const uint8_t *pu_setkey(void) { return s_key; }
+const radio_cfg_t *pu_radio_cfg(void) { return &s_radio; }
 uint32_t pu_ack_hseq(void) { return s_ack_hseq; }
 uint64_t pu_ack_boot(void) { return s_ack_boot; }
 uint32_t pu_ack_crc(void) { return s_ack_crc; }
@@ -418,6 +423,22 @@ static int parse_event_ack(const char *s)
     return 1;
 }
 
+/* R <freq_khz> <power_dbm> <0|1> */
+static int parse_radio(const char *s)
+{
+    s += 2;
+    uint32_t freq, power, lbt;
+    if (!parse_u32(&s, &freq) || *s++ != ' ') { return 0; }
+    int neg = *s == '-';
+    if (neg) { s++; }
+    if (!parse_u32(&s, &power) || *s++ != ' ' || power > 128u) { return 0; }
+    if (!parse_u32(&s, &lbt) || *s != '\0' || lbt > 1u) { return 0; }
+    radio_cfg_t c = { freq, (int8_t)(neg ? -(int32_t)power : (int32_t)power), (uint8_t)lbt };
+    if (!radio_cfg_valid(&c)) { return 0; }
+    s_radio = c;
+    return 1;
+}
+
 static pu_cmd_t classify(const char *s)
 {
     if (s[0] == '\0') { return PU_CMD_NONE; }
@@ -426,6 +447,7 @@ static pu_cmd_t classify(const char *s)
     if (!strcmp(s, "PING")) { return PU_CMD_PING; }
     if (!strcmp(s, "CP")) { return PU_CMD_CHECKPOINT; }
     if (s[0] == 'K' && s[1] == ' ') { return parse_key(s + 2) ? PU_CMD_SETKEY : PU_CMD_BAD; }
+    if (s[0] == 'R' && s[1] == ' ') { return parse_radio(s) ? PU_CMD_RADIO : PU_CMD_BAD; }
     if (s[0] == 'C' && s[1] == ' ') { return parse_event_ack(s) ? PU_CMD_EVENT_ACK : PU_CMD_BAD; }
     if (s[0] == 'T' && s[1] == ' ' && strlen(s + 2) == 32u) {
         for (unsigned i = 0; i < 32u; i++) {

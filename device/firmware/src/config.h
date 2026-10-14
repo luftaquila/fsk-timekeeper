@@ -32,17 +32,34 @@
 /* VCC enable gate — driven HIGH at boot (DESIGN §8) */
 #define PIN_EXT_POWER  PIN(0, 13)
 
-/* LoRa radio parameters (DESIGN §2.1/§2.2, KR920): one channel shared by the
- * master and every sensor. */
-#define LORA_FREQ_MHZ   921.3f
+/* LoRa radio parameters (DESIGN §2.1/§2.2): one channel shared by the master and
+ * every sensor. Channel, power and LBT are per-board settings (radio_cfg.h). */
 #define LORA_BW_HZ      250000u /* SF7/BW250, symbol 512 us */
 #define LORA_BW_KHZ     (LORA_BW_HZ / 1000.0f)
 #define LORA_SF         7
 #define LORA_CR         5       /* coding rate 4/5 */
 #define LORA_SYNCWORD   0x12
-#define LORA_POWER_DBM  12      /* conducted ~+12 dBm -> EIRP <= +14 dBm with ~2 dBi */
 #define LORA_PREAMBLE   8
 #define LORA_TCXO_V     1.6f    /* Ra-01SH TCXO via DIO3 */
+
+/* Settings of a board that has none stored. KR 920 MHz USN rule: channels 26-32
+ * (922.1-923.3 MHz) allow 25 mW EIRP; 922.9 MHz keeps all 250 kHz inside them and
+ * off the LoRaWAN default channels 922.1/922.3/922.5 MHz. */
+#define RADIO_DEF_FREQ_KHZ  922900u
+#define RADIO_DEF_POWER_DBM 12      /* conducted ~+12 dBm -> EIRP <= +14 dBm with ~2 dBi */
+#define RADIO_DEF_LBT       1u
+/* What the Ra-01SH is rated for (Ai-Thinker spec V1.1: 803-930 MHz, up to +22 dBm). The
+ * SX1262 alone takes 150-960 MHz, but the module's RF matching only covers this band; the
+ * power floor is the SX1262's (RadioLib SX1262::setOutputPower). */
+#define RADIO_FREQ_MIN_KHZ  803000u
+#define RADIO_FREQ_MAX_KHZ  930000u
+#define RADIO_POWER_MIN_DBM (-9)
+#define RADIO_POWER_MAX_DBM 22
+
+/* RSSI listen-before-talk (KR rule: listen >= 5 ms, send only at <= -65 dBm). The
+ * threshold keeps 3 dB under the limit until the module's RSSI is checked (DESIGN §10). */
+#define LBT_LISTEN_MS      5u
+#define LBT_THRESHOLD_DBM  (-68)
 
 /* Time on air in us of a len-byte packet: the SX126x datasheet formula RadioLib's getTimeOnAir()
  * uses, for an explicit header, CRC on, SF7..SF12 without LDRO and LORA_CR = 4 + CR. */

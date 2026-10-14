@@ -23,6 +23,11 @@ static SX1262 radio(&mod);
 
 static unsigned s_noresp;
 static unsigned s_cad_fail;
+static radio_cfg_t s_cfg = RADIO_CFG_DEFAULT;
+/* Initialization is complete only after the configured receiver starts. Normal
+ * RX re-arms keep their existing SPI failure threshold. */
+static bool s_init_pending;
+static bool s_configured;
 
 /* Count SPI no-responses (BUSY stuck, SPIM hung, a status byte nobody drove);
  * any answered command clears the streak. */
@@ -88,8 +93,18 @@ static int16_t standby_on_tcxo(void)
     return state;
 }
 
+extern "C" void radio_set_config(const radio_cfg_t *cfg)
+{
+    s_cfg = *cfg;
+    s_init_pending = true;
+    s_configured = false;
+}
+extern "C" const radio_cfg_t *radio_config(void) { return &s_cfg; }
+
 extern "C" int radio_begin(void)
 {
+    s_init_pending = true;
+    s_configured = false;
     mod.spiConfig.timeout = RADIO_SPI_TIMEOUT_MS;
     /* begin() occasionally fails with garbled SPI readback on the hand-built
      * board; each attempt resets the radio again. */
@@ -103,8 +118,8 @@ extern "C" int radio_begin(void)
          * configured it) and makes DIO2 drive the RF switch: the Ra-01SH ties TXEN to DIO2
          * and leaves RXEN open, so neither pin is wired. */
         radio.standbyXOSC = false;
-        state = radio.begin(LORA_FREQ_MHZ, LORA_BW_KHZ, LORA_SF, LORA_CR,
-                            LORA_SYNCWORD, LORA_POWER_DBM, LORA_PREAMBLE,
+        state = radio.begin(s_cfg.freq_khz / 1000.0f, LORA_BW_KHZ, LORA_SF, LORA_CR,
+                            LORA_SYNCWORD, s_cfg.power_dbm, LORA_PREAMBLE,
                             LORA_TCXO_V, false);
         if (state == RADIOLIB_ERR_NONE) {
             state = standby_on_tcxo();
@@ -119,6 +134,7 @@ extern "C" int radio_begin(void)
     }
     s_noresp = 0;
     s_cad_fail = 0;
+    s_configured = true;
     return RADIOLIB_ERR_NONE;
 }
 
@@ -136,6 +152,7 @@ extern "C" int radio_start_rx(void)
     int16_t state = track(radio.startReceive(RADIOLIB_SX126X_RX_TIMEOUT_INF, RX_IRQ_FLAGS,
                                              RADIOLIB_IRQ_RX_DEFAULT_MASK, 0));
     if (state != RADIOLIB_ERR_NONE) { el_note(EL_RX_FAIL); }
+    else if (s_configured) { s_init_pending = false; }
     return state;
 }
 
@@ -234,7 +251,25 @@ extern "C" int radio_cad(void)
     return 0;
 }
 
+extern "C" int radio_lbt_enabled(void) { return s_cfg.lbt; }
+
+/* GetRssiInst answers -raw/2 dBm; SPI failures count towards a reset like any command. */
+extern "C" int radio_lbt_listen(void)
+{
+    hal.restartHangCheck();
+    int loud = 0;
+    uint32_t t0 = board_micros();
+    do {
+        uint8_t raw = 0;
+        if (track(mod.SPIreadStream(RADIOLIB_SX126X_CMD_GET_RSSI_INST, &raw, 1)) != RADIOLIB_ERR_NONE ||
+            raw < -2 * LBT_THRESHOLD_DBM) {
+            loud = 1;
+        }
+    } while ((uint32_t)(board_micros() - t0) < LBT_LISTEN_MS * 1000u);
+    return loud ? RADIO_LBT_LOUD : RADIO_LBT_QUIET;
+}
+
 extern "C" int radio_needs_reset(void)
 {
-    return s_noresp >= RADIO_NORESP_RESET || s_cad_fail >= RADIO_NORESP_RESET;
+    return s_init_pending || s_noresp >= RADIO_NORESP_RESET || s_cad_fail >= RADIO_NORESP_RESET;
 }

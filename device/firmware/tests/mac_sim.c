@@ -69,9 +69,12 @@ typedef struct {
     int dio1;
     uint64_t dio1_tick;
     int noresp;
+    int init_pending, configured, begin_fail, rx_fail;
+    unsigned receive_calls;
     unsigned begin_calls;
     unsigned loss_pct;     /* receive loss, percent */
     int deaf;              /* drops every beacon */
+    uint64_t jam_from_us, jam_to_us; /* a strong stranger next to this node: every RSSI listen is loud */
     struct { uint64_t tick; uint32_t seq; int xtal; } ring[64];
     unsigned rh, rt;
     uint32_t cseq;
@@ -84,12 +87,14 @@ typedef struct {
 
 static tx_t air[AIR_MAX];
 static unsigned air_n;
+static void isr_catch_up(node_t *n);
 static node_t nodes[SIM_NODES];
 static int n_nodes;
 static node_t *cur;
 static uint64_t now_global;
 static uint32_t seal_delay_us;
 static int cad_error;
+static int lbt_on = RADIO_DEF_LBT;
 static mq_t mq;
 static mac_master_t mm;
 
@@ -213,15 +218,21 @@ int radio_begin(void)
 {
     deliver(cur);
     cur->begin_calls++;
-    cur->noresp = 0;
+    cur->init_pending = 1;
+    cur->configured = 0;
     cur->rx_on = 0;
     cur->have_pkt = 0;
+    if (cur->begin_fail) { return -1; }
+    cur->noresp = 0;
+    cur->configured = 1;
     return 0;
 }
 
 int radio_start_rx(void)
 {
     deliver(cur);
+    if (cur->rx_fail) { return -1; }
+    if (cur->configured) { cur->init_pending = 0; }
     cur->rx_on = 1;
     cur->rx_since_us = cur->now_us + RX_SETUP_US;
     cur->have_pkt = 0; /* startReceive clears the IRQ status: an unread packet is gone */
@@ -256,6 +267,7 @@ int radio_transmit(const uint8_t *data, int len)
 
 int radio_receive(uint8_t *buf, int maxlen, float *rssi, float *snr)
 {
+    cur->receive_calls++;
     deliver(cur);
     if (!cur->have_pkt) { return 0; }
     int len = cur->pkt_len < maxlen ? cur->pkt_len : maxlen;
@@ -308,7 +320,24 @@ int radio_cad(void)
     return 0;
 }
 
-int radio_needs_reset(void) { return cur->noresp >= (int)RADIO_NORESP_RESET; }
+int radio_needs_reset(void) { return cur->init_pending || cur->noresp >= (int)RADIO_NORESP_RESET; }
+
+int radio_lbt_enabled(void) { return lbt_on; }
+
+/* The nodes stand close together, so any other node on air is loud, like a jammer. */
+int radio_lbt_listen(void)
+{
+    deliver(cur);
+    uint64_t t0 = cur->now_us;
+    cur->now_us = t0 + LBT_LISTEN_MS * 1000u;
+    isr_catch_up(cur); /* the GPIOTE ISR keeps capturing while the main loop listens */
+    if (cur->jam_from_us < cur->now_us && cur->jam_to_us > t0) { return RADIO_LBT_LOUD; }
+    unsigned from = air_n > 64u ? air_n - 64u : 0u;
+    for (unsigned i = from; i < air_n; i++) {
+        if (air[i].src != cur->idx && air[i].start_us < cur->now_us && air[i].end_us > t0) { return RADIO_LBT_LOUD; }
+    }
+    return RADIO_LBT_QUIET;
+}
 
 /* A checksum stands in for the AEAD: version, length and integrity checks only. */
 int sec_seal(uint8_t *out, int out_cap, uint8_t type, uint32_t node_id, const void *payload, int payload_len)
@@ -434,7 +463,22 @@ static void host_line(const char *line)
 /* ---- simulation --------------------------------------------------------- */
 typedef struct { int node; uint64_t us; int injected; uint32_t seq; } edge_t;
 static edge_t edges[EDGE_MAX];
-static unsigned n_edges;
+static unsigned n_edges, next_edge;
+
+static void inject(edge_t *e)
+{
+    isr_edge(&nodes[e->node], e->us);
+    e->injected = 1;
+    e->seq = nodes[e->node].cseq;
+}
+
+/* Edges of n up to its own clock, ahead of the global step (n blocked in a radio call). */
+static void isr_catch_up(node_t *n)
+{
+    for (unsigned i = next_edge; i < n_edges && edges[i].us <= n->now_us; i++) {
+        if (edges[i].node == n->idx && !edges[i].injected) { inject(&edges[i]); }
+    }
+}
 
 static void add_node(int is_master, uint32_t id, int32_t ppm, unsigned loss_pct)
 {
@@ -448,6 +492,7 @@ static void add_node(int is_master, uint32_t id, int32_t ppm, unsigned loss_pct)
     n->ppm = ppm;
     n->tick_base = (uint64_t)mix(id) * 1000u;
     n->xtal = 1;
+    n->configured = 1;
     n->loss_pct = loss_pct;
     n->now_us = (uint64_t)n->idx * 137u; /* sensors do not start in lockstep */
     cur = n;
@@ -475,15 +520,13 @@ static int cmp_edge(const void *a, const void *b)
 
 static void run(uint64_t end_us, hook_t hook)
 {
-    unsigned next_edge = 0;
+    next_edge = 0;
     qsort(edges, n_edges, sizeof(edges[0]), cmp_edge);
     for (; now_global < end_us; now_global += STEP_US) {
         if (hook) { hook(now_global); }
         while (next_edge < n_edges && edges[next_edge].us <= now_global) {
             edge_t *e = &edges[next_edge++];
-            isr_edge(&nodes[e->node], e->us);
-            e->injected = 1;
-            e->seq = nodes[e->node].cseq;
+            if (!e->injected) { inject(e); }
         }
         for (int i = 0; i < n_nodes; i++) {
             node_t *n = &nodes[i];
@@ -654,8 +697,9 @@ static void steady(void)
 /* Two sensors, single captures 1.5..3 s apart: each goes out in the sensor's next dealt slot.
  * Slots 0, 2, 4 and 1, 3, 5 leave at most ~600 ms to wait, ~220 ms on average, plus ~90 ms
  * of CAD, TX setup and airtime. */
-static void latency(void)
+static void latency(int lbt)
 {
+    lbt_on = lbt;
     add_node(1, 0, 0, 0);
     add_node(0, 0x0D2243B0u, 17, 0);
     add_node(0, 0x7A1C9F02u, -12, 0);
@@ -685,10 +729,10 @@ static void latency(void)
         }
     }
     assert(n == n_edges);
-    printf("latency: mean %llu ms, worst %llu ms over %u captures\n",
+    printf("latency (LBT %s): mean %llu ms, worst %llu ms over %u captures\n", lbt ? "on" : "off",
            (unsigned long long)(sum / n / 1000u), (unsigned long long)(worst / 1000u), n);
     assert(sum / n < 400000u && worst < 1000000u);
-    printf("PASS latency\n");
+    printf("PASS latency%s\n", lbt ? "" : "_lbt_off");
 }
 
 static void stall_hook(uint64_t us)
@@ -980,6 +1024,40 @@ static void late_seal(void)
     puts("PASS late_seal");
 }
 
+/* A strong stranger next to the master (20-23 s), then next to sensor 1 (40-43 s): the
+ * jammed node sends nothing while its listen is loud, and every capture arrives later. */
+static void lbt_jam(void)
+{
+    add_node(1, 0, 0, 0);
+    add_node(0, 0x0D2243B0u, 19, 0);
+    add_node(0, 0x7A1C9F02u, -8, 0);
+    nodes[0].jam_from_us = 20000000u; nodes[0].jam_to_us = 23000000u;
+    nodes[1].jam_from_us = 40000000u; nodes[1].jam_to_us = 43000000u;
+    random_edges(1, 12000000u, 60000000u, 700, 3u);
+    random_edges(2, 12000000u, 60000000u, 700, 9u);
+    run(80000000u, NULL);
+    check_slots(12000000u);
+    unsigned beacons_after = 0, sensor_after = 0;
+    for (unsigned i = 0; i < air_n; i++) {
+        const tx_t *x = &air[i];
+        /* A listen that ended before the jam may still be followed by a CAD and the TX setup. */
+        for (int n = 0; n < 2; n++) {
+            if (x->src == n) {
+                assert(x->start_us < nodes[n].jam_from_us + 20000u || x->start_us > nodes[n].jam_to_us + TX_SETUP_US);
+            }
+        }
+        if (x->src == 0 && x->start_us > 23000000u && x->start_us < 25000000u) { beacons_after++; }
+        if (x->src == 1 && x->start_us > 43000000u && x->start_us < 46000000u) { sensor_after++; }
+    }
+    assert(beacons_after > 0 && sensor_after > 0);
+    unsigned interp, lost;
+    for (int n = 1; n <= 2; n++) {
+        check_records(n, 12000000u, TOL_TICKS, &interp, &lost);
+        assert(lost == 0);
+    }
+    puts("PASS lbt_jam");
+}
+
 static void cad_failure(void)
 {
     add_node(1, 0, 0, 0); add_node(0, 0x12345678u, 0, 0);
@@ -1024,11 +1102,64 @@ static void load(unsigned sensors, unsigned rate)
            sensors, rate, peak_fifo, total_lost);
 }
 
+static void recovery_step(void)
+{
+    if (cur->is_master) { (void)mac_master_step(&mm); }
+    else { mac_sensor_step(&cur->s); }
+}
+
+/* Failed configuration and failed RX startup both back off without touching
+ * the timebase, session or queued evidence. No ordinary radio work can clear them. */
+static void init_recovery(void)
+{
+    add_node(1, 0, 0, 0);
+    add_node(0, 0x12345678u, 0, 0);
+    assert(mq_push_timebase_end(&mq, nodes[0].boot_id, 1234));
+    mq_item_t queued = mq.item[mq.head];
+    sq_push_edge(&nodes[1].s.q, 1, 5678, HEALTH_EVENT_REQUIRED, 0);
+    for (int i = 0; i < n_nodes; i++) {
+        cur = &nodes[i];
+        uint64_t boot = cur->boot_id, base = cur->tick_base;
+        retry_t *retry = i == 0 ? &mm.retry : &cur->s.retry;
+        retry_init(retry, board_millis(), 100u);
+        cur->init_pending = cur->begin_fail = 1;
+        cur->s.tx_slots = 1;
+        recovery_step();
+        assert(cur->begin_calls == 0 && cur->receive_calls == 0 && air_n == 0);
+        cur->now_us = (uint64_t)retry->at_ms * 1000u;
+        recovery_step();
+        assert(cur->begin_calls == 1 && radio_needs_reset());
+        cur->begin_fail = 0; cur->rx_fail = 1;
+        cur->now_us = (uint64_t)retry->at_ms * 1000u;
+        recovery_step();
+        assert(cur->begin_calls == 2 && radio_needs_reset());
+        cur->now_us = (uint64_t)(retry->at_ms - 1u) * 1000u;
+        recovery_step();
+        assert(cur->begin_calls == 2 && cur->receive_calls == 0 && air_n == 0);
+        cur->rx_fail = 0;
+        cur->now_us = (uint64_t)retry->at_ms * 1000u;
+        recovery_step();
+        assert(cur->begin_calls == 3 && !radio_needs_reset() && cur->rx_on);
+        assert(cur->boot_id == boot && cur->tick_base == base);
+        assert(mq_depth(&mq) == 1 && memcmp(&mq.item[mq.head], &queued, sizeof(queued)) == 0);
+        assert(nodes[1].s.q.count == 1 && nodes[1].s.q.item[0].tick == 5678);
+        if (i == 1) { assert(cur->s.tx_slots == 0); }
+    }
+    cur = &nodes[0];
+    mm.next_beacon = capture_now64();
+    recovery_step();
+    assert(air_n == 1 && cur->receive_calls > 0);
+    puts("PASS init_recovery");
+}
+
 int main(int argc, char **argv)
 {
     assert(argc == 2);
     if (!strcmp(argv[1], "steady")) { steady(); }
-    else if (!strcmp(argv[1], "latency")) { latency(); }
+    else if (!strcmp(argv[1], "init_recovery")) { init_recovery(); }
+    else if (!strcmp(argv[1], "latency")) { latency(1); }
+    else if (!strcmp(argv[1], "latency_lbt_off")) { latency(0); }
+    else if (!strcmp(argv[1], "lbt_jam")) { lbt_jam(); }
     else if (!strcmp(argv[1], "overflow")) { overflow(); }
     else if (!strcmp(argv[1], "sync_gap")) { sync_gap(); }
     else if (!strcmp(argv[1], "long_gap")) { long_gap(); }
