@@ -1,6 +1,6 @@
-/* Master's sensor registry (DESIGN §2.3): entry k = uplink slot k. A sensor is
- * registered on its first authenticated uplink; a LOST entry may be reclaimed.
- * Pure logic. */
+/* Master's sensor registry (DESIGN §2.3), pure logic: entry k = slot-table entry k
+ * (the sensors deal the uplink slots among the live entries, mac_sensor.c). A sensor
+ * is registered on its first authenticated uplink; a LOST entry may be reclaimed. */
 #ifndef REGISTRY_H
 #define REGISTRY_H
 
@@ -44,10 +44,10 @@ reg_entry_t *reg_lookup(registry_t *r, uint32_t id);
  * or REG_COLLISION when a live sensor already uses its short id. */
 reg_entry_t *reg_claim(registry_t *r, uint32_t id, uint32_t now_ms, int *why);
 
-/* Slot table for the next beacon: live entries only (LOST slots are free). */
+/* Slot table for the next beacon: live entries only (LOST entries are free). */
 void reg_slot_table(const registry_t *r, uint32_t now_ms, beacon_slot_t out[MAX_NODES]);
 
-/* New master session: every sensor keeps its slot and re-syncs its ev_seq with
+/* New master session: every sensor keeps its entry and re-syncs its ev_seq with
  * its next uplink. */
 void reg_session(registry_t *r);
 

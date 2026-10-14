@@ -23,7 +23,7 @@ import { USB_PRODUCT } from "./constants";
 import { MASTER_TICKS_PER_MS } from "./event-timing";
 
 export const NODE_MASTER = "0";
-export const RADIO_PROTO_VERSION = 11;
+export const RADIO_PROTO_VERSION = 12;
 export const USB_PROTO_VERSION = 2;
 
 export const FLAG_SYNC = 0x01;

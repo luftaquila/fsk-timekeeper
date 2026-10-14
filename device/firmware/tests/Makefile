@@ -11,7 +11,7 @@ RADIOLIB := ../vendor/RadioLib/src
 GPS_CASES := healthy frequency_scale stale_rmc resume_after_silence void_transition malformed_active \
 	bad_date bad_time bad_checksum hfxo_recovery missed_pps report_expiry \
 	status_not_exact_a millis_wrap segments report_timeout glitch hfxo_stop_between_edges
-SIM_CASES := steady overflow sync_gap long_gap reboot reboot_new_tag reboot_full faults \
+SIM_CASES := steady latency overflow sync_gap long_gap reboot reboot_new_tag reboot_full faults \
 	id_collision ev_wrap hfxo_stop
 RADIO_CASES := probe_frame probe_silent probe_busy_stuck begin begin_dead receive receive_zero_length
 

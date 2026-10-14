@@ -19,7 +19,7 @@ const HEALTHY = 7;
 const TIME_UNKNOWN = 64;
 
 // Defaults for new fakes (tests shorten the slot delay before connecting).
-export const fakeDefaults = { slotDelayMin: 300, slotDelayMax: 1000, periodicCheckpoints: true };
+export const fakeDefaults = { slotDelayMin: 100, slotDelayMax: 700, periodicCheckpoints: true };
 
 function rnd32() {
   return Math.floor(Math.random() * 0xffffffff);
@@ -28,7 +28,7 @@ function rnd32() {
 export function createFakeTransport({ onLine, onDisconnect }) {
   const devid = "F4KEF4KE00000001";
   let role = "M";
-  const proto = { usb: 2, radio: 11, ticks: 16000 };
+  const proto = { usb: 2, radio: 12, ticks: 16000 };
   let masterBoot = rnd32();
   let t0 = 0;
   let tickBase = 0n;

@@ -35,7 +35,8 @@
 /* LoRa radio parameters (DESIGN §2.1/§2.2, KR920): one channel shared by the
  * master and every sensor. */
 #define LORA_FREQ_MHZ   921.3f
-#define LORA_BW_KHZ     250.0f  /* SF7/BW250, symbol 512 us */
+#define LORA_BW_HZ      250000u /* SF7/BW250, symbol 512 us */
+#define LORA_BW_KHZ     (LORA_BW_HZ / 1000.0f)
 #define LORA_SF         7
 #define LORA_CR         5       /* coding rate 4/5 */
 #define LORA_SYNCWORD   0x12
@@ -43,25 +44,35 @@
 #define LORA_PREAMBLE   8
 #define LORA_TCXO_V     1.6f    /* Ra-01SH TCXO via DIO3 */
 
+/* Time on air in us of a len-byte packet: the SX126x datasheet formula RadioLib's getTimeOnAir()
+ * uses, for an explicit header, CRC on, SF7..SF12 without LDRO and LORA_CR = 4 + CR. */
+#define LORA_SYMBOL_US   ((1000000u << LORA_SF) / LORA_BW_HZ)
+#define LORA_TOA_US(len) (LORA_SYMBOL_US * \
+    (4u * (LORA_PREAMBLE + 8u) + 17u + 4u * LORA_CR * ((8u * (len) + 43u) / (4u * LORA_SF))) / 4u)
+
 #define TICKS_PER_MS 16000u /* TIMER1 runs at 16 MHz */
 
 /* Fixed TxDone->RxDone air delay in ticks (DESIGN §2.9). Cancels in
  * sensor-to-sensor intervals; 0 until measured. */
 #define T_AIR_REF_TICKS 0u
 
-/* Frame timing (DESIGN §2.8): a beacon every BEACON_PERIOD_MS on a TIMER1 grid; slot k starts
- * SLOT_OFFSET_MS + k * SLOT_LEN_MS after its RxDone and holds a ~77 ms uplink. A TX let through
- * at SLOT_LATE_MS is on air <= ~7 ms later (SPI + TCXO start after a CAD) and ends by ~99 ms. */
+/* Frame timing (DESIGN §2.8): a beacon every BEACON_PERIOD_MS on a TIMER1 grid; slot j starts
+ * SLOT_OFFSET_MS + j * SLOT_LEN_MS after its RxDone. Slots 0..SLOT_COUNT-2 are dealt in turn to
+ * the sensors in the slot table, the last one is free for unregistered sensors (mac_sensor.c). */
 #define BEACON_PERIOD_MS   1000u
 #define SLOT_OFFSET_MS     50u
 #define SLOT_LEN_MS        100u
-#define SLOT_LATE_MS       15u  /* latest TX start within a slot; later -> skip this cycle */
+#define SLOT_COUNT         7u
+#define SLOT_LATE_MS       10u  /* latest TX start within a slot, CAD included; later -> skip the slot */
+#define TX_SETUP_MS        7u   /* SPI + TCXO start after a CAD until the preamble is on air */
+#define SLOT_GUARD_MS      5u   /* spare at the end of a slot for the unmeasured parts of this budget */
 #define BEACON_LBT_MAX_MS  50u  /* re-sense a busy channel this long, then send the beacon anyway */
 #define RX_DRAIN_MAX_MS    100u /* longest wait for a reception in progress before a CAD */
 #define RX_HEADER_WAIT_MS  12u  /* a preamble without a header after this long is noise */
 #define CAD_TIMEOUT_MS     10u  /* a CAD takes ~2.5 ms (4 symbols at SF7/BW250), ~7.5 ms after a TCXO start */
 
-/* Periodic checkpoint + diagnostics: in the beacon whose seq % this == slot % this. */
+/* Periodic checkpoint + diagnostics: in the cycle whose beacon seq % this == table entry % this,
+ * in the sensor's last slot of that cycle. */
 #define CHECKPOINT_PERIOD_BEACONS 5u
 /* A checkpoint request (host `CP`) rides this many consecutive beacons. */
 #define CP_REQ_BEACONS 2u

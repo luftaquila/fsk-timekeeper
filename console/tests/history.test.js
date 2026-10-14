@@ -18,7 +18,7 @@ const csvRows = (text) => text.trim().split("\r\n").map((l) => l.split(","));
 function run(fields) {
   return {
     schema: 3,
-    radioProto: 11,
+    radioProto: 12,
     usbProto: 2,
     runId: fields.runId,
     mode: fields.mode,

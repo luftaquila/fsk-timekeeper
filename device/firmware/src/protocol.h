@@ -1,4 +1,4 @@
-/* Sealed LoRa packet formats, radio protocol v11 (DESIGN §2.6, §2.8, §2.11).
+/* Sealed LoRa packet formats, radio protocol v12 (DESIGN §2.6, §2.8, §2.11).
  *
  * Wire = [cleartext header | ciphertext payload | 16-byte Poly1305 tag]
  * (secure.h). The type byte carries PROTO_VER in its high nibble, so every
@@ -18,7 +18,8 @@
 #define PKT_TYPE_BEACON   0x01u
 #define PKT_TYPE_UPLINK   0x02u
 
-#define PROTO_VER 11u
+/* v12 deals the slots of a cycle in turn (DESIGN §2.8); its packets are v11's. */
+#define PROTO_VER 12u
 
 #define SEC_VT(ver, type) ((uint8_t)(((uint8_t)(ver) << 4) | ((uint8_t)(type) & 0x0Fu)))
 #define SEC_VT_TYPE(b)    ((uint8_t)((b) & 0x0Fu))
@@ -26,11 +27,11 @@
 
 #define SEC_TYPE_HAS_NODE(t) ((t) == PKT_TYPE_UPLINK)
 
-/* Registry capacity at the master = number of uplink slots. */
+/* Registry capacity at the master = entries of the beacon's slot table. */
 #define MAX_NODES 5u
 #define NODE_MASTER 0u
 
-/* Slot-table name of a sensor id: its low 16 bits, never 0 (0 = free slot).
+/* Slot-table name of a sensor id: its low 16 bits, never 0 (0 = free entry).
  * The master refuses to register a second live sensor with the same short id. */
 static inline uint16_t node_short_id(uint32_t id)
 {
@@ -41,7 +42,7 @@ static inline uint16_t node_short_id(uint32_t id)
 
 /* ---- Beacon (master -> all) ----------------------------------------------- */
 
-/* Slot k of the table is registry entry k. short_id 0 = free slot. ack_seq is
+/* Entry k of the table is registry entry k. short_id 0 = free entry. ack_seq is
  * the last ev_seq the master accepted in order from that sensor boot
  * (cumulative ACK); boot_tag = low byte of that boot's id. */
 typedef struct __attribute__((packed)) {

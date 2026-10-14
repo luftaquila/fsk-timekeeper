@@ -4,7 +4,7 @@
  * MASTER = the board a PC enumerates over USB-CDC: beacons, collects sensor
  * records into the host queue and speaks the FSK-WL line protocol (proto_usb.h).
  * SENSOR = any other board: syncs to beacons, captures SENSOR edges in hardware
- * and uplinks them in its slot (mac_sensor.h).
+ * and uplinks them in its slots (mac_sensor.h).
  */
 #include <stdint.h>
 #include <stddef.h>

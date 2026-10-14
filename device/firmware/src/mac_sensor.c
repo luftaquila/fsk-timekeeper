@@ -11,6 +11,16 @@
 
 #define TPM ((uint64_t)TICKS_PER_MS)
 
+/* An uplink let through at SLOT_LATE_MS ends SLOT_GUARD_MS before its slot does, and the last slot
+ * ends before the next beacon even when this one went out as late as the master's LBT allows
+ * (beacon_lbt(): re-sensing, a last CAD, then a drain). */
+static_assert((SLOT_LATE_MS + TX_SETUP_MS + SLOT_GUARD_MS) * 1000u + LORA_TOA_US(WIRE_UPLINK) <= SLOT_LEN_MS * 1000u,
+              "an uplink must fit its slot");
+static_assert((SLOT_OFFSET_MS + SLOT_COUNT * SLOT_LEN_MS + BEACON_LBT_MAX_MS + CAD_TIMEOUT_MS + RX_DRAIN_MAX_MS) * 1000u +
+              LORA_TOA_US(WIRE_BEACON) <= BEACON_PERIOD_MS * 1000u, "the slots must end before the next beacon");
+static_assert(SLOT_COUNT >= 2u && SLOT_COUNT <= 8u, "tx_slots holds every slot in 8 bits");
+static_assert(LORA_SF >= 7 && LORA_SYMBOL_US < 16000u, "LORA_TOA_US covers SF7..SF12 without LDRO");
+
 void mac_sensor_init(mac_sensor_t *s, uint32_t my_id, uint8_t reset_reason)
 {
     memset(s, 0, sizeof(*s));
@@ -25,27 +35,12 @@ void mac_sensor_init(mac_sensor_t *s, uint32_t my_id, uint8_t reset_reason)
      * an ACK. */
     s->q.next_ev_seq = (uint16_t)(sec_boot_id() >> 16);
     if (s->q.next_ev_seq == 0u) { s->q.next_ev_seq = 1u; }
-    s->slot = -1;
-    s->tx_slot = -1;
+    s->entry = -1;
     s->last_beacon_ms = board_millis();
     s->reset_after_ms = s->last_beacon_ms;
     s->reset_backoff_ms = BEACON_LOSS_RESET_MS;
     s->hfxo_stops = board_hfxo_stops();
     radio_start_rx();
-}
-
-/* Unregistered: contend in a random slot of `mask` with probability 1/2. */
-static int contend_slot(unsigned mask)
-{
-    unsigned n = 0;
-    for (unsigned k = 0; k < MAX_NODES; k++) { n += (mask >> k) & 1u; }
-    uint32_t r = sec_random();
-    if (n == 0 || (r & 1u)) { return -1; }
-    unsigned pick = (r >> 1) % n;
-    for (unsigned k = 0; k < MAX_NODES; k++) {
-        if (((mask >> k) & 1u) && pick-- == 0) { return (int)k; }
-    }
-    return -1;
 }
 
 static void on_beacon(mac_sensor_t *s, const uint8_t *buf, int n)
@@ -76,28 +71,29 @@ static void on_beacon(mac_sensor_t *s, const uint8_t *buf, int n)
     sq_resolve(&s->q, &s->sync, capture_now64());
     if (b.cp_req != 0u && b.cp_req != s->cp_answered) { s->cp_pending = b.cp_req; }
 
-    /* Our slot carries our short id and this boot's tag. The short id under another tag is our
-     * entry from before a reboot, or a sensor sharing our low 16 bits: contend in a free slot
-     * rather than jam it, and in it only when none is free (the master then updates the tag). */
-    unsigned free_mask = 0, named_mask = 0;
-    s->slot = -1;
+    /* Our entry has our short id and this boot's tag (the short id under another tag is our old
+     * boot or an id twin). Slots 0..SLOT_COUNT-2 go in turn to the live entries in table order;
+     * without an entry we announce ourselves in the last, free, slot with probability 1/2. */
+    unsigned live = 0, rank = 0;
+    s->entry = -1;
     for (unsigned k = 0; k < MAX_NODES; k++) {
-        if (b.slot[k].short_id == 0u) {
-            free_mask |= 1u << k;
-        } else if (b.slot[k].short_id == s->short_id) {
-            if (b.slot[k].boot_tag == s->boot_tag) {
-                s->slot = (int)k;
-                sq_ack(&s->q, b.slot[k].ack_seq);
-            } else {
-                named_mask |= 1u << k;
-            }
+        if (b.slot[k].short_id == 0u) { continue; }
+        if (b.slot[k].short_id == s->short_id && b.slot[k].boot_tag == s->boot_tag) {
+            s->entry = (int)k;
+            rank = live;
+            sq_ack(&s->q, b.slot[k].ack_seq);
         }
+        live++;
     }
     /* Without our RxDone the slot times are unknown: stay silent this cycle. */
-    s->cycle = l_rx_ok;
+    s->tx_slots = 0;
+    if (l_rx_ok && s->entry >= 0) {
+        for (unsigned j = rank; j < SLOT_COUNT - 1u; j += live) { s->tx_slots |= (uint8_t)(1u << j); }
+    } else if (l_rx_ok && (sec_random() & 1u)) {
+        s->tx_slots = (uint8_t)(1u << (SLOT_COUNT - 1u));
+    }
     s->cycle_rx = l_rx;
     s->cycle_seq = b.seq;
-    s->tx_slot = s->slot >= 0 ? s->slot : contend_slot(free_mask ? free_mask : named_mask);
 }
 
 static void record_capture(mac_sensor_t *s, uint32_t seq, uint64_t tick, int xtal)
@@ -145,10 +141,13 @@ static void drain_captures(mac_sensor_t *s)
     }
 }
 
-static int checkpoint_due(const mac_sensor_t *s, int k)
+/* On request, or to announce ourselves, at once. The periodic one waits for our last slot of its
+ * cycle: one packet per cycle, so an earlier one would hold that cycle's captures back a beacon. */
+static int checkpoint_due(const mac_sensor_t *s)
 {
-    if (s->cp_pending || s->slot < 0) { return 1; } /* request, or announce ourselves */
-    return (uint8_t)(s->cycle_seq % CHECKPOINT_PERIOD_BEACONS) == (uint8_t)((unsigned)k % CHECKPOINT_PERIOD_BEACONS);
+    if (s->cp_pending || s->entry < 0) { return 1; }
+    return s->tx_slots == 0u && (uint8_t)(s->cycle_seq % CHECKPOINT_PERIOD_BEACONS) ==
+                                (uint8_t)((unsigned)s->entry % CHECKPOINT_PERIOD_BEACONS);
 }
 
 /* "Through now, the last capture is seq": only when nothing precedes it. */
@@ -190,16 +189,17 @@ static void fill_diag(mac_sensor_t *s, uplink_pl_t *p)
 
 static void slot_tx(mac_sensor_t *s)
 {
-    if (!s->cycle) { return; }
-    if (s->tx_slot < 0) { s->cycle = 0; return; }
-    uint64_t start = s->cycle_rx + (uint64_t)(SLOT_OFFSET_MS + (unsigned)s->tx_slot * SLOT_LEN_MS) * TPM;
+    if (s->tx_slots == 0u) { return; }
+    unsigned j = 0;
+    while (!((s->tx_slots >> j) & 1u)) { j++; }
+    uint64_t start = s->cycle_rx + (uint64_t)(SLOT_OFFSET_MS + j * SLOT_LEN_MS) * TPM;
     uint64_t now = capture_now64();
     if (now < start) { return; }
-    s->cycle = 0; /* one attempt per cycle */
+    s->tx_slots &= (uint8_t)~(1u << j); /* one try per slot */
     if (now - start > SLOT_LATE_MS * TPM) { return; }
 
     uplink_pl_t *p = sq_packet(&s->q, s->master_boot_id);
-    if (!p && checkpoint_due(s, s->tx_slot)) { p = make_checkpoint(s); }
+    if (!p && checkpoint_due(s)) { p = make_checkpoint(s); }
     if (!p) { return; }
 
     /* Listen before talk. The slot is ours, so anything on air is a stranger:
@@ -209,6 +209,7 @@ static void slot_tx(mac_sensor_t *s)
     if (radio_cad()) { return; }
     if (capture_now64() - start > SLOT_LATE_MS * TPM) { radio_start_rx(); return; }
 
+    s->tx_slots = 0; /* one packet per cycle: the next beacon acks it */
     fill_diag(s, p);
     uint8_t tx[WIRE_UPLINK];
     int wlen = sec_seal(tx, sizeof(tx), PKT_TYPE_UPLINK, s->my_id, p, sizeof(*p));
@@ -229,7 +230,7 @@ static void radio_recovery(mac_sensor_t *s)
     el_note(EL_RADIO_RESET);
     radio_begin();
     radio_start_rx();
-    s->cycle = 0;
+    s->tx_slots = 0;
     s->reset_after_ms = now + s->reset_backoff_ms;
     s->reset_backoff_ms = s->reset_backoff_ms * 2u > RADIO_RESET_BACKOFF_MAX_MS
                           ? RADIO_RESET_BACKOFF_MAX_MS : s->reset_backoff_ms * 2u;

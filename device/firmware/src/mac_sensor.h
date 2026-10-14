@@ -1,7 +1,7 @@
 /* Sensor MAC (DESIGN §2.8): sync to beacons, stamp captures, and send at
- * most one packet per beacon in the sensor's slot; the beacon's slot table
- * carries the cumulative ACK. A sensor that heard no beacon this cycle stays
- * silent. Main-loop context. */
+ * most one packet per beacon, in the first of the sensor's slots it is ready
+ * for; the beacon's slot table carries the cumulative ACK. A sensor that heard
+ * no beacon this cycle stays silent. Main-loop context. */
 #ifndef MAC_SENSOR_H
 #define MAC_SENSOR_H
 
@@ -25,11 +25,10 @@ typedef struct {
     int      timing_ready;   /* health was complete once in this session */
     uint64_t timing_ready_tick;
     /* current beacon cycle */
-    int      cycle;          /* a beacon with a captured RxDone arrived and its slot is ahead */
     uint64_t cycle_rx;       /* its RxDone, local ticks */
     uint8_t  cycle_seq;
-    int      slot;           /* own slot in the table, -1 = not registered */
-    int      tx_slot;        /* slot to use this cycle, -1 = stay silent */
+    uint8_t  tx_slots;       /* bit j: slot j is ours and still ahead; 0 once a packet went out */
+    int      entry;          /* own entry in the slot table, -1 = not registered */
     uint8_t  cp_pending, cp_answered;
     uint32_t last_beacon_ms;
     uint32_t reset_after_ms; /* earliest next radio reset */

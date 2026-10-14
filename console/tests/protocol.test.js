@@ -20,11 +20,11 @@ describe("crc32", () => {
 
 describe("parseLine", () => {
   it("parses I v2 and checks the contract", () => {
-    const i = parseLine("I FSK-WL 2 1.0.0 0123456789ABCDEF M 11 921.30 7 250.00 16000 4");
-    assert.deepEqual(i, { type: "I", product: "FSK-WL", usbProto: 2, fw: "1.0.0", devid: "0123456789ABCDEF", role: "M", radioProto: 11, freqMhz: 921.3, sf: 7, bw: 250, ticksPerMs: 16000, resetReason: 4, v1: false });
+    const i = parseLine("I FSK-WL 2 1.0.0 0123456789ABCDEF M 12 921.30 7 250.00 16000 4");
+    assert.deepEqual(i, { type: "I", product: "FSK-WL", usbProto: 2, fw: "1.0.0", devid: "0123456789ABCDEF", role: "M", radioProto: 12, freqMhz: 921.3, sf: 7, bw: 250, ticksPerMs: 16000, resetReason: 4, v1: false });
     assert.deepEqual(contractOf(i), { ok: true, reason: null });
     assert.equal(contractOf({ ...i, role: "S" }).reason, CONTRACT_SENSOR_ROLE);
-    assert.equal(contractOf({ ...i, radioProto: 10 }).reason, CONTRACT_VERSION);
+    assert.equal(contractOf({ ...i, radioProto: 11 }).reason, CONTRACT_VERSION);
     assert.equal(contractOf({ ...i, ticksPerMs: 16001 }).reason, CONTRACT_VERSION);
     const v1 = parseLine("I FSK-WL 1.0.0 0123456789ABCDEF 921.30 7 250.00 16000");
     assert.equal(v1.v1, true);

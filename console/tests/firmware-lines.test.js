@@ -13,7 +13,7 @@ describe("firmware-formatted lines", () => {
   it("I: the contract accepts a master and names a sensor-role board", () => {
     const m = parseLine(LINES[0]);
     assert.equal(m.usbProto, 2);
-    assert.equal(m.radioProto, 11);
+    assert.equal(m.radioProto, 12);
     assert.equal(m.devid, "0123ABCD89EF4567");
     assert.equal(m.role, "M");
     assert.equal(m.ticksPerMs, 16000);

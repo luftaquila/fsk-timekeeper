@@ -5,11 +5,11 @@
  * ppm error, crypto (a checksum seal) and USB (a host that parses and acks E
  * lines). Each scenario runs in a new process.
  *
- * Invariants checked: sensor transmissions stay inside their slots and never
- * overlap each other or a beacon; every capture reaches the host exactly once
- * and in order, or is covered by a loss range; stamps are within a few ticks of
- * the truth (interpolated ones after a beacon gap too); checkpoints never claim
- * past an undelivered capture.
+ * Invariants checked: sensor transmissions stay inside slots dealt to them (or
+ * the free slot, before registration) and never overlap each other or a beacon;
+ * every capture reaches the host exactly once and in order, or is covered by a
+ * loss range; stamps are within a few ticks of the truth (interpolated ones
+ * after a beacon gap too); checkpoints never claim past an undelivered capture.
  */
 #include <assert.h>
 #include <stdio.h>
@@ -38,7 +38,7 @@
  * default delay). Standby on the TCXO (radio.cpp) saves some of these waits. */
 #define TCXO_US     5000u
 #define CAD_US      2560u   /* 4 symbols at SF7/BW250 */
-#define TX_SETUP_US 7000u   /* SPI (~1.5 ms at 1 MHz: packet, params) + TCXO + PA ramp */
+#define TX_SETUP_US (TX_SETUP_MS * 1000u) /* SPI (~1.5 ms at 1 MHz: packet, params) + TCXO + PA ramp */
 #define RX_SETUP_US 5500u   /* SPI + TCXO before the receiver listens */
 #define HEADER_US   10400u  /* preamble + header before HEADER_VALID */
 
@@ -97,11 +97,7 @@ static uint64_t local_tick(const node_t *n, uint64_t true_us)
     return n->tick_base + t + (uint64_t)drift;
 }
 
-static uint32_t airtime_us(int len)
-{
-    unsigned sym = 8u + (unsigned)((8 * len + 16 + 27) / 28) * 5u;
-    return sym * 512u + 6272u; /* + (8 + 4.25) preamble symbols */
-}
+static uint32_t airtime_us(int len) { return LORA_TOA_US((unsigned)len); }
 
 static int is_beacon(const tx_t *x) { return SEC_VT_TYPE(x->data[0]) == PKT_TYPE_BEACON; }
 
@@ -244,7 +240,7 @@ int radio_transmit(const uint8_t *data, int len)
     tx_t *x = &air[air_n++];
     x->src = cur->idx;
     x->start_us = cur->now_us + TX_SETUP_US;
-    x->end_us = cur->now_us + airtime_us(len);
+    x->end_us = x->start_us + airtime_us(len);
     x->len = len;
     x->seen = 0;
     memcpy(x->data, data, (size_t)len);
@@ -511,11 +507,14 @@ static void check_slots(uint64_t from_us)
 {
     uint64_t last_beacon_end = 0;
     int have_beacon = 0;
+    beacon_pl_t b;
+    memset(&b, 0, sizeof(b));
     for (unsigned i = 0; i < air_n; i++) {
         const tx_t *x = &air[i];
         if (is_beacon(x)) {
             last_beacon_end = x->end_us;
             have_beacon = 1;
+            memcpy(&b, x->data + SEC_HDR_DL, sizeof(b)); /* the checksum seal leaves it readable */
             continue;
         }
         if (x->start_us < from_us || !have_beacon) { continue; }
@@ -523,10 +522,22 @@ static void check_slots(uint64_t from_us)
         uint64_t off = x->start_us - last_beacon_end;
         assert(off >= SLOT_OFFSET_MS * 1000u);
         uint64_t k = (off - SLOT_OFFSET_MS * 1000u) / (SLOT_LEN_MS * 1000u);
-        assert(k < MAX_NODES);
+        assert(k < SLOT_COUNT);
         uint64_t slot_start = last_beacon_end + (SLOT_OFFSET_MS + k * SLOT_LEN_MS) * 1000u;
         assert(x->start_us - slot_start <= (SLOT_LATE_MS + 1u) * 1000u + TX_SETUP_US);
         assert(x->end_us <= slot_start + SLOT_LEN_MS * 1000u);
+        /* a slot dealt to the sender, or the free one while the sender has no entry */
+        uint32_t id, boot;
+        memcpy(&id, x->data + 8, 4);
+        memcpy(&boot, x->data + 1, 4);
+        int live = 0, rank = -1;
+        for (unsigned e = 0; e < MAX_NODES; e++) {
+            if (b.slot[e].short_id == 0u) { continue; }
+            if (b.slot[e].short_id == node_short_id(id) && b.slot[e].boot_tag == (uint8_t)boot) { rank = live; }
+            live++;
+        }
+        if (k == SLOT_COUNT - 1u) { assert(rank < 0); }
+        else { assert(rank >= 0 && (int)(k % (unsigned)live) == rank); }
         for (unsigned j = 0; j < air_n; j++) {
             if (j == i) { continue; }
             assert(!(air[j].start_us < x->end_us && air[j].end_us > x->start_us)); /* no overlap at all */
@@ -639,6 +650,46 @@ static void steady(void)
     printf("PASS steady (%u records, %u transmissions)\n", n_recs, air_n);
 }
 
+/* Two sensors, single captures 1.5..3 s apart: each goes out in the sensor's next dealt slot.
+ * Slots 0, 2, 4 and 1, 3, 5 leave at most ~600 ms to wait, ~220 ms on average, plus ~90 ms
+ * of CAD, TX setup and airtime. */
+static void latency(void)
+{
+    add_node(1, 0, 0, 0);
+    add_node(0, 0x0D2243B0u, 17, 0);
+    add_node(0, 0x7A1C9F02u, -12, 0);
+    uint32_t seed = 41u;
+    for (int s = 1; s <= 2; s++) {
+        uint64_t t = 12000000u + (uint64_t)s * 333000u;
+        for (;;) {
+            seed = mix(seed + 1u);
+            t += 1500000u + seed % 1500000u;
+            if (t >= 110000000u) { break; }
+            edge_at(s, t);
+        }
+    }
+    run(125000000u, NULL);
+    check_slots(15000000u);
+    uint64_t sum = 0, worst = 0;
+    unsigned n = 0;
+    for (unsigned i = 0; i < n_edges; i++) {
+        const edge_t *e = &edges[i];
+        for (unsigned j = 0; j < n_recs; j++) {
+            const rec_t *r = &recs[j];
+            if (r->kind != 'C' || r->node != nodes[e->node].sender_id || r->seq != e->seq) { continue; }
+            uint64_t d = r->at_us - e->us;
+            sum += d;
+            n++;
+            if (d > worst) { worst = d; }
+        }
+    }
+    assert(n == n_edges);
+    printf("latency: mean %llu ms, worst %llu ms over %u captures\n",
+           (unsigned long long)(sum / n / 1000u), (unsigned long long)(worst / 1000u), n);
+    assert(sum / n < 400000u && worst < 800000u);
+    printf("PASS latency\n");
+}
+
 static void stall_hook(uint64_t us)
 {
     if (us == 20000000u) { host_acks = 0; }
@@ -718,8 +769,8 @@ static void long_gap(void)
 }
 
 /* Sensor 1 reboots. With the same low byte (the beacon's boot tag) it takes its
- * slot back at once and only the ACK check protects it; with a new tag it
- * contends again, in the one slot under its short id when none is free. */
+ * slots back at once and only the ACK check protects it; with a new tag it
+ * announces itself in the free slot, even when the table is full. */
 static int reboot_same_tag;
 
 static void reboot_hook(uint64_t us)
@@ -746,6 +797,7 @@ static void reboot(int same_tag, int sensors)
     random_edges(1, 52000000u, 90000000u, 2000, 4u);
     for (int i = 2; i <= sensors; i++) { random_edges(i, 12000000u, 90000000u, 2000, 9u * (uint32_t)i); }
     run(110000000u, reboot_hook);
+    check_slots(15000000u);
     unsigned interp, lost;
     for (int i = 2; i <= sensors; i++) { check_records(i, 12000000u, TOL_TICKS, &interp, &lost); }
     /* after the reboot every capture of the new boot arrives */
@@ -761,7 +813,7 @@ static void reboot(int same_tag, int sensors)
 }
 
 /* Two sensors whose ids share the low 16 bits: the master registers one and
- * refuses the other, which must not jam the registered one's slot. */
+ * refuses the other, which must not jam the registered one's slots. */
 static void id_collision(void)
 {
     add_node(1, 0, 0, 0);
@@ -860,6 +912,7 @@ int main(int argc, char **argv)
 {
     assert(argc == 2);
     if (!strcmp(argv[1], "steady")) { steady(); }
+    else if (!strcmp(argv[1], "latency")) { latency(); }
     else if (!strcmp(argv[1], "overflow")) { overflow(); }
     else if (!strcmp(argv[1], "sync_gap")) { sync_gap(); }
     else if (!strcmp(argv[1], "long_gap")) { long_gap(); }
