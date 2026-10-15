@@ -217,7 +217,10 @@ static void emit_self(int timebase_ok)
     d.sync_age_ms = timebase_ok ? 0 : UINT16_MAX;
     d.queue_depth = (uint16_t)mq_depth(&g_queue);
     d.queue_overflow = g_queue.overflow;
-    d.err_flags = el_flags();
+    /* Queue pressure is current state; refused-enqueue totals stay in the
+     * overflow counter and X queue_full history after the host drains it. */
+    d.err_flags = (uint16_t)(el_flags() & (uint16_t)~ERR_QUEUE_FULL);
+    if (mq_full(&g_queue)) { d.err_flags |= ERR_QUEUE_FULL; }
     d.recovery = el_radio_recovery();
     d.ver_drop = g_mac.ver_drop;
     d.tx_drop = pu_tx_drop();

@@ -100,7 +100,7 @@ typedef struct {
     uint16_t capture_overflow;
     uint16_t fifo_drop;
     uint16_t queue_depth;
-    uint16_t queue_overflow;
+    uint16_t queue_overflow; /* refused enqueue attempts since boot, including retries */
     uint16_t err_flags;
     uint32_t ver_drop;
     uint32_t tx_drop;

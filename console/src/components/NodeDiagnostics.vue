@@ -4,7 +4,7 @@ import MetricValue from "./MetricValue.vue";
 import { useDeviceStore } from "../stores/device";
 import { fmtNum, fmtPpm, fmtAgeMs } from "../lib/format";
 import { telemetryLinkState } from "../lib/quality";
-import { errorNames } from "../lib/protocol";
+import { errorNames, ERROR_BITS, MASTER_QUEUE_CAPACITY } from "../lib/protocol";
 
 const props = defineProps({ nodeId: { type: String, required: true } });
 const device = useDeviceStore();
@@ -43,7 +43,7 @@ function timingHealth(r) {
   if (r.provisioned !== 1) return { state: "bad", label: "NO KEY SET" };
   if (r.clock_source !== "xtal") return { state: "bad", label: "XTAL FAIL" };
   if (isMaster(r)) {
-    if (r.queue_overflow) return { state: "warn", label: `QUEUE FULL x${r.queue_overflow}`, parts: ["QUEUE FULL", metric(`x${r.queue_overflow}`)] };
+    if (r.queue_depth >= MASTER_QUEUE_CAPACITY) return { state: "warn", label: "QUEUE FULL" };
     return { state: "good", label: r.queue_depth > 0 ? `${r.queue_depth} QUEUED` : "OK",
       parts: r.queue_depth > 0 ? [metric(r.queue_depth, "QUEUED")] : undefined };
   }
@@ -53,7 +53,13 @@ function timingHealth(r) {
 }
 const errors = computed(() => {
   const r = report.value;
-  const items = errorNames(r?.err_flags).map((label) => ({ label, tone: "badge-danger" }));
+  let flags = r?.err_flags;
+  // Older firmware latched this flag even after ACKs drained the queue.
+  if (props.nodeId === "0" && Number.isInteger(r?.queue_depth)) {
+    flags = ((flags ?? 0) & ~ERROR_BITS.QUEUE_FULL) |
+      (r.queue_depth >= MASTER_QUEUE_CAPACITY ? ERROR_BITS.QUEUE_FULL : 0);
+  }
+  const items = errorNames(flags).map((label) => ({ label, tone: "badge-danger" }));
   if (props.nodeId === "0") {
     if (device.identity && !device.contract.ok) items.push({ label: device.contract.label || device.contract.reason, tone: "badge-danger" });
     if (r?.tx_drop > 0) items.push({ label: `USB TX drops: ${r.tx_drop}`, tone: "badge-danger" });

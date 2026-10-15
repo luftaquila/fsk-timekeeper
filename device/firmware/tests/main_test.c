@@ -1,5 +1,6 @@
 #include <assert.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #define main firmware_main
 #include "../src/main.c"
@@ -168,6 +169,64 @@ static void key_settings(void)
     puts("PASS main_key_readback");
 }
 
+static void assert_queue_report(unsigned depth, unsigned overflow, uint16_t other_flags)
+{
+    output[0] = 0;
+    emit_self(0);
+    assert(strncmp(output, "D 0 ", 4) == 0);
+    char copy[sizeof output];
+    strcpy(copy, output);
+    unsigned field = 0;
+    for (char *p = strtok(copy, " \n"); p; p = strtok(NULL, " \n"), field++) {
+        if (field == 20) { assert(strtoul(p, NULL, 10) == depth); }
+        if (field == 21) { assert(strtoul(p, NULL, 10) == overflow); }
+        if (field == 22) {
+            uint16_t flags = (uint16_t)strtoul(p, NULL, 10);
+            assert((flags & ERR_QUEUE_FULL) == (depth == MASTER_EVENT_QUEUE_LEN ? ERR_QUEUE_FULL : 0));
+            assert((flags & (uint16_t)~ERR_QUEUE_FULL) == other_flags);
+        }
+    }
+    assert(field > 22);
+}
+
+static void queue_pressure_report(void)
+{
+    mq_init(&g_queue);
+    console_open = 0;
+    /* No console ACK: the full queue keeps every accepted record. */
+    for (unsigned i = 0; i < MASTER_EVENT_QUEUE_LEN; i++) {
+        assert(mq_push_timebase_end(&g_queue, boot, i));
+    }
+    console_open = 1;
+    assert_queue_report(MASTER_EVENT_QUEUE_LEN, 0, (uint16_t)(el_flags() & (uint16_t)~ERR_QUEUE_FULL));
+    console_open = 0;
+    uint32_t previous = el_count(EL_QUEUE_FULL);
+    for (unsigned i = 0; i < 751; i++) {
+        assert(!mq_push_timebase_end(&g_queue, boot, 99));
+    }
+    assert(g_queue.overflow == 751 && el_count(EL_QUEUE_FULL) == previous + 751);
+    uint16_t other_flags = (uint16_t)(el_flags() & (uint16_t)~ERR_QUEUE_FULL);
+    output[0] = 0;
+    mq_pump(&g_queue, now);
+    assert(!output[0] && mq_depth(&g_queue) == MASTER_EVENT_QUEUE_LEN);
+
+    console_open = 1;
+    assert_queue_report(MASTER_EVENT_QUEUE_LEN, 751, other_flags);
+    unsigned acknowledged = 0;
+    while (mq_depth(&g_queue)) {
+        const mq_item_t *head = &g_queue.item[g_queue.head];
+        assert(mq_ack(&g_queue, head->hseq, head->master_boot_id, head->crc));
+        acknowledged++;
+        assert_queue_report(MASTER_EVENT_QUEUE_LEN - acknowledged, 751, other_flags);
+    }
+    assert(acknowledged == MASTER_EVENT_QUEUE_LEN);
+    assert(el_count(EL_QUEUE_FULL) == previous + 751);
+    output[0] = 0;
+    el_report(now);
+    assert(strstr(output, "X queue_full "));
+    puts("PASS main_queue_pressure_recovers_without_losing_history");
+}
+
 int main(void)
 {
     mq_init(&g_queue);
@@ -205,5 +264,6 @@ int main(void)
     command(PU_CMD_ID);
     assert(!strstr(output, "X fault "));
     puts("PASS main_deferred_boot_fault");
+    queue_pressure_report();
     return 0;
 }

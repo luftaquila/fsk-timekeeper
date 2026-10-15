@@ -3,6 +3,10 @@ import assert from "node:assert/strict";
 import { logCode, logRecord } from "../src/lib/deviceLogFormat";
 
 describe("device log presentation and export", () => {
+  it("identifies cumulative queue retries without presenting them as lost records", () => {
+    assert.equal(logRecord({ kind: "X", code: "queue_full", text: "X queue_full 751" }).line,
+      "Queue Full Deferrals: 751 Since Boot");
+  });
   it("normalizes legacy codes without changing source entries", () => {
     for (const [raw, code] of [["USB wake", "usb_wake"], ["power-on", "power_on"],
       ["tel.format", "tel_format"], ["soft reset, CPU lockup", "soft_reset_cpu_lockup"]]) {

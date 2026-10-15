@@ -56,6 +56,7 @@ function logLine(e, code) {
   if (e.kind === "X") {
     if (ERRORS[code]) return ERRORS[code];
     const count = /^X \S+ (\d+)$/.exec(String(e.text).trim());
+    if (count && code === "queue_full") return `Queue Full Deferrals: ${count[1]} Since Boot`;
     if (count) return `Count: ${count[1]} since boot.`;
     return String(e.text ?? "").replace(/^X \S+\s*/, "") || `${code.replaceAll("_", " ")}.`;
   }
