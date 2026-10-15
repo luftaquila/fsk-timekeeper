@@ -1,7 +1,7 @@
 import { fmtDateTime } from "./format";
 import { RADIO_RECOVERY_REASONS, RADIO_RECOVERY_RESULTS, RADIO_HISTORY_LABELS } from "./protocol";
 
-const TYPES = { X: "Error", boot: "Boot", console: "Console", radio: "Radio" };
+export const LOG_TYPES = { X: "Error", boot: "Boot", console: "Console", radio: "Radio" };
 const FAULTS = RADIO_HISTORY_LABELS;
 const CONSOLE_LINES = {
   unknown_line: "Unrecognized USB line.", tel_format: "Invalid status report.",
@@ -65,6 +65,8 @@ function logLine(e, code) {
 }
 
 function boardId(id) {
+  // Older simulator logs used a non-hex identity and bypassed the short-ID format.
+  if (id === "F4KEF4KE00000001") return "00000001";
   if (!/^[0-9a-f]{16}$/i.test(id ?? "")) return id || "—";
   const low = id.slice(8).toUpperCase();
   const high = id.slice(0, 8).toUpperCase();
@@ -74,6 +76,6 @@ function boardId(id) {
 // One representation for both the table and JSON export, including older entries.
 export function logRecord(entry) {
   const code = logCode(entry.code);
-  return { time: fmtDateTime(entry.at), type: TYPES[entry.kind] ?? entry.kind, code,
+  return { time: fmtDateTime(entry.at), type: LOG_TYPES[entry.kind] ?? entry.kind, code,
     board: boardId(entry.devid), line: logLine(entry, code) };
 }

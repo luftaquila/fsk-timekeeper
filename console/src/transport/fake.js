@@ -27,7 +27,7 @@ function rndBoot() {
 }
 
 export function createFakeTransport({ onLine, onDisconnect }) {
-  const devid = "F4KEF4KE00000001";
+  const devid = "F4AEF4AE00000001";
   let role = "M";
   const proto = { usb: USB_PROTO_VERSION, radio: RADIO_PROTO_VERSION, ticks: 16000 };
   let masterBoot = rndBoot();

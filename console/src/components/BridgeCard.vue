@@ -37,16 +37,16 @@ function disconnect() {
       <button v-else class="btn btn-ghost btn-sm conn-btn disconnect-btn" @click="disconnect">Disconnect</button>
     </div>
     <div class="card-body">
-      <p v-if="!device.supported" class="hint">Web Serial is not supported by this browser.</p>
+      <p v-if="!device.supported" class="hint">Web Serial is not supported by this browser</p>
       <p v-else-if="!device.connected" class="hint">Connect the master over USB</p>
 
       <div v-if="device.connected" class="device-heading">
-        <h4 class="mono">{{ deviceId }}</h4>
+        <h4 class="device-id mono">{{ deviceId }}</h4>
         <NodeAge node-id="0" />
         <div class="device-versions" aria-label="Firmware and Protocol Versions">
           <span v-for="version in versions" :key="version.label" class="version-item">
             <span>{{ version.label }}</span>
-            <span class="mono version-value" :class="{ mismatch: version.mismatch }">{{ version.value }}</span>
+            <span class="version-value" :class="{ mismatch: version.mismatch }">{{ version.value }}</span>
           </span>
         </div>
       </div>
@@ -72,14 +72,13 @@ function disconnect() {
   background: var(--accent-danger);
 }
 .hint {
-  font-size: 0.8rem;
-  color: var(--text-tertiary);
+  font-size: 1rem;
+  color: var(--text-secondary);
 }
 .device-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem; margin-bottom: 1rem; }
-.device-heading h4 { font-size: 0.95rem; margin: 0; }
-.device-versions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 0.35rem 1rem; margin-left: auto; color: var(--text-secondary); font-size: 0.75rem; }
+.device-versions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 0.35rem 1rem; margin-left: auto; color: var(--text-secondary); font-size: 0.875rem; line-height: 1.5; }
 .version-item { display: inline-flex; align-items: baseline; gap: 0.35rem; white-space: nowrap; }
-.version-value { font-size: 0.8rem; font-weight: 600; }
+.version-value { font-weight: 500; }
 .version-value.mismatch { color: var(--accent-danger); }
 .master-details { container: master-layout / inline-size; }
 </style>

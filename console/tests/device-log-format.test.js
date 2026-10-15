@@ -3,6 +3,12 @@ import assert from "node:assert/strict";
 import { logCode, logRecord } from "../src/lib/deviceLogFormat";
 
 describe("device log presentation and export", () => {
+  it("shows current and saved legacy fake board identities in the real board format", () => {
+    for (const devid of ["F4AEF4AE00000001", "F4KEF4KE00000001"]) {
+      assert.equal(logRecord({ kind: "boot", code: "power_on", devid }).board, "00000001");
+    }
+    assert.equal(logRecord({ devid: "unrecognized" }).board, "unrecognized");
+  });
   it("identifies cumulative queue retries without presenting them as lost records", () => {
     assert.equal(logRecord({ kind: "X", code: "queue_full", text: "X queue_full 751" }).line,
       "Queue Full Deferrals: 751 Since Boot");

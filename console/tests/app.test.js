@@ -99,6 +99,8 @@ describe("app under jsdom", () => {
     await waitFor(() => Object.keys(device.telemetry).length >= 3);
     await flushPromises();
     assert.equal(wrapper.find(".master-header h3 .dot").attributes("aria-label"), "Connected");
+    assert.match(device.identity.devid, /^[0-9A-F]{16}$/);
+    assert.equal(wrapper.find(".device-id").text(), "00000001");
     assert.match(wrapper.text(), /v1\.0\.0/);
     assert.ok(wrapper.find(".link-dot.ok").exists());
 

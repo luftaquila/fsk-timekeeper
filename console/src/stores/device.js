@@ -7,7 +7,7 @@ import { createSerialTransport, isSerialSupported } from "../transport/serial";
 import { createFakeTransport } from "../transport/fake";
 import { parseLine, parseEventLine, normalizeTelemetry, normalizePps, formatAck, isHexKey, isRadioConfig, radioCommand, contractOf, resetNames, errorNames, RADIO_FAULT_MASK, RADIO_HISTORY_LABELS, RADIO_RECOVERY_REASONS, RADIO_RECOVERY_RESULTS, NODE_MASTER } from "../lib/protocol";
 import { createWirelessClock } from "../lib/wireless-clock";
-import { WIRELESS_STATUS_MAX_AGE_MS, UNREADABLE_ALARM_REPEATS, LOG_RETENTION_MS } from "../lib/constants";
+import { WIRELESS_STATUS_MAX_AGE_MS, UNREADABLE_ALARM_REPEATS, LOG_RETENTION_MS, LOG_MAX_ENTRIES } from "../lib/constants";
 import { MASTER_TICKS_PER_MS as TICKS_PER_MS } from "../lib/event-timing";
 import { pipelineHealth as pipelineHealthOf } from "../lib/quality";
 import * as eventLog from "../lib/eventLog";
@@ -17,7 +17,6 @@ import { useTimingStore } from "./timing";
 import { useSettingsStore } from "./settings";
 
 const CONSOLE_LIMIT = 300;
-const LOG_VIEW_LIMIT = 500;
 const PROVISION_TIMEOUT_MS = 3000;
 const GPS_REPORT_MAX_AGE_MS = 3000;
 
@@ -119,13 +118,13 @@ export const useDeviceStore = defineStore("device", () => {
 
   async function log(entry) {
     const row = await deviceLog.addEntry({ at: Date.now(), devid: identity.value?.devid ?? null, masterBootId: masterBootId.value, ...entry, text: redactLine(entry.text) });
-    logEntries.value = [row, ...logEntries.value].slice(0, LOG_VIEW_LIMIT);
+    logEntries.value = [row, ...logEntries.value].slice(0, LOG_MAX_ENTRIES);
     return row;
   }
 
   async function loadLog() {
     const entries = await deviceLog.listEntries();
-    logEntries.value = entries.filter((e) => e.kind !== "state").slice(0, LOG_VIEW_LIMIT);
+    logEntries.value = entries.filter((e) => e.kind !== "state").slice(0, LOG_MAX_ENTRIES);
     const clearedThrough = Math.max(0, ...entries.filter((e) => e.code === "radio_history_clear").map((e) => e.throughSeq ?? 0));
     for (const e of [...entries].reverse()) {
       if (e.radioKey && e.radioSnapshot) radioReports.set(e.radioKey, e.radioSnapshot);

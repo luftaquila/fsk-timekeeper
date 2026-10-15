@@ -86,6 +86,22 @@ async function mapSprint(device, settings) {
 }
 
 describe("pipeline with the fake master", () => {
+  it("keeps older log pages available live and after reload beyond 500 entries", async () => {
+    const { device } = await boot();
+    await device.clearLog();
+    for (let i = 1; i <= 510; i++) await device.handleLine(`X queue_full ${i}`);
+    await waitFor(() => device.logEntries.length === 510);
+    assert.equal(device.logEntries.length, 510);
+    assert.equal(device.logEntries[0].text, "X queue_full 510");
+    assert.equal(device.logEntries.at(-1).text, "X queue_full 1");
+    device.logEntries = [];
+    await device.loadLog();
+    assert.equal(device.logEntries.length, 510);
+    assert.equal(device.logEntries.at(-1).text, "X queue_full 1");
+    assert.ok(device.logEntries.every((e) => e.kind === "X"));
+    await device.clearLog();
+  });
+
   it("expires PPS by new edge arrival, ignoring zero/replayed ticks across reconnects", async () => {
     const { device } = await boot();
     const identity = "I FSK-WL 5 1.0.0 0123456789ABCDEF M 14 922900 7 250.00 16000 0 12 1";
