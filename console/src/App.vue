@@ -3,6 +3,7 @@ import { onMounted, ref } from "vue";
 import ThemeToggle from "./components/ThemeToggle.vue";
 import NavTabs from "./components/NavTabs.vue";
 import QualityAlert from "./components/QualityAlert.vue";
+import MasterConnectionLight from "./components/MasterConnectionLight.vue";
 import { useTimingStore } from "./stores/timing";
 import { useHistoryStore } from "./stores/history";
 import { useDeviceStore } from "./stores/device";
@@ -43,7 +44,7 @@ onMounted(async () => {
         </router-link>
         <NavTabs />
         <div class="header-actions">
-          <span class="link-dot" :class="device.connected ? 'ok' : 'bad'" :title="device.connected ? 'Master connected' : 'Master disconnected'"></span>
+          <MasterConnectionLight class="link-dot" />
           <ThemeToggle />
         </div>
       </div>
@@ -81,18 +82,7 @@ onMounted(async () => {
 
 <style scoped>
 .link-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  display: inline-block;
   margin-right: 0.25rem;
-}
-.link-dot.ok {
-  background: var(--accent-success);
-  box-shadow: 0 0 6px var(--accent-success);
-}
-.link-dot.bad {
-  background: var(--accent-danger);
 }
 .banner {
   max-width: 1400px;

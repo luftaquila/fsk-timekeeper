@@ -80,7 +80,7 @@ int mq_ack(mq_t *q, uint32_t hseq, uint64_t master_boot_id, uint32_t crc)
 
 void mq_pump(mq_t *q, uint32_t now_ms)
 {
-    if (!q->count) { return; }
+    if (!q->count || !usb_console_ready()) { return; }
     mq_item_t *h = &q->item[q->head];
     if (h->emitted && (uint32_t)(now_ms - h->last_emit_ms) < MASTER_USB_RETRY_MS) { return; }
     if (usb_write(h->line)) {

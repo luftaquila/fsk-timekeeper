@@ -28,17 +28,33 @@ static radio_cfg_t s_cfg = RADIO_CFG_DEFAULT;
  * RX re-arms keep their existing SPI failure threshold. */
 static bool s_init_pending;
 static bool s_configured;
+/* The wire has one RX bit, but starting RX and reading a packet recover
+ * independently. Neither success is evidence that the other path recovered. */
+static unsigned s_rx_faults;
+enum { RX_START_FAULT = 1u, RX_READ_FAULT = 2u };
+static void rx_result(unsigned source, bool ok)
+{
+    if (!ok) {
+        s_rx_faults |= source;
+        el_note(EL_RX_FAIL);
+    } else {
+        s_rx_faults &= ~source;
+        if (!s_rx_faults) { el_radio_clear(EL_RX_FAIL); }
+    }
+}
 
 /* Count SPI no-responses (BUSY stuck, SPIM hung, a status byte nobody drove);
  * any answered command clears the streak. */
 static int16_t track(int16_t state)
 {
     bool spim_hung = hal.takeSpiTimeout();
+    if (spim_hung) { state = RADIOLIB_ERR_SPI_CMD_TIMEOUT; }
     if (spim_hung || state == RADIOLIB_ERR_SPI_CMD_TIMEOUT || state == RADIOLIB_ERR_CHIP_NOT_FOUND) {
         s_noresp++;
         el_note(EL_SPI_TIMEOUT);
     } else {
         s_noresp = 0;
+        if (state == RADIOLIB_ERR_NONE) { el_radio_clear(EL_SPI_TIMEOUT); }
     }
     return state;
 }
@@ -80,15 +96,66 @@ static bool radio_answers(void)
     }
 }
 
-/* Keep the TCXO running in standby, and fall back to that standby after RX and
- * TX: RX and CAD then start without the 5 ms TCXO wait. */
-static int16_t standby_on_tcxo(void)
+/* Read errors even when an initialization command failed, before the next
+ * reset loses the oscillator/calibration evidence. A failed read is not zero. */
+static int16_t check_device_errors(void)
+{
+    uint8_t bytes[2] = { 0 };
+    int16_t state = mod.SPIreadStream(RADIOLIB_SX126X_CMD_GET_DEVICE_ERRORS, bytes, sizeof(bytes));
+    if (hal.takeSpiTimeout()) { return RADIOLIB_ERR_SPI_CMD_TIMEOUT; }
+    if (state != RADIOLIB_ERR_NONE) { return state; }
+    const uint16_t errors = (uint16_t)((uint16_t)bytes[0] << 8 | bytes[1]);
+    const uint16_t clock_errors = RADIOLIB_SX126X_XOSC_START_ERR | RADIOLIB_SX126X_PLL_LOCK_ERR;
+    if (errors & clock_errors) { el_note(EL_RADIO_CLOCK); }
+    if (errors & ~clock_errors) { el_note(EL_RADIO_INIT); }
+    return errors ? RADIOLIB_ERR_SPI_CMD_FAILED : RADIOLIB_ERR_NONE;
+}
+
+/* Verify the actual oscillator/mode, not just command acceptance. RadioLib's
+ * getStatus() reads zero data bytes, so read the status byte directly. Only
+ * bring-up uses this check; normal RX re-arms retain their timing budget. */
+static int16_t verify_radio_mode(uint8_t expected)
+{
+    uint32_t t0 = board_millis();
+    while (gpio_read(PIN_LORA_BUSY)) {
+        if ((uint32_t)(board_millis() - t0) >= RADIO_SPI_TIMEOUT_MS) {
+            return RADIOLIB_ERR_SPI_CMD_TIMEOUT;
+        }
+    }
+    uint8_t out[2] = { RADIOLIB_SX126X_CMD_GET_STATUS, 0 }, in[2] = { 0 };
+    gpio_clear(PIN_LORA_NSS);
+    hal.spiTransfer(out, sizeof(out), in);
+    gpio_set(PIN_LORA_NSS);
+    if (hal.takeSpiTimeout()) { return RADIOLIB_ERR_SPI_CMD_TIMEOUT; }
+    if (in[1] == 0 || in[1] == 0xFF) { return RADIOLIB_ERR_CHIP_NOT_FOUND; }
+    int16_t state = check_device_errors();
+    if (state != RADIOLIB_ERR_NONE) { return state; }
+    const uint8_t command = in[1] & 0x0Eu;
+    if (command == RADIOLIB_SX126X_STATUS_CMD_TIMEOUT) { return RADIOLIB_ERR_SPI_CMD_TIMEOUT; }
+    if (command == RADIOLIB_SX126X_STATUS_CMD_INVALID || command == RADIOLIB_SX126X_STATUS_CMD_FAILED) {
+        return RADIOLIB_ERR_SPI_CMD_FAILED;
+    }
+    if ((in[1] & 0x70u) != expected) {
+        el_note(EL_RADIO_INIT);
+        return RADIOLIB_ERR_SPI_CMD_FAILED;
+    }
+    return RADIOLIB_ERR_NONE;
+}
+
+/* Keep the crystal oscillator running in standby and after RX/TX, avoiding
+ * another oscillator startup before the next RX or CAD. */
+static int16_t standby_on_xosc(void)
 {
     radio.standbyXOSC = true;
     const uint8_t fallback = RADIOLIB_SX126X_RX_TX_FALLBACK_MODE_STDBY_XOSC;
     int16_t state = mod.SPIwriteStream(RADIOLIB_SX126X_CMD_SET_RX_TX_FALLBACK_MODE, &fallback, 1);
     if (state == RADIOLIB_ERR_NONE) {
         state = radio.standby();
+    }
+    if (state == RADIOLIB_ERR_NONE) {
+        state = verify_radio_mode(RADIOLIB_SX126X_STATUS_MODE_STDBY_XOSC);
+    } else {
+        (void)check_device_errors();
     }
     return state;
 }
@@ -114,22 +181,25 @@ extern "C" int radio_begin(void)
         if (!radio_answers()) {
             continue;
         }
-        /* begin() runs on the RC standby (the TCXO answers to DIO3 only once begin() has
-         * configured it) and makes DIO2 drive the RF switch: the Ra-01SH ties TXEN to DIO2
-         * and leaves RXEN open, so neither pin is wired. */
+        /* Begin in RC standby, explicitly using the Ra-01SH's passive crystal.
+         * RadioLib also enables the module's internal DIO2 RF switch control. */
         radio.standbyXOSC = false;
         state = radio.begin(s_cfg.freq_khz / 1000.0f, LORA_BW_KHZ, LORA_SF, LORA_CR,
                             LORA_SYNCWORD, s_cfg.power_dbm, LORA_PREAMBLE,
                             LORA_TCXO_V, false);
         if (state == RADIOLIB_ERR_NONE) {
-            state = standby_on_tcxo();
+            state = standby_on_xosc();
+        } else {
+            (void)check_device_errors();
         }
+        state = track(state);
         if (state == RADIOLIB_ERR_NONE) {
             break;
         }
     }
     (void)hal.takeSpiTimeout();
     if (state != RADIOLIB_ERR_NONE) {
+        el_note(EL_RADIO_INIT);
         return state;
     }
     s_noresp = 0;
@@ -143,23 +213,39 @@ extern "C" int radio_transmit(const uint8_t *data, int len)
     hal.restartHangCheck();
     int16_t state = track(radio.transmit(data, (size_t)len));
     if (state != RADIOLIB_ERR_NONE) { el_note(EL_TX_FAIL); }
+    else { el_radio_clear(EL_TX_FAIL); }
     return state;
 }
 
 extern "C" int radio_start_rx(void)
 {
     hal.restartHangCheck();
-    int16_t state = track(radio.startReceive(RADIOLIB_SX126X_RX_TIMEOUT_INF, RX_IRQ_FLAGS,
-                                             RADIOLIB_IRQ_RX_DEFAULT_MASK, 0));
-    if (state != RADIOLIB_ERR_NONE) { el_note(EL_RX_FAIL); }
-    else if (s_configured) { s_init_pending = false; }
+    int16_t state = radio.startReceive(RADIOLIB_SX126X_RX_TIMEOUT_INF, RX_IRQ_FLAGS,
+                                       RADIOLIB_IRQ_RX_DEFAULT_MASK, 0);
+    if (s_init_pending && s_configured) {
+        if (state == RADIOLIB_ERR_NONE) {
+            state = verify_radio_mode(RADIOLIB_SX126X_STATUS_MODE_RX);
+        } else {
+            (void)check_device_errors();
+        }
+    }
+    state = track(state);
+    if (state != RADIOLIB_ERR_NONE) { rx_result(RX_START_FAULT, false); }
+    else if (s_configured) {
+        rx_result(RX_START_FAULT, true);
+        if (s_init_pending) {
+            el_radio_clear(EL_RADIO_CLOCK);
+            el_radio_clear(EL_RADIO_INIT);
+        }
+        s_init_pending = false;
+    }
     return state;
 }
 
 extern "C" int radio_standby(void)
 {
     hal.restartHangCheck();
-    return track(radio.standby(RADIOLIB_SX126X_STANDBY_RC)); /* parked: the TCXO stops too */
+    return track(radio.standby(RADIOLIB_SX126X_STANDBY_RC)); /* parked: XOSC stops too */
 }
 
 extern "C" int radio_receive(uint8_t *buf, int maxlen, float *rssi, float *snr)
@@ -173,7 +259,7 @@ extern "C" int radio_receive(uint8_t *buf, int maxlen, float *rssi, float *snr)
      * whatever its size. */
     if (len == 0) {
         radio_start_rx();
-        el_note(EL_RX_FAIL);
+        rx_result(RX_READ_FAULT, false);
         return -1;
     }
     if (len > (size_t)maxlen) {
@@ -185,9 +271,10 @@ extern "C" int radio_receive(uint8_t *buf, int maxlen, float *rssi, float *snr)
     if (snr)  { *snr = radio.getSNR(); }
     radio_start_rx();
     if (state != RADIOLIB_ERR_NONE) {
-        el_note(EL_RX_FAIL);
+        rx_result(RX_READ_FAULT, false);
         return -1;
     }
+    rx_result(RX_READ_FAULT, true);
     return (int)len;
 }
 
@@ -244,6 +331,7 @@ extern "C" int radio_cad(void)
         return RADIO_CAD_ERROR;
     }
     s_cad_fail = 0;
+    el_radio_clear(EL_CAD_TIMEOUT);
     if (result == RADIOLIB_LORA_DETECTED) {
         radio_start_rx();
         return 1;

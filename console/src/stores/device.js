@@ -5,9 +5,9 @@ import { ref, reactive, computed } from "vue";
 import { useNotification } from "../composables/useNotification";
 import { createSerialTransport, isSerialSupported } from "../transport/serial";
 import { createFakeTransport } from "../transport/fake";
-import { parseLine, parseEventLine, normalizeTelemetry, normalizePps, formatAck, isHexKey, isRadioConfig, radioCommand, contractOf, resetNames, NODE_MASTER } from "../lib/protocol";
+import { parseLine, parseEventLine, normalizeTelemetry, normalizePps, formatAck, isHexKey, isRadioConfig, radioCommand, contractOf, resetNames, errorNames, RADIO_FAULT_MASK, RADIO_HISTORY_LABELS, RADIO_RECOVERY_REASONS, RADIO_RECOVERY_RESULTS, NODE_MASTER } from "../lib/protocol";
 import { createWirelessClock } from "../lib/wireless-clock";
-import { WIRELESS_STATUS_MAX_AGE_MS, UNREADABLE_ALARM_REPEATS } from "../lib/constants";
+import { WIRELESS_STATUS_MAX_AGE_MS, UNREADABLE_ALARM_REPEATS, LOG_RETENTION_MS } from "../lib/constants";
 import { MASTER_TICKS_PER_MS as TICKS_PER_MS } from "../lib/event-timing";
 import { pipelineHealth as pipelineHealthOf } from "../lib/quality";
 import * as eventLog from "../lib/eventLog";
@@ -27,6 +27,9 @@ export const useDeviceStore = defineStore("device", () => {
   const connecting = ref(false);
   const transportKind = ref(null); // "serial" | "fake"
   const identity = ref(null); // parsed I line
+  const radioKey = ref(null); // memory only: null = unread, "" = unprovisioned
+  const keyReadState = ref("idle");
+  let keyReadTimer = null;
   const contract = ref(contractOf(null)); // { ok, reason }
   const identityOk = computed(() => contract.value.ok);
   const lastLineAt = ref(0);
@@ -49,6 +52,9 @@ export const useDeviceStore = defineStore("device", () => {
   const quarantine = ref(null); // latest quarantined line: { count, reason, node, at }
   const verDrop = ref(null); // { count, at } once D 0 ver_drop rose
   const head = ref(null); // { hseq, firstSeenAt, lastSeenAt } of the latest E line
+  const radioHistory = new Map(); // cumulative checkpoint snapshots, keyed by sensor boot
+  let radioLogChain = Promise.resolve();
+  const radioReports = new Map(); // latest snapshot per board, restored from the device log
   const logEntries = ref([]); // device log, newest first
 
   let transport = null;
@@ -85,7 +91,14 @@ export const useDeviceStore = defineStore("device", () => {
     return hb.wallMs + Number(BigInt(tick) - hb.tick) / Number(TICKS_PER_MS);
   }
 
+  function redactLine(text) {
+    const line = String(text);
+    if (/^K(?:\s|$)/.test(line.trim())) return "K ****";
+    return line.replace(/\b[0-9a-f]{64}\b/gi, "****");
+  }
+
   function pushConsole(dir, text) {
+    text = redactLine(text);
     const arr = consoleLines.value;
     arr.push({ t: Date.now(), dir, text });
     if (arr.length > CONSOLE_LIMIT) arr.splice(0, arr.length - CONSOLE_LIMIT);
@@ -97,28 +110,47 @@ export const useDeviceStore = defineStore("device", () => {
     return transport.write(line);
   }
 
-  function drop(reason) {
+  function drop(reason, raw = null) {
     dropped.count++;
     dropped.reasons[reason] = (dropped.reasons[reason] || 0) + 1;
+    if (raw != null) return log({ kind: "console", code: reason, text: raw });
   }
 
   async function log(entry) {
-    const row = await deviceLog.addEntry({ at: Date.now(), devid: identity.value?.devid ?? null, masterBootId: masterBootId.value, ...entry });
+    const row = await deviceLog.addEntry({ at: Date.now(), devid: identity.value?.devid ?? null, masterBootId: masterBootId.value, ...entry, text: redactLine(entry.text) });
     logEntries.value = [row, ...logEntries.value].slice(0, LOG_VIEW_LIMIT);
     return row;
   }
 
   async function loadLog() {
-    logEntries.value = (await deviceLog.listEntries()).slice(0, LOG_VIEW_LIMIT);
+    const entries = await deviceLog.listEntries();
+    logEntries.value = entries.filter((e) => e.kind !== "state").slice(0, LOG_VIEW_LIMIT);
+    const clearedThrough = Math.max(0, ...entries.filter((e) => e.code === "radio_history_clear").map((e) => e.throughSeq ?? 0));
+    for (const e of [...entries].reverse()) {
+      if (e.radioKey && e.radioSnapshot) radioReports.set(e.radioKey, e.radioSnapshot);
+      if (e.historyKey && e.historySnapshot) radioHistory.set(e.historyKey, e.historySnapshot);
+    }
+    // Evidence is committed before ACK. Rebuild a missing display log if the
+    // browser stopped between evidence storage and device-log creation.
+    for (const row of eventLog.since(0)) {
+      if (row.radio_history && row.seq > clearedThrough && row.received_at >= Date.now() - LOG_RETENTION_MS) {
+        await logCheckpointHistory(row, row.received_at);
+      }
+    }
   }
 
   async function clearLog() {
     await deviceLog.clearEntries();
+    // An intentional Clear must not be undone by the crash-recovery replay.
+    await deviceLog.addEntry({ kind: "state", code: "radio_history_clear", at: Date.now(),
+      throughSeq: eventLog.getLastSeq(), text: "" });
     logEntries.value = [];
+    radioHistory.clear();
+    radioReports.clear();
   }
 
   async function exportLog() {
-    return deviceLog.listEntries();
+    return (await deviceLog.listEntries()).filter((e) => e.kind !== "state");
   }
 
   function raiseAlarm(key, text) {
@@ -170,6 +202,11 @@ export const useDeviceStore = defineStore("device", () => {
       return;
     }
     switch (msg.type) {
+      case "K":
+        if (keyReadState.value === "loading") {
+          finishKeyRead(msg.key === null ? "invalid" : msg.key ? "ready" : "empty", msg.key);
+        }
+        break;
       case "I":
         onIdentity(msg, String(raw).trim());
         break;
@@ -177,7 +214,7 @@ export const useDeviceStore = defineStore("device", () => {
         if (/^\d+$/.test(msg.nowTick || "")) heartbeat.value = { tick: BigInt(msg.nowTick), wallMs: now, uptimeMs: msg.uptimeMs, beaconSeq: msg.beaconSeq, nseen: msg.nseen };
         break;
       case "D":
-        onTelemetry(msg.telemetry, now);
+        await onTelemetry(msg.telemetry, now, raw);
         break;
       case "E":
         await handleEventLine(msg.raw, now);
@@ -188,7 +225,7 @@ export const useDeviceStore = defineStore("device", () => {
         setMasterBoot(msg.masterBootId);
         break;
       case "P":
-        onPps(msg.pps, now);
+        await onPps(msg.pps, now, raw);
         break;
       case "A":
         if (msg.cmd === provisionPending?.cmd) resolveProvision("ok");
@@ -197,7 +234,7 @@ export const useDeviceStore = defineStore("device", () => {
         onErrorLine(msg, now);
         break;
       default:
-        drop("unknown_line");
+        await drop("unknown_line", raw);
     }
   }
 
@@ -214,20 +251,78 @@ export const useDeviceStore = defineStore("device", () => {
     useTimingStore().onMasterVersion({ usbProto: msg.usbProto, radioProto: msg.radioProto });
   }
 
-  function onTelemetry(raw, now) {
+  async function onTelemetry(raw, now, line) {
     const t = normalizeTelemetry(raw, now);
     if (!t) {
-      drop("tel.format");
-      return;
+      return drop("tel.format", line);
     }
     telemetry[t.node_id] = t;
-    if (t.node_id !== NODE_MASTER) return;
+    const radioLog = radioLogChain = radioLogChain.then(() => logRadioHealth(t, now));
+    if (t.node_id !== NODE_MASTER) return radioLog;
     if (t.provisioned === 1) unprovisioned.value = false;
     if (t.master_boot_id != null) setMasterBoot(t.master_boot_id);
     if (t.ver_drop != null) {
       if (lastVerDrop != null && t.ver_drop > lastVerDrop) verDrop.value = { count: t.ver_drop, at: now };
       lastVerDrop = t.ver_drop;
     }
+    await radioLog;
+  }
+
+  async function logRadioHealth(t, now) {
+    const boot = t.node_id === NODE_MASTER ? t.master_boot_id : t.sensor_boot_id;
+    if (boot == null) return;
+    const board = t.node_id === NODE_MASTER ? identity.value?.devid ?? "unknown" : t.node_id;
+    const key = `${board}:${boot}`;
+    const prior = radioReports.get(key);
+    const previous = prior?.boot === boot ? prior : null;
+    // Sensor history arrives only in acknowledged checkpoints, never in cached D lines.
+    const recovery = t.node_id === NODE_MASTER ? t.recovery : null;
+    const snapshot = { boot, ...recovery, faults: (t.err_flags ?? 0) & RADIO_FAULT_MASK };
+    radioReports.set(key, snapshot); // set before the first await: repeated D lines cannot duplicate it
+    if (radioReports.size > 512) radioReports.delete(radioReports.keys().next().value);
+    const entry = { kind: "radio", at: now, devid: t.node_id === NODE_MASTER ? identity.value?.devid : t.node_id,
+      masterBootId: t.master_boot_id, nodeId: t.node_id, nodeBootId: boot, radioKey: key, radioSnapshot: snapshot };
+    const label = t.node_id === NODE_MASTER ? "Master" : `Sensor ${t.node_id}`;
+    if (snapshot.count > 0 && (!previous || ["count", "failures", "reason", "result"].some((k) => snapshot[k] !== previous[k]))) {
+      await log({ ...entry, code: "radio_recovery", text: `${label}: radio reinitializations ${snapshot.count}${snapshot.count === 65535 ? "+" : ""}, failed ${snapshot.failures}${snapshot.failures === 65535 ? "+" : ""}; latest reason: ${RADIO_RECOVERY_REASONS[snapshot.reason]}; latest result: ${RADIO_RECOVERY_RESULTS[snapshot.result]}.` });
+    }
+    const raised = snapshot.faults & ~(previous?.faults ?? 0);
+    const cleared = (previous?.faults ?? 0) & ~snapshot.faults;
+    if (raised) await log({ ...entry, code: "radio_fault", text: `${label}: ${errorNames(raised).join(", ")}.` });
+    if (cleared) await log({ ...entry, code: "radio_restored", text: `${label}: cleared ${errorNames(cleared).join(", ")}.` });
+  }
+
+  async function logCheckpointHistory(row, now) {
+    const historyKey = `${row.node_id}:${row.sensor_boot_id}`;
+    const historySnapshot = { ...row.radio_history, evSeq: row.ev_seq };
+    const prior = radioHistory.get(historyKey);
+    if (prior) {
+      // Replayed checkpoints (including another master session) cannot roll a
+      // per-boot cumulative total backwards. Equal totals are harmless.
+      if (historySnapshot.faults.some((v, i) => v < prior.faults[i]) ||
+          historySnapshot.recovery.count < prior.recovery.count ||
+          historySnapshot.recovery.failures < prior.recovery.failures) return;
+      const distance = (row.ev_seq - prior.evSeq + 65535) % 65535;
+      const increased = historySnapshot.faults.some((v, i) => v > prior.faults[i]) ||
+        historySnapshot.recovery.count > prior.recovery.count || historySnapshot.recovery.failures > prior.recovery.failures;
+      if (distance > 32767 && !increased) return;
+    }
+    const changes = [];
+    const total = (n) => `${n}${n === 65535 ? "+" : ""}`;
+    for (let i = 0; i < historySnapshot.faults.length; i++) {
+      const n = historySnapshot.faults[i];
+      if (n > (prior?.faults[i] ?? 0)) changes.push(`${RADIO_HISTORY_LABELS[i]}: ${total(n)} since boot`);
+    }
+    const r = historySnapshot.recovery;
+    if (r.count && (!prior || ["count", "failures", "reason", "result"].some((k) => r[k] !== prior.recovery[k]))) {
+      changes.push(`radio reinitializations: ${total(r.count)}, failed: ${total(r.failures)}; latest reason: ${RADIO_RECOVERY_REASONS[r.reason]}; latest result: ${RADIO_RECOVERY_RESULTS[r.result]}`);
+    }
+    if (changes.length) {
+      await log({ kind: "radio", code: "radio_history", at: now, devid: row.node_id,
+        nodeId: row.node_id, nodeBootId: row.sensor_boot_id, masterBootId: row.master_boot_id,
+        historyKey, historySnapshot, text: `Sensor ${row.node_id}: ${changes.join("; ")}. Reported at this time; event times are unavailable.` });
+    }
+    radioHistory.set(historyKey, historySnapshot);
   }
 
   function setMasterBoot(id) {
@@ -250,11 +345,10 @@ export const useDeviceStore = defineStore("device", () => {
     ppsEdges.value = [...merged.values()].sort((a, b) => (BigInt(a.tick) < BigInt(b.tick) ? -1 : 1));
   }
 
-  function onPps(raw, now) {
+  function onPps(raw, now, line) {
     const p = normalizePps(raw, now);
     if (!p) {
-      drop("pps");
-      return;
+      return drop("pps", line);
     }
     pps.value = p;
     const bootId = masterBootId.value;
@@ -268,6 +362,10 @@ export const useDeviceStore = defineStore("device", () => {
   }
 
   function onErrorLine(msg, now) {
+    if (msg.reason === "badcmd" && keyReadState.value === "loading") {
+      finishKeyRead("unsupported");
+      return;
+    }
     lastError.value = { reason: msg.reason, at: now };
     if (msg.reason === "noprov") {
       if (!unprovisioned.value) log({ kind: "X", code: msg.reason, text: msg.text });
@@ -287,7 +385,8 @@ export const useDeviceStore = defineStore("device", () => {
   function noteUnreadable(key, raw, reason) {
     const n = (repeats.get(key) || 0) + 1;
     repeats.set(key, n);
-    drop(reason);
+    // Preserve the first rejection even if it never repeats enough to raise an alarm.
+    drop(reason, n === 1 ? raw : null);
     if (n === UNREADABLE_ALARM_REPEATS) {
       raiseAlarm(`unreadable:${key}`, "The master sent an event the console cannot read.");
       log({ kind: "console", code: "unreadable_event", text: raw });
@@ -321,6 +420,11 @@ export const useDeviceStore = defineStore("device", () => {
         }
         const { duplicate, rows } = await eventLog.ingestLine({ rows: p.rows, masterBootId: p.masterBootId, hseq: p.hseq }, now);
         syncDurability();
+        // Also on duplicate E lines: a previous attempt may have stopped after
+        // the evidence transaction but before the device log was materialized.
+        for (const row of p.rows) {
+          if (row.radio_history) await logCheckpointHistory(row, now);
+        }
         // Only now may the master drop the line from its queue.
         if (await transmitLine(formatAck(p))) stats.acks++;
         if (duplicate) {
@@ -344,6 +448,7 @@ export const useDeviceStore = defineStore("device", () => {
   // One provisioning command to the connected board (any role); resolves "ok", one of fails, or "timeout".
   function provision(cmd, line, shown, fails) {
     if (!transport?.connected) return Promise.reject(new Error("The master is not connected."));
+    if (keyReadState.value === "loading") return Promise.reject(new Error("Wait for the board settings to load."));
     if (provisionPending) return Promise.reject(new Error("A provisioning command is already in progress."));
     return new Promise((resolve) => {
       const timer = setTimeout(() => resolveProvision("timeout"), PROVISION_TIMEOUT_MS);
@@ -356,9 +461,31 @@ export const useDeviceStore = defineStore("device", () => {
   }
 
   // Send the fleet key; resolves "ok" | "keyfail" | "timeout".
-  function provisionKey(hex) {
+  async function provisionKey(hex) {
     if (!isHexKey(hex)) return Promise.reject(new Error("The key must be 64 hex characters."));
-    return provision("K", `K ${hex}`, "K ****", ["keyfail"]);
+    const boardTransport = transport;
+    const result = await provision("K", `K ${hex}`, "K ****", ["keyfail"]);
+    if (result === "ok" && transport === boardTransport) finishKeyRead("ready", hex.toLowerCase());
+    return result;
+  }
+
+  function finishKeyRead(state, key = null) {
+    clearTimeout(keyReadTimer);
+    keyReadTimer = null;
+    radioKey.value = key;
+    keyReadState.value = state;
+  }
+
+  function readRadioKey() {
+    if (!transport?.connected || provisionPending || keyReadState.value === "loading") return;
+    const boardTransport = transport;
+    finishKeyRead("loading");
+    keyReadTimer = setTimeout(() => finishKeyRead("timeout"), PROVISION_TIMEOUT_MS);
+    transmitLine("?KEY").then((sent) => {
+      if (!sent && transport === boardTransport && keyReadState.value === "loading") finishKeyRead("timeout");
+    }).catch(() => {
+      if (transport === boardTransport && keyReadState.value === "loading") finishKeyRead("timeout");
+    });
   }
 
   // "ok" means stored and applied; cfgapply/cfgpending mean stored but not running.
@@ -416,6 +543,7 @@ export const useDeviceStore = defineStore("device", () => {
   }
 
   function resetSession() {
+    finishKeyRead("idle");
     identity.value = null;
     contract.value = contractOf(null);
     heartbeat.value = null;
@@ -464,6 +592,7 @@ export const useDeviceStore = defineStore("device", () => {
       acquireWakeLock();
       transmitLine("?ID");
       transmitLine("?STATUS");
+      readRadioKey();
       notyf.success(kind === "fake" ? "Fake master connected" : "Master connected");
       return true;
     } catch (e) {
@@ -505,6 +634,8 @@ export const useDeviceStore = defineStore("device", () => {
     connecting,
     transportKind,
     identity,
+    radioKey,
+    keyReadState,
     identityOk,
     contract,
     lastLineAt,
@@ -539,6 +670,7 @@ export const useDeviceStore = defineStore("device", () => {
     gpsReport,
     useEdgesOf,
     provisionKey,
+    readRadioKey,
     configureRadio,
     enterBootloader,
     fakeTransport,

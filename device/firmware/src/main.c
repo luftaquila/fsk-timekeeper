@@ -43,8 +43,14 @@ static int role_decide_master(void)
     }
 }
 
-/* `K <64-hex>` on any board: write the fleet key and use it at once. There is no
- * read-back command. */
+/* USB-only readback of the stored fleet key, independent of radio readiness. */
+static void read_key(void)
+{
+    uint8_t key[KEYSTORE_KEY_LEN];
+    pu_emit_key(keystore_load(key) ? key : NULL);
+}
+
+/* `K <64-hex>` on any board: write the fleet key and use it at once. */
 static void provision_key(void)
 {
     if (keystore_write(pu_setkey()) == 0) {
@@ -106,8 +112,14 @@ static int bring_up(int master)
 static int retry_bring_up(retry_t *r, int master, uint32_t now)
 {
     if (!retry_due(r, now)) { return 0; }
-    el_note(EL_RADIO_RESET);
-    if (bring_up(master) == 0) { return 1; }
+    if (!board_hfclk_xtal()) {
+        retry_later(r, now, RADIO_RESET_BACKOFF_MAX_MS);
+        return 0;
+    }
+    el_radio_recovery_begin(RADIO_RECOVERY_BOOT);
+    int ok = bring_up(master) == 0 && radio_start_rx() == 0;
+    el_radio_recovery_end(ok);
+    if (ok) { return 1; }
     retry_later(r, board_millis(), RADIO_RESET_BACKOFF_MAX_MS);
     return 0;
 }
@@ -129,6 +141,7 @@ static void run_sensor(int st)
         while ((c = usb_read_byte()) >= 0) {
             switch (pu_feed(c)) {
             case PU_CMD_SETKEY: provision_key(); break;
+            case PU_CMD_GETKEY: read_key(); break;
             case PU_CMD_RADIO: provision_radio(0, st == 0); break;
             case PU_CMD_ID:
                 pu_emit_identity(node_devid_hi(), node_devid_lo(), 0, fault_reset_reason(), radio_config());
@@ -205,6 +218,7 @@ static void emit_self(int timebase_ok)
     d.queue_depth = (uint16_t)mq_depth(&g_queue);
     d.queue_overflow = g_queue.overflow;
     d.err_flags = el_flags();
+    d.recovery = el_radio_recovery();
     d.ver_drop = g_mac.ver_drop;
     d.tx_drop = pu_tx_drop();
     d.reset_reason = fault_reset_reason();
@@ -233,10 +247,11 @@ static void master_stopped(mp_state_t *power, int radio_up)
     }
 }
 
-/* Identity and the fault that rebooted us, before the radio comes up: a bring-up
- * that hangs must not keep the cause from the host. */
+/* Deliver the boot fault when the console asks for identity, not at enumeration.
+ * Taking the report before a console opens would consume it without delivery. */
 static void master_hello(void)
 {
+    if (!usb_console_ready()) { return; }
     pu_emit_identity(node_devid_hi(), node_devid_lo(), 1, fault_reset_reason(), radio_config());
     uint32_t pc, lr, cfsr;
     const char *cause;
@@ -250,7 +265,7 @@ static void master_command(pu_cmd_t cmd, int st, uint32_t now, uint8_t idle_seq)
     int ready = st == 0 && master_clock_check() && sec_ready() && !radio_needs_reset();
     switch (cmd) {
     case PU_CMD_ID:
-        pu_emit_identity(node_devid_hi(), node_devid_lo(), 1, fault_reset_reason(), radio_config());
+        master_hello();
         pu_emit_ack("ID");
         break;
     case PU_CMD_STATUS:
@@ -267,6 +282,9 @@ static void master_command(pu_cmd_t cmd, int st, uint32_t now, uint8_t idle_seq)
         break;
     case PU_CMD_SETKEY:
         provision_key();
+        break;
+    case PU_CMD_GETKEY:
+        read_key();
         break;
     case PU_CMD_RADIO:
         provision_radio(1, st == 0);
@@ -356,7 +374,6 @@ int main(void)
     usb_init();
 
     int master = role_decide_master();
-    if (master) { master_hello(); }
 
     /* USB may have started HFXO while the role was being resolved: check the
      * clock source only now. */

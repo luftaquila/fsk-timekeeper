@@ -1,9 +1,6 @@
 <script setup>
-import { useSettingsStore } from "../stores/settings";
-import { useTimingStore } from "../stores/timing";
 import BridgeCard from "../components/BridgeCard.vue";
 import MappingCard from "../components/MappingCard.vue";
-import DiagnosticsCard from "../components/DiagnosticsCard.vue";
 import ProvisionCard from "../components/ProvisionCard.vue";
 import RadioCard from "../components/RadioCard.vue";
 import DfuCard from "../components/DfuCard.vue";
@@ -11,40 +8,25 @@ import SerialConsole from "../components/SerialConsole.vue";
 import DeviceLogCard from "../components/DeviceLogCard.vue";
 import SimulatorCard from "../components/SimulatorCard.vue";
 
-const settings = useSettingsStore();
-const timing = useTimingStore();
 const isDev = import.meta.env.DEV;
-
-function digitsOnly(e) {
-  e.target.value = e.target.value.replace(/\D/g, "");
-}
-
-function onDebounce(e) {
-  settings.setDebounceMs(e.target.value);
-  e.target.value = settings.state.debounceMs;
-}
 </script>
 
 <template>
   <div class="settings">
-    <div class="row">
-      <BridgeCard />
-      <div class="card">
-        <div class="card-header"><h3>⏱️ Sensor debounce</h3></div>
-        <div class="card-body">
-          <div class="debounce-row">
-            <input type="text" inputmode="numeric" class="form-input debounce-input" :value="settings.state.debounceMs" :disabled="timing.armed" @input="digitsOnly" @change="onDebounce" />
-            <span class="unit">ms</span>
-          </div>
-        </div>
-      </div>
-    </div>
-
+    <BridgeCard />
     <MappingCard />
-    <DiagnosticsCard />
-    <ProvisionCard />
-    <RadioCard />
-    <DfuCard />
+    <details class="card board-settings">
+      <summary class="card-header settings-toggle">
+        <h3><span class="heading-icon" aria-hidden="true">⚙️</span><span>Device Settings</span></h3>
+        <span class="disclosure" aria-hidden="true">›</span>
+      </summary>
+      <p class="settings-notice">All masters and sensors must use the same radio settings, key, and firmware.</p>
+      <div class="settings-sections">
+        <RadioCard />
+        <ProvisionCard />
+        <DfuCard />
+      </div>
+    </details>
     <DeviceLogCard />
     <SerialConsole />
     <SimulatorCard v-if="isDev" />
@@ -60,27 +42,60 @@ function onDebounce(e) {
   margin: 0 auto;
   width: 100%;
 }
-.row {
-  display: grid;
-  grid-template-columns: 1.4fr 1fr;
-  gap: 1.5rem;
-  align-items: stretch;
+.settings :deep(.card-header h3) { gap: 0.75rem; }
+.settings :deep(.heading-icon) { flex-shrink: 0; }
+.settings-toggle { display: flex; align-items: center; justify-content: space-between; gap: 1rem; cursor: pointer; user-select: none; list-style: none; }
+.settings-toggle::-webkit-details-marker { display: none; }
+.settings-toggle:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: -3px; }
+.board-settings:not([open]) > .settings-toggle { border-bottom: 0; }
+.board-settings[open] .disclosure { transform: rotate(90deg); }
+.settings-notice { padding: 1rem 1.25rem 0; color: var(--text-secondary); font-size: 0.85rem; }
+.settings-sections {
+  padding: 0 1.25rem;
 }
-.debounce-row {
+.settings-sections :deep(.settings-section) {
+  display: grid;
+  grid-template-columns: 165px minmax(0, 1fr);
+  gap: 1.5rem;
+  padding: 1.5rem 0;
+}
+.settings-sections :deep(.settings-section + .settings-section) {
+  border-top: 1px solid var(--border-color);
+}
+.settings-sections :deep(.section-heading h4) {
+  font-size: 0.95rem;
+  margin: 0 0 0.5rem;
+}
+.settings-sections :deep(.section-content) { min-width: 0; }
+.settings-sections :deep(.help) {
+  font-size: 0.85rem;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  padding-left: 1.1rem;
+  margin: 0;
+}
+.settings-sections :deep(.section-actions) {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 0.5rem;
+  margin-top: 1rem;
 }
-.debounce-input {
-  max-width: 120px;
+.settings-sections :deep(.radio-actions) { flex-wrap: nowrap; }
+.settings-sections :deep(.action-result) { min-width: 0; font-size: 0.8rem; font-weight: 600; }
+.settings-sections :deep(.apply-group) {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  margin-left: auto;
+  min-width: 0;
+  max-width: 100%;
 }
-.unit {
-  color: var(--text-tertiary);
-  font-size: 0.9rem;
-}
-@media (max-width: 768px) {
-  .row {
-    grid-template-columns: 1fr;
+@media (max-width: 900px) {
+  .settings-sections :deep(.settings-section) {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 1rem;
   }
 }
 </style>

@@ -20,7 +20,9 @@ extern "C" uint32_t board_millis(void) { now_us += 1u; return (uint32_t)(now_us 
 extern "C" void board_delay_ms(uint32_t ms) { now_us += (uint64_t)ms * 1000u; }
 
 static unsigned notes[EL_COUNT];
-extern "C" void el_note(el_code_t code) { notes[code]++; }
+static uint32_t active_faults;
+extern "C" void el_note(el_code_t code) { notes[code]++; active_faults |= (uint32_t)(1u << code); }
+extern "C" void el_radio_clear(el_code_t code) { active_faults &= (uint32_t)~(1u << code); }
 
 /* ---- fake SX1262 ----------------------------------------------------------- */
 typedef std::vector<uint8_t> frame_t;
@@ -29,6 +31,8 @@ static struct {
     bool answers = true;        /* drives MISO; a dead radio reads 0xFF */
     bool busy = false;          /* BUSY stuck high */
     bool reject_rx = false;     /* an answered SetRx failure, not a SPI timeout */
+    bool stuck_xosc = false, stuck_rx = false, reject_errors = false;
+    uint16_t device_errors = 0, irq_flags = 0;
     uint8_t reg[0x10000];
     uint8_t buf[256];
     uint8_t packet_type = 0;    /* GFSK after reset */
@@ -67,6 +71,10 @@ static void chip_transfer(const uint8_t *out, uint8_t *in, size_t len)
         memset(in, RADIOLIB_SX126X_STATUS_CMD_INVALID, len);
         return;
     }
+    if (chip.reject_errors && out[0] == RADIOLIB_SX126X_CMD_GET_DEVICE_ERRORS) {
+        memset(in, RADIOLIB_SX126X_STATUS_CMD_INVALID, len);
+        return;
+    }
     uint16_t addr = len >= 3 ? (uint16_t)(out[1] << 8 | out[2]) : 0;
     switch (out[0]) {
     case RADIOLIB_SX126X_CMD_READ_REGISTER:
@@ -85,8 +93,10 @@ static void chip_transfer(const uint8_t *out, uint8_t *in, size_t len)
     case RADIOLIB_SX126X_CMD_GET_PACKET_TYPE: if (len > 2) { in[2] = chip.packet_type; } break;
     case RADIOLIB_SX126X_CMD_GET_RSSI_INST: if (len > 2) { in[2] = chip.rssi_raw; } break;
     case RADIOLIB_SX126X_CMD_GET_DEVICE_ERRORS:
+        if (len > 3) { in[2] = chip.device_errors >> 8; in[3] = chip.device_errors & 0xFF; }
+        break;
     case RADIOLIB_SX126X_CMD_GET_IRQ_STATUS:
-        for (size_t i = 2; i < len; i++) { in[i] = 0; }
+        if (len > 3) { in[2] = chip.irq_flags >> 8; in[3] = chip.irq_flags & 0xFF; }
         break;
     case RADIOLIB_SX126X_CMD_GET_RX_BUFFER_STATUS:
         if (len > 3) {
@@ -96,8 +106,11 @@ static void chip_transfer(const uint8_t *out, uint8_t *in, size_t len)
         }
         break;
     case RADIOLIB_SX126X_CMD_SET_STANDBY:
-        chip.mode = out[1] == RADIOLIB_SX126X_STANDBY_XOSC ? RADIOLIB_SX126X_STATUS_MODE_STDBY_XOSC
+        chip.mode = out[1] == RADIOLIB_SX126X_STANDBY_XOSC && !chip.stuck_xosc ? RADIOLIB_SX126X_STATUS_MODE_STDBY_XOSC
                                                           : RADIOLIB_SX126X_STATUS_MODE_STDBY_RC;
+        break;
+    case RADIOLIB_SX126X_CMD_SET_RX:
+        if (!chip.stuck_rx) { chip.mode = RADIOLIB_SX126X_STATUS_MODE_RX; }
         break;
     case RADIOLIB_SX126X_CMD_SET_RX_TX_FALLBACK_MODE: chip.fallback = out[1]; break;
     default: break;
@@ -138,7 +151,8 @@ void NrfHal::spiTransfer(uint8_t *out, size_t len, uint8_t *in)
 }
 void NrfHal::spiEndTransaction(void) {}
 void NrfHal::spiEnd(void) {}
-bool NrfHal::takeSpiTimeout(void) { return false; }
+static bool spim_timed_out;
+bool NrfHal::takeSpiTimeout(void) { bool value = spim_timed_out; spim_timed_out = false; return value; }
 void NrfHal::restartHangCheck(void) {}
 
 /* ---- scenarios ------------------------------------------------------------ */
@@ -172,15 +186,59 @@ int main(int argc, char **argv)
         assert(!radio_answers());
         assert(now_us - t0 <= (RADIO_PROBE_MS + RADIO_SPI_TIMEOUT_MS + 5u) * 1000u);
     } else if (!strcmp(scenario, "begin")) {
-        /* the whole bring-up: probe, begin(), then standby on the TCXO */
+        /* the whole bring-up: probe, begin(), then standby on the crystal oscillator */
         power_on();
         assert(radio_begin() == 0);
+        assert(radio.tcxoVoltage == 0.0f);
+        for (const frame_t &f : chip.frames) {
+            assert(f[0] != RADIOLIB_SX126X_CMD_SET_DIO3_AS_TCXO_CTRL);
+        }
         assert(chip.packet_type == RADIOLIB_SX126X_PACKET_TYPE_LORA);
         assert(chip.fallback == RADIOLIB_SX126X_RX_TX_FALLBACK_MODE_STDBY_XOSC);
         assert(chip.mode == RADIOLIB_SX126X_STATUS_MODE_STDBY_XOSC);
         assert(radio_needs_reset());
         assert(radio_start_rx() == 0);
         assert(!radio_needs_reset());
+    } else if (!strcmp(scenario, "xosc_stuck")) {
+        power_on(); chip.stuck_xosc = true;
+        assert(radio_begin() != 0 && radio_needs_reset());
+        assert(notes[EL_RADIO_INIT] > 0 && (active_faults & (1u << EL_RADIO_INIT)));
+        chip.stuck_xosc = false;
+        assert(radio_begin() == 0);
+        assert(active_faults & (1u << EL_RADIO_INIT)); /* configured alone is not ready */
+        assert(radio_start_rx() == 0 && !radio_needs_reset());
+        assert(!(active_faults & (1u << EL_RADIO_INIT)));
+    } else if (!strcmp(scenario, "rx_stuck")) {
+        power_on(); assert(radio_begin() == 0);
+        chip.stuck_rx = true;
+        assert(radio_start_rx() != 0 && radio_needs_reset());
+        assert(notes[EL_RADIO_INIT] == 1 && notes[EL_RX_FAIL] == 1);
+        chip.stuck_rx = false;
+        assert(radio_begin() == 0 && radio_start_rx() == 0 && !radio_needs_reset());
+    } else if (!strcmp(scenario, "device_errors")) {
+        power_on();
+        for (uint16_t error : { RADIOLIB_SX126X_XOSC_START_ERR, RADIOLIB_SX126X_PLL_LOCK_ERR,
+                                RADIOLIB_SX126X_IMG_CALIB_ERR }) {
+            chip.device_errors = error;
+            assert(radio_begin() != 0 && radio_needs_reset());
+        }
+        assert(notes[EL_RADIO_CLOCK] > 0 && notes[EL_RADIO_INIT] > 0);
+        chip.device_errors = 0;
+        assert(radio_begin() == 0);
+        chip.device_errors = RADIOLIB_SX126X_PLL_LOCK_ERR;
+        assert(radio_start_rx() != 0 && radio_needs_reset());
+        chip.device_errors = 0;
+        assert(radio_begin() == 0);
+        assert(active_faults & (1u << EL_RADIO_CLOCK));
+        assert(radio_start_rx() == 0 && !radio_needs_reset());
+        assert(!(active_faults & ((1u << EL_RADIO_CLOCK) | (1u << EL_RADIO_INIT) | (1u << EL_RX_FAIL))));
+    } else if (!strcmp(scenario, "errors_unreadable")) {
+        power_on(); assert(radio_begin() == 0);
+        chip.reject_errors = true;
+        assert(radio_start_rx() != 0 && radio_needs_reset());
+        assert(radio_begin() != 0 && radio_needs_reset());
+        chip.reject_errors = false;
+        assert(radio_begin() == 0 && radio_start_rx() == 0 && !radio_needs_reset());
     } else if (!strcmp(scenario, "init_recovery")) {
         power_on();
         assert(radio_begin() == 0 && radio_start_rx() == 0);
@@ -254,6 +312,47 @@ int main(int argc, char **argv)
         uint8_t buf[WIRE_MAX];
         assert(radio_receive(buf, sizeof(buf), NULL, NULL) == 60);
         for (int i = 0; i < 60; i++) { assert(buf[i] == (uint8_t)(i * 7)); }
+    } else if (!strcmp(scenario, "fault_recovery")) {
+        power_on(); assert(radio_begin() == 0 && radio_start_rx() == 0);
+        spim_timed_out = true;
+        assert(track(RADIOLIB_ERR_NONE) == RADIOLIB_ERR_SPI_CMD_TIMEOUT);
+        assert(active_faults & (1u << EL_SPI_TIMEOUT));
+        assert(radio_standby() == 0);
+        assert(!(active_faults & (1u << EL_SPI_TIMEOUT)) && notes[EL_SPI_TIMEOUT] == 1);
+        assert(radio_cad() == RADIO_CAD_ERROR);
+        assert(active_faults & (1u << EL_CAD_TIMEOUT));
+        assert(radio_start_rx() == 0);
+        assert(active_faults & (1u << EL_CAD_TIMEOUT)); /* unrelated success */
+        chip.irq_flags = RADIOLIB_SX126X_IRQ_CAD_DONE;
+        set_line(PIN_LORA_DIO1, true);
+        assert(radio_cad() == RADIO_CAD_CLEAR);
+        assert(!(active_faults & (1u << EL_CAD_TIMEOUT)) && notes[EL_CAD_TIMEOUT] == 1);
+        uint8_t tx[8] = {0};
+        set_line(PIN_LORA_DIO1, false);
+        assert(radio_transmit(tx, sizeof tx) != 0);
+        assert(active_faults & (1u << EL_TX_FAIL));
+        assert(radio_start_rx() == 0);
+        assert(active_faults & (1u << EL_TX_FAIL)); /* RX is not proof of TX */
+        set_line(PIN_LORA_DIO1, true);
+        assert(radio_transmit(tx, sizeof tx) == 0);
+        assert(!(active_faults & (1u << EL_TX_FAIL)) && notes[EL_TX_FAIL] == 1);
+    } else if (!strcmp(scenario, "rx_fault_recovery")) {
+        power_on(); assert(radio_begin() == 0 && radio_start_rx() == 0);
+        uint8_t buf[WIRE_MAX];
+        set_line(PIN_LORA_DIO1, true);
+        chip.rx_lengths = { 0 };
+        assert(radio_receive(buf, sizeof buf, NULL, NULL) < 0);
+        assert(active_faults & (1u << EL_RX_FAIL));
+        assert(radio_start_rx() == 0);
+        assert(active_faults & (1u << EL_RX_FAIL)); /* re-arm is not a good packet */
+        chip.rx_lengths = { 12 };
+        chip.reject_rx = true;
+        assert(radio_receive(buf, sizeof buf, NULL, NULL) == 12);
+        assert(active_faults & (1u << EL_RX_FAIL)); /* good packet is not a good re-arm */
+        chip.reject_rx = false;
+        assert(radio_start_rx() == 0);
+        assert(!(active_faults & (1u << EL_RX_FAIL)));
+        assert(notes[EL_RX_FAIL] == 2); /* both past failures remain counted */
     } else if (!strcmp(scenario, "receive_zero_length")) {
         /* the length read fails (0) while the packet is long: never read past maxlen */
         power_on();

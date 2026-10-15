@@ -1,4 +1,4 @@
-/* Master <-> PC USB-CDC line protocol v4 (DESIGN §8). Newline-delimited ASCII,
+/* Master <-> PC USB-CDC line protocol v5 (DESIGN §8). Newline-delimited ASCII,
  * first token = line type. Formatting is dependency-free (newlib-nano has no
  * %f / %llu) so 64-bit ticks survive intact. Node token: "0" = master, sensors
  * = 8 uppercase hex digits. crc = 8 uppercase hex digits of CRC-32/IEEE over the
@@ -12,17 +12,23 @@
  *       <sync_age_ms> <rssi> <snr> <capture_seq> <payload> <crc>
  *       C: <count> <tick_1> .. <tick_count>  (capture_seq + i - 1 at tick_i)
  *       L: <end_seq> <tick> <end_tick>       (node 0: master timebase ended at tick)
- *       K: <tick>                            (through tick the last capture is capture_seq)
+ *       K: <tick> <cad_count> <spi_count> <tx_count> <rx_count> <clock_count> <init_count>
+ *          <recovery_count> <recovery_failures> <recovery_reason> <recovery_result>
+ *          (through tick the last capture is capture_seq; history frozen at creation)
  *     D <node> <OK|STALE|LOST> <skew_ppm> <rx_miss> <beacon_gap> <last_seen_ms> <rssi> <snr>
  *       <lat_ms> <temp_c10> <batt_mv> <sec_drop> <provisioned> <sync_valid> <skew_valid>
  *       <XTAL|RC> <sync_age_ms> <capture_overflow> <fifo_drop> <queue_depth> <queue_overflow>
  *       <err_flags> <ver_drop> <tx_drop> <reset_reason> <sensor_boot_id> <master_boot_id>
+ *       <recovery_count> <recovery_failures> <recovery_reason> <recovery_result>
+ *       D recovery fields describe the master only; sensor D uses four zeroes.
+ *       Sensor history is carried by acknowledged E K lines, not periodic D lines.
  *     T <32-hex token> <tick> <master_boot_id>
  *     P <pps_tick> <utc_s> <ppb> <pps_valid> <fix> <sats> <span_s> <seg> <n>
  *     A <cmd> OK
+ *     K <64-hex|NONE>                   (reply to ?KEY over USB only)
  *     X <reason> | X <code> <count> | X fault <pc> <lr> <cause> <cfsr>
- *   PC -> master (K, R, ?ID and PING are also accepted by sensors):
- *     ?ID | ?STATUS | PING | K <64-hex> | T <32-hex> | CP
+ *   PC -> master (K, R, ?KEY, ?ID and PING are also accepted by sensors):
+ *     ?ID | ?STATUS | ?KEY | PING | K <64-hex> | T <32-hex> | CP
  *     R <freq_khz> <power_dbm> <0|1>   (store/apply; I reports stored target settings)
  *       A R OK: stored and RX started; X cfgfail: storage failed;
  *       I then X cfgapply: stored, radio startup failed; X cfgpending: stored, bring-up pending
@@ -32,6 +38,7 @@
 #define PROTO_USB_H
 
 #include <stdint.h>
+#include "radio_health.h"
 #include "protocol.h"
 #include "radio_cfg.h"
 
@@ -39,7 +46,7 @@
 extern "C" {
 #endif
 
-#define PU_USB_PROTO 4u
+#define PU_USB_PROTO 5u
 
 /* Reset reason byte (I line, D line, sensor diagnostics). 0 = power-on/brown-out. */
 #define RESET_PIN    0x01u
@@ -51,8 +58,8 @@ extern "C" {
 #define RESET_FAULT  0x40u /* the previous boot ended in a fault handler */
 #define RESET_OTHER  0x80u
 
-/* Sticky error bits (errlog.h). */
-#define ERR_RADIO_RESET  0x0001u
+/* Radio faults clear on verified recovery; other bits are sticky (errlog.h). */
+#define ERR_RADIO_RESET  0x0001u /* legacy history bit; v5 does not emit it */
 #define ERR_CAD_TIMEOUT  0x0002u
 #define ERR_SPI_TIMEOUT  0x0004u
 #define ERR_TX_FAIL      0x0008u
@@ -64,6 +71,8 @@ extern "C" {
 #define ERR_USB_DROP     0x0200u
 #define ERR_ACK          0x0400u
 #define ERR_ID_COLLISION 0x0800u
+#define ERR_RADIO_CLOCK  0x1000u /* SX1262 XOSC startup / PLL lock, not MCU HFXO */
+#define ERR_RADIO_INIT   0x2000u /* device calibration / unexpected radio mode */
 
 #define PU_STATE_OK    0
 #define PU_STATE_STALE 1
@@ -98,6 +107,7 @@ typedef struct {
     uint8_t  reset_reason;
     uint64_t sensor_boot_id;
     uint64_t master_boot_id;
+    radio_recovery_diag_t recovery; /* master only; sensor history is in E K */
 } pu_diag_t;
 
 /* Control lines (I, A, X, T) that USB cannot take right now wait in a small
@@ -110,6 +120,8 @@ void pu_emit_clock(const char *token, uint64_t tick, uint64_t master_boot_id);
 void pu_emit_pps(uint64_t pps_tick, uint32_t utc_s, int32_t ppb, int pps_valid, uint8_t fix,
                  uint8_t sats, uint8_t span_s, uint32_t seg, uint32_t n);
 void pu_emit_ack(const char *cmd);
+/* NULL means no valid stored key. Never sent over the radio. */
+void pu_emit_key(const uint8_t *key);
 void pu_emit_err(const char *reason);
 void pu_emit_err_count(const char *code, uint32_t count);
 void pu_emit_fault(uint32_t pc, uint32_t lr, const char *cause, uint32_t cfsr);
@@ -131,6 +143,7 @@ typedef enum {
     PU_CMD_STATUS,
     PU_CMD_PING,
     PU_CMD_SETKEY,    /* K <64-hex> (see pu_setkey) */
+    PU_CMD_GETKEY,    /* ?KEY: read the flash key over USB */
     PU_CMD_RADIO,     /* R <freq_khz> <power_dbm> <0|1>, within radio_cfg_valid() (see pu_radio_cfg) */
     PU_CMD_EVENT_ACK, /* C <hseq> <master_boot_id> <crc> (see pu_ack_*) */
     PU_CMD_CLOCK,     /* T <32-hex> (see pu_clock_token) */

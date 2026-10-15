@@ -17,13 +17,17 @@
 /* ---- fakes -------------------------------------------------------------- */
 static uint32_t now_ms;
 static int usb_ok = 1;
+static int console_open = 1;
+static uint32_t console_epoch;
 static char usb_out[64][PU_LINE_MAX + 8];
 static unsigned usb_n;
 
 uint32_t board_millis(void) { return now_ms; }
+int usb_console_ready(void) { return console_open; }
+uint32_t usb_console_epoch(void) { return console_epoch; }
 int usb_write(const char *s)
 {
-    if (!usb_ok) { return 0; }
+    if (!usb_ok || !console_open) { return 0; }
     assert(usb_n < 64);
     strcpy(usb_out[usb_n++], s);
     return 1;
@@ -280,6 +284,13 @@ static void longest_event_line(void)
     assert(strstr(line, "18446744073709551615"));
     line_crc_ok(line);
     printf("PASS longest_event_line (%d bytes)\n", n);
+    u.kind = UL_KIND_CHECKPOINT;
+    memset(&u.u, 0xff, sizeof u.u);
+    u.u.history.recovery.state = RADIO_RECOVERY_TX | (RADIO_RECOVERY_FAILED << 4);
+    n = pu_format_uplink(line, sizeof line, UINT32_MAX, UINT32_MAX, UINT64_MAX, &u, -127.5f, -32.0f, &crc);
+    assert(n > 0 && (unsigned)n < sizeof line);
+    line_crc_ok(line);
+    printf("PASS longest_checkpoint_line (%d bytes)\n", n);
 }
 
 static void control_retry(void)
@@ -302,6 +313,64 @@ static void control_retry(void)
     pu_service(now_ms);
     assert(usb_n == 1 && el_count(EL_USB_DROP) == drops + 1);
     printf("PASS control_retry\n");
+}
+
+static void console_lifecycle(void)
+{
+    usb_reset();
+    console_open = 0;
+    console_epoch++;
+    uint32_t tx_drop = pu_tx_drop(), drops = el_count(EL_USB_DROP);
+    mq_t q;
+    mq_init(&q);
+    assert(mq_push_timebase_end(&q, 17, 900));
+    el_note(EL_HW_TIMEOUT);
+    pu_diag_t diag = {0};
+    for (now_ms = 0; now_ms < 60000; now_ms += 100) {
+        pu_emit_heartbeat(0, now_ms, 0, 0);
+        pu_emit_diag(&diag);
+        pu_emit_ack("ID");
+        pu_service(now_ms);
+        el_report(now_ms);
+        mq_pump(&q, now_ms);
+    }
+    assert(usb_n == 0 && pu_tx_drop() == tx_drop && el_count(EL_USB_DROP) == drops);
+    assert(mq_depth(&q) == 1 && !q.item[q.head].emitted);
+
+    console_open = 1;
+    console_epoch++;
+    pu_service(now_ms); /* no stale replies from the unopened port */
+    assert(usb_n == 0);
+    el_report(now_ms);
+    int saw_fault = 0;
+    for (unsigned i = 0; i < usb_n; i++) {
+        if (strstr(usb_out[i], "X hw_timeout ")) { saw_fault = 1; }
+    }
+    assert(saw_fault);
+    usb_reset();
+    mq_pump(&q, now_ms);
+    assert(usb_n == 1 && mq_depth(&q) == 1);
+    assert(!strcmp(usb_out[0], q.item[q.head].line));
+
+    /* Close/reopen between service calls must discard the old command fragment
+     * and control reply, while retaining the unacknowledged event. */
+    usb_ok = 0;
+    pu_emit_ack("OLD");
+    pu_feed('K'); pu_feed(' ');
+    console_epoch += 2;
+    usb_ok = 1;
+    usb_reset();
+    pu_service(++now_ms);
+    assert(usb_n == 0 && el_count(EL_USB_DROP) == drops);
+    pu_feed('?'); pu_feed('I'); pu_feed('D');
+    assert(pu_feed('\n') == PU_CMD_ID);
+    pu_emit_ack("ID");
+    assert(usb_n == 1 && !strcmp(usb_out[0], "A ID OK\n"));
+    mq_pump(&q, now_ms + MASTER_USB_RETRY_MS);
+    assert(usb_n == 2 && !strcmp(usb_out[1], q.item[q.head].line));
+    const mq_item_t *h = &q.item[q.head];
+    assert(mq_ack(&q, h->hseq, h->master_boot_id, h->crc) && mq_depth(&q) == 0);
+    puts("PASS console_lifecycle");
 }
 
 /* ---- registry ----------------------------------------------------------- */
@@ -332,6 +401,60 @@ static void registry(void)
     printf("PASS registry\n");
 }
 
+static void radio_health(void)
+{
+    /* Loss of the master alone is a history event, never an active fault. */
+    uint16_t before = el_flags();
+    el_radio_recovery_begin(RADIO_RECOVERY_BEACON_LOSS);
+    assert(el_flags() == before && !(el_flags() & ERR_RADIO_RESET));
+    el_radio_recovery_end(1);
+    radio_recovery_diag_t d = el_radio_recovery();
+    assert(d.count == 1 && d.failures == 0);
+    assert(RADIO_RECOVERY_REASON(d) == RADIO_RECOVERY_BEACON_LOSS && RADIO_RECOVERY_RESULT(d) == RADIO_RECOVERY_OK);
+    el_note(EL_SPI_TIMEOUT);
+    assert(el_radio_recovery_reason() == RADIO_RECOVERY_SPI);
+    el_radio_recovery_begin(el_radio_recovery_reason());
+    el_radio_recovery_end(0);
+    d = el_radio_recovery();
+    assert(d.count == 2 && d.failures == 1 && RADIO_RECOVERY_RESULT(d) == RADIO_RECOVERY_FAILED);
+    assert(el_flags() & ERR_RADIO_INIT);
+    uint32_t count = el_count(EL_SPI_TIMEOUT);
+    el_radio_clear(EL_SPI_TIMEOUT);
+    el_radio_clear(EL_RADIO_INIT);
+    assert(!(el_flags() & (ERR_SPI_TIMEOUT | ERR_RADIO_INIT)));
+    assert(el_count(EL_SPI_TIMEOUT) == count); /* clearing the live fault preserves history */
+    el_note(EL_FIFO_FULL);
+    el_radio_clear(EL_FIFO_FULL);
+    assert(el_flags() & ERR_FIFO_FULL); /* lost evidence cannot be recovered by clearing flags */
+    for (unsigned i = 0; i < 65536; i++) {
+        el_radio_recovery_begin(RADIO_RECOVERY_BOOT);
+        el_radio_recovery_end(0);
+    }
+    d = el_radio_recovery();
+    assert(d.count == UINT16_MAX && d.failures == UINT16_MAX);
+    radio_history_t history = el_radio_history();
+    assert(sizeof(history) == 17 && WIRE_UPLINK == 94 && SLOT_LEN_MS == 110);
+    assert(history.faults[1] == count && history.faults[5] == UINT16_MAX);
+    sensor_queue_t q;
+    sq_init(&q);
+    uplink_pl_t *p = sq_checkpoint(&q, 1, 0, 100, HEALTH_EVENT_REQUIRED, 0);
+    assert(p && !memcmp(&p->u.history, &history, sizeof history));
+    uint16_t seq = p->ev_seq;
+    el_note(EL_SPI_TIMEOUT); el_radio_clear(EL_SPI_TIMEOUT);
+    sq_push_edge(&q, 1, 200, HEALTH_EVENT_REQUIRED, 0);
+    p = sq_packet(&q, 1);
+    assert(p->kind == UL_KIND_CHECKPOINT && p->ev_seq == seq);
+    assert(!memcmp(&p->u.history, &history, sizeof history)); /* retransmission frozen */
+    sq_ack(&q, seq + 1); assert(q.inflight);
+    sq_ack(&q, seq); assert(q.count == 1); /* ACK never consumes the following edge */
+    p = sq_packet(&q, 1); assert(p->kind == UL_KIND_EDGES);
+    assert(sq_checkpoint(&q, 1, 1, 300, HEALTH_EVENT_REQUIRED, 0) == NULL);
+    sq_ack(&q, p->ev_seq);
+    p = sq_checkpoint(&q, 1, 1, 300, HEALTH_EVENT_REQUIRED, 0);
+    assert(p && p->u.history.faults[1] == count + 1); /* cleared transient survives */
+    puts("PASS radio_health: current faults, frozen checkpoint history, saturation");
+}
+
 int main(void)
 {
     fifo_bundles();
@@ -344,5 +467,7 @@ int main(void)
     longest_event_line();
     control_retry();
     registry();
+    console_lifecycle();
+    radio_health();
     return 0;
 }

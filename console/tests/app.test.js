@@ -16,6 +16,7 @@ let App, routes, useDeviceStore, useSettingsStore, useTimingStore, eventLog, fak
 
 beforeAll(async () => {
   // jsdom gaps
+  vi.spyOn(window, "confirm").mockReturnValue(true);
   window.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} });
   console.error = (...a) => {
     errors.push(a.map(String).join(" "));
@@ -37,6 +38,7 @@ beforeAll(async () => {
 });
 
 afterAll(() => {
+  vi.restoreAllMocks();
   console.error = origError;
   console.warn = origWarn;
 });
@@ -69,7 +71,7 @@ describe("app under jsdom", () => {
     const timing = useTimingStore(pinia);
 
     for (const [path, needle] of [
-      ["/settings", /Sensor mapping/],
+      ["/settings", /Debounce/],
       ["/history", /No runs recorded yet/],
       ["/", /Start → Finish/],
     ]) {
@@ -81,22 +83,114 @@ describe("app under jsdom", () => {
     // connect the simulator and check the settings tables fill in
     await router.push("/settings");
     await flushPromises();
+    for (const selector of [".master-header h3 .dot", ".link-dot"]) {
+      assert.ok(wrapper.find(selector).classes().includes("bad"));
+    }
+    device.connecting = true;
+    await flushPromises();
+    for (const selector of [".master-header h3 .dot", ".link-dot"]) {
+      assert.ok(wrapper.find(selector).classes().includes("connecting"));
+      assert.equal(wrapper.find(selector).attributes("aria-label"), "Connecting");
+    }
+    device.connecting = false;
     assert.equal(await device.connect({ kind: "fake" }), true);
-    const fake = device.fakeTransport();
+    let fake = device.fakeTransport();
     await waitFor(() => Object.keys(device.telemetry).length >= 3);
     await flushPromises();
-    assert.match(wrapper.text(), /Connected/);
-    assert.match(wrapper.text(), /FSK-WL 1\.0\.0/);
+    assert.equal(wrapper.find(".master-header h3 .dot").attributes("aria-label"), "Connected");
+    assert.match(wrapper.text(), /v1\.0\.0/);
     assert.ok(wrapper.find(".link-dot.ok").exists());
 
+    // GPS qualification and PPS measurement share the Clock Drift field.
+    const previousPps = device.pps;
+    const ppsReport = { valid: 0, fix: 0, ppb: 0, span: 0, at: Date.now() };
+    const masterStatus = wrapper.find(".master-diagnostics");
+    assert.ok(!masterStatus.findAll("dt").some((label) => label.text() === "GPS"));
+    for (const [pps, expected] of [
+      [null, "NO REPORT"],
+      [ppsReport, "NO GPS"],
+      [{ ...ppsReport, fix: 1 }, "NOT READY"],
+      [{ ...ppsReport, valid: 1, ppb: 1230, span: 8 }, "+1.23 ppm"],
+      [{ ...ppsReport, valid: 1, ppb: -1230, span: 16 }, "−1.23 ppm"],
+      [{ ...ppsReport, valid: 1, span: 8 }, "+0.00 ppm"],
+      [{ ...ppsReport, valid: 1, at: Date.now() - 60000 }, "NO REPORT"],
+    ]) {
+      device.pps = pps;
+      await flushPromises();
+      const field = masterStatus.findAll("dt").find((label) => label.text() === "Clock Drift").element.parentElement;
+      assert.equal(field.querySelector("dd").textContent.trim().replace(/\s+/g, " "), expected);
+    }
+    device.pps = previousPps;
+
     // radio settings: the board answers R with its new I line (not a new boot), then A R OK
-    assert.match(wrapper.text(), /922\.900 MHz · 12 dBm · LBT on/);
+    assert.equal(wrapper.find("details.board-settings").element.open, false);
+    wrapper.find("details.board-settings").element.open = true;
+    assert.equal(wrapper.find(".frequency-current").text(), "922.900 MHz");
+    assert.equal(wrapper.find(".power-current").text(), "12 dBm");
+    assert.equal(wrapper.find(".lbt-current").text(), "On");
+    assert.equal(wrapper.find("input.freq").element.value, "922.900");
+    assert.equal(wrapper.find(".key-input").attributes("maxlength"), "64");
+    assert.doesNotMatch(wrapper.text(), /Load from board|More diagnostics/);
+    assert.equal(wrapper.findAll(".node-diagnostics details").length, 0);
+    assert.ok(wrapper.findAll("h3").some((heading) => heading.text().includes("Sensors")));
+
+    // Repeated reports preserve edits; a fresh connection loads its own saved values.
+    await wrapper.find("input.freq").setValue("900.001");
+    await fake.write("?ID");
+    await flushPromises();
+    assert.equal(wrapper.find("input.freq").element.value, "900.001");
+    await device.disconnect();
+    await flushPromises();
+    assert.equal(wrapper.find("input.freq").element.value, "");
+    assert.equal(await device.connect({ kind: "fake" }), true);
+    fake = device.fakeTransport();
+    await waitFor(() => device.identity && Object.keys(device.telemetry).length >= 3);
+    await flushPromises();
+    assert.equal(wrapper.find("input.freq").element.value, "922.900");
     const boots = device.logEntries.filter((e) => e.kind === "boot").length;
     assert.ok(boots >= 1);
     assert.equal(await device.configureRadio({ freqKhz: 923100, powerDbm: -3, lbt: 0 }), "ok");
     await flushPromises();
-    assert.match(wrapper.text(), /923\.100 MHz · -3 dBm · LBT off/);
+    assert.equal(wrapper.find(".frequency-current").text(), "923.100 MHz");
+    assert.equal(wrapper.find(".power-current").text(), "-3 dBm");
+    assert.equal(wrapper.find(".lbt-current").text(), "Off");
     assert.equal(device.logEntries.filter((e) => e.kind === "boot").length, boots);
+    const applyRadio = wrapper.find('[aria-labelledby="radio-title"] button.send');
+    for (const invalid of ["", "802.999", "930.001", "923.0001", "9e2", "abc"]) {
+      await wrapper.find("input.freq").setValue(invalid);
+      assert.equal(applyRadio.element.disabled, true, invalid);
+    }
+    await wrapper.find("select.lbt").setValue("0");
+    for (const [mhz, dbm, expected] of [
+      ["930", "22", "930.000 MHz"],
+      ["803", "-9", "803.000 MHz"],
+      ["923.101", "-3", "923.101 MHz"],
+    ]) {
+      await wrapper.find("input.freq").setValue(mhz);
+      await wrapper.find("select.power").setValue(dbm);
+      await applyRadio.trigger("click");
+      await waitFor(() => wrapper.find(".frequency-current").text() === expected && applyRadio.text() === "Apply");
+      await flushPromises();
+      assert.equal(wrapper.find(".frequency-current").text(), expected);
+      assert.equal(wrapper.find(".power-current").text(), `${dbm} dBm`);
+      assert.equal(wrapper.find(".lbt-current").text(), "Off");
+      assert.equal(wrapper.find(".config-status").exists(), false);
+      assert.equal(applyRadio.element.disabled, true);
+    }
+    // Default restores firmware values only after confirmation, using the normal apply path.
+    const defaultRadio = wrapper.find('[aria-labelledby="radio-title"] .restore-defaults');
+    const beforeDefault = wrapper.find("input.freq").element.value;
+    vi.mocked(window.confirm).mockReturnValueOnce(false);
+    await defaultRadio.trigger("click");
+    assert.equal(wrapper.find("input.freq").element.value, beforeDefault);
+    assert.equal(wrapper.find(".frequency-current").text(), "923.101 MHz");
+    await defaultRadio.trigger("click");
+    await waitFor(() => wrapper.find(".frequency-current").text() === "922.900 MHz" && applyRadio.text() === "Apply");
+    await flushPromises();
+    assert.equal(wrapper.find(".power-current").text(), "12 dBm");
+    assert.equal(wrapper.find(".lbt-current").text(), "On");
+    assert.equal(wrapper.find('[aria-labelledby="radio-title"] .section-actions .action-result').text(), "Saved");
+    assert.equal(defaultRadio.element.disabled, true);
     // Apply errors still report the stored target, but must never look like success.
     const write = fake.write;
     for (const [code, message] of [
@@ -107,16 +201,16 @@ describe("app under jsdom", () => {
       const spy = vi.spyOn(fake, "write").mockImplementation(async (line) => {
         if (!line.startsWith("R ")) return write(line);
         if (code !== "cfgfail") {
-          await device.handleLine(`I FSK-WL 4 1.0.0 ${device.identity.devid} M 13 923100 7 250.00 16000 0 -3 0`);
+          await device.handleLine(`I FSK-WL 5 ${device.identity.fw} ${device.identity.devid} M 14 923100 7 250.00 16000 0 -3 0`);
         }
         await device.handleLine(`X ${code}`);
         return true;
       });
       try {
         assert.equal(await device.configureRadio({ freqKhz: 923100, powerDbm: -3, lbt: 0 }), code);
-        await wrapper.find("input.freq").setValue("923.100");
-        await wrapper.find("input.power").setValue("-3");
-        const apply = wrapper.findAll("button").find((btn) => btn.text() === "Apply to connected board");
+        await wrapper.find("input.freq").setValue("923.200");
+        await wrapper.find("select.power").setValue("-3");
+        const apply = wrapper.find('[aria-labelledby="radio-title"] button.send');
         await apply.trigger("click");
         await flushPromises();
         assert.match(wrapper.text(), message);
@@ -128,8 +222,25 @@ describe("app under jsdom", () => {
     }
     const [a, b] = [...fake.sensors.keys()];
     assert.ok(wrapper.text().includes(a) && wrapper.text().includes(b), "diagnostics/mapping list the fake sensors");
-    settings.setMapping(a, { role: "start" });
-    settings.setMapping(b, { role: "finish" });
+    for (const [node, role] of [[a, "start"], [b, "finish"]]) {
+      const sensor = wrapper.find(`article[aria-label="Sensor ${node}"]`);
+      assert.match(sensor.text(), /Timing/);
+      assert.match(sensor.text(), /Battery/);
+      await sensor.find("select").setValue(role);
+      assert.equal(settings.mappingOf(node).role, role);
+      assert.equal(sensor.find("button").exists(), false);
+      const note = sensor.find(".sensor-note input");
+      assert.equal(note.attributes("placeholder"), "Note");
+      await note.setValue(`Gate ${node}`);
+      assert.equal(settings.mappingOf(node).note, `Gate ${node}`);
+      await sensor.find("select").setValue("unused");
+      assert.equal(settings.mappingOf(node).role, "unused");
+      assert.equal(settings.mappingOf(node).note, `Gate ${node}`);
+      await sensor.find("select").setValue(role);
+      const stored = JSON.parse(localStorage.getItem("tk.settings.v2")).mapping[node];
+      assert.equal(stored.role, role);
+      assert.equal(stored.note, `Gate ${node}`);
+    }
     await waitFor(() => fake.queueLength === 0 && device.stats.acks >= 2);
 
     // run a sprint from the timing page's own buttons
@@ -153,7 +264,7 @@ describe("app under jsdom", () => {
     fake.crossing(b, { offsetMs: 800 });
     await waitFor(() => timing.live.crossings.length === 2);
     await flushPromises();
-    assert.match(wrapper.text(), /Start sensor/);
+    assert.match(wrapper.text(), /Start Sensor/);
     assert.match(wrapper.text(), /\+00:00\.8\d\d/);
     // Each role has one sensor: the two first crossings decide the sprint on arrival.
     await waitFor(() => timing.run.verification === "verified");
@@ -175,7 +286,7 @@ describe("app under jsdom", () => {
     await wrapper.find("select.mode").setValue("laps");
     await flushPromises();
     assert.equal(timing.run, null);
-    assert.match(wrapper.text(), /Lap times/);
+    assert.match(wrapper.text(), /Lap Times/);
     assert.ok(wrapper.find("input.lap-target").exists(), "auto-stop input");
 
     await device.disconnect();

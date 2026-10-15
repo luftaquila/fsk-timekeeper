@@ -30,31 +30,27 @@ async function enter() {
 </script>
 
 <template>
-  <div class="card">
-    <div class="card-header"><h3>⬆️ Firmware update</h3></div>
-    <div class="card-body">
+  <section class="settings-section" aria-labelledby="firmware-update-title">
+    <div class="section-heading">
+      <h4 id="firmware-update-title">Firmware Update</h4>
+    </div>
+    <div class="section-content">
       <ol class="help">
         <li>Enter bootloader (button below), or double-tap <code>RST</code> on a new board.</li>
         <li>Run <code>flash.bat</code> (Windows) or <code>./flash.sh</code> (Linux / macOS) from the release zip.</li>
       </ol>
-      <button class="btn btn-sm" :class="confirming ? 'btn-danger' : 'btn-warning'" :disabled="!device.connected || busy || timing.armed" @click="enter">
-        {{ busy ? "Resetting…" : confirming ? "Click again to confirm" : "Enter bootloader" }}
-      </button>
-      <span v-if="timing.armed" class="muted">Stop the running measurement first.</span>
+
+      <div class="section-actions">
+        <button class="btn btn-sm" :class="confirming ? 'btn-danger' : 'btn-warning'" :disabled="!device.connected || busy || timing.armed" @click="enter">
+          {{ busy ? "Resetting…" : confirming ? "Click again to confirm" : "Enter Bootloader" }}
+        </button>
+        <span v-if="timing.armed" class="muted">Stop the running measurement first.</span>
+      </div>
     </div>
-  </div>
+  </section>
 </template>
 
 <style scoped>
-.help {
-  font-size: 0.85rem;
-  color: var(--text-secondary);
-  padding-left: 1.1rem;
-  margin-bottom: 1rem;
-}
-.help li {
-  margin-bottom: 0.2rem;
-}
 code {
   font-family: var(--font-mono);
   font-size: 0.8rem;

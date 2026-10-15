@@ -44,17 +44,39 @@ int sec_boot_ready(void) { return boot_ready; }
 int sec_ready(void) { return ready; }
 int sec_provisioned(void) { return 1; }
 void sec_reload(void) {}
-int keystore_write(const uint8_t key[KEYSTORE_KEY_LEN]) { (void)key; return 0; }
+static uint8_t stored_key[KEYSTORE_KEY_LEN];
+static int has_key, key_fail;
+int keystore_load(uint8_t out[KEYSTORE_KEY_LEN]) {
+    if (!has_key) { return 0; }
+    memcpy(out, stored_key, sizeof stored_key);
+    return 1;
+}
+int keystore_write(const uint8_t key[KEYSTORE_KEY_LEN]) {
+    if (key_fail) { return -1; }
+    memcpy(stored_key, key, sizeof stored_key); has_key = 1;
+    return 0;
+}
 void mac_master_session(mac_master_t *m) { (void)m; sessions++; }
 void mac_master_checkpoint(mac_master_t *m) { (void)m; checkpoints++; }
 void mac_master_report(mac_master_t *m, int changed) { (void)m; (void)changed; }
 uint8_t fault_reset_reason(void) { return 0; }
+static int fault_pending;
+int fault_take_report(uint32_t *pc, uint32_t *lr, const char **cause, uint32_t *cfsr)
+{
+    if (!fault_pending) { return 0; }
+    fault_pending = 0;
+    *pc = 123; *lr = 456; *cause = "hard"; *cfsr = 0;
+    return 1;
+}
 uint32_t node_devid_hi(void) { return 1; }
 uint32_t node_devid_lo(void) { return 2; }
 int16_t meas_temp_c10(void) { return 250; }
 uint16_t meas_vddh_mv(void) { return 4000; }
 void gps_report(gps_report_t *r) { memset(r, 0, sizeof *r); }
-int usb_write(const char *line) { assert(strlen(output) + strlen(line) < sizeof output); strcat(output, line); return 1; }
+static int console_open = 1;
+int usb_console_ready(void) { return console_open; }
+uint32_t usb_console_epoch(void) { return 0; }
+int usb_write(const char *line) { if (!console_open) { return 0; } assert(strlen(output) + strlen(line) < sizeof output); strcat(output, line); return 1; }
 
 static void command(pu_cmd_t cmd)
 {
@@ -77,7 +99,7 @@ static void radio_settings(void)
     command(PU_CMD_RADIO);
     assert(cfg_writes == 1 && rx_starts == 1);
     assert(radio_cfg.freq_khz == 922100u && radio_cfg.power_dbm == -3 && radio_cfg.lbt == 0u);
-    assert(strstr(output, " M 13 922100 7 250.00 16000 0 -3 0\n") && strstr(output, "A R OK\n"));
+    assert(strstr(output, " M 14 922100 7 250.00 16000 0 -3 0\n") && strstr(output, "A R OK\n"));
     cfg_fail = 1;
     assert(feed("R 930000 22 1\n") == PU_CMD_RADIO);
     command(PU_CMD_RADIO);
@@ -119,6 +141,33 @@ static void radio_settings(void)
     puts("PASS main_radio_settings");
 }
 
+static void key_settings(void)
+{
+    const char *key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    assert(feed("?KEY\n") == PU_CMD_GETKEY);
+    command(PU_CMD_GETKEY);
+    assert(strcmp(output, "K NONE\n") == 0);
+    char line[68];
+    snprintf(line, sizeof line, "K %s\n", key);
+    assert(feed(line) == PU_CMD_SETKEY);
+    command(PU_CMD_SETKEY);
+    assert(strcmp(output, "A K OK\n") == 0);
+    command(PU_CMD_GETKEY);
+    assert(strlen(output) == 67 && strncmp(output + 2, key, 64) == 0);
+    key_fail = 1;
+    assert(feed("K ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\n") == PU_CMD_SETKEY);
+    command(PU_CMD_SETKEY);
+    assert(strcmp(output, "X keyfail\n") == 0);
+    command(PU_CMD_GETKEY);
+    assert(strncmp(output + 2, key, 64) == 0);
+    /* Key readback must work even while radio bring-up is pending. */
+    output[0] = 0;
+    master_command(PU_CMD_GETKEY, -1, now, 0);
+    assert(strncmp(output + 2, key, 64) == 0);
+    assert(feed("?KEY extra\n") == PU_CMD_BAD);
+    puts("PASS main_key_readback");
+}
+
 int main(void)
 {
     mq_init(&g_queue);
@@ -144,5 +193,17 @@ int main(void)
     command(PU_CMD_STATUS); assert(strstr(output, "D 0 LOST"));
     puts("PASS main_clock_commands_recovery");
     radio_settings();
+    key_settings();
+    console_open = 0;
+    fault_pending = 1;
+    output[0] = 0;
+    master_hello();
+    assert(fault_pending && !output[0]);
+    console_open = 1;
+    command(PU_CMD_ID);
+    assert(!fault_pending && strstr(output, "X fault ") && strstr(output, "A ID OK"));
+    command(PU_CMD_ID);
+    assert(!strstr(output, "X fault "));
+    puts("PASS main_deferred_boot_fault");
     return 0;
 }

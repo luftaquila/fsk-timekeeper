@@ -8,6 +8,8 @@
 #include "../src/proto_usb.h"
 
 uint32_t board_millis(void) { return 0; }
+int usb_console_ready(void) { return 1; }
+uint32_t usb_console_epoch(void) { return 0; }
 int usb_write(const char *s) { return fputs(s, stdout) >= 0; }
 
 /* E lines of every kind, formatted by the host queue. */
@@ -43,6 +45,8 @@ static void events(void)
     mq_push_uplink(&q, 0x0D2243B0u, 7u, &u, -60.0f, 7.5f);
 
     u.kind = UL_KIND_CHECKPOINT;
+    for (unsigned i = 0; i < RADIO_HISTORY_FAULTS; i++) { u.u.history.faults[i] = UINT16_MAX; }
+    u.u.history.recovery = (radio_recovery_diag_t){ 65535, 123, RADIO_RECOVERY_BEACON_LOSS | (RADIO_RECOVERY_OK << 4) };
     u.capture_seq = 12;
     u.tick = 123456789;
     mq_push_uplink(&q, 0x0D2243B0u, 7u, &u, -60.0f, 7.5f);
@@ -72,7 +76,7 @@ static void diagnostics(void)
     d.sync_age_ms = 800;
     d.capture_overflow = 1;
     d.fifo_drop = 2;
-    d.err_flags = ERR_RADIO_RESET | ERR_ACK;
+    d.err_flags = ERR_ACK;
     d.reset_reason = RESET_FAULT;
     d.sensor_boot_id = UINT64_C(9007199254740993);
     d.master_boot_id = UINT64_MAX;

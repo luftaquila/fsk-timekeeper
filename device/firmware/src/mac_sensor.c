@@ -236,8 +236,9 @@ static void radio_recovery(mac_sensor_t *s)
     int starving = (uint32_t)(now - s->last_beacon_ms) > BEACON_LOSS_RESET_MS;
     if (!starving && !radio_needs_reset()) { return; }
     if (!retry_due(&s->retry, now)) { return; }
-    el_note(EL_RADIO_RESET);
-    if (radio_begin() == 0) { radio_start_rx(); }
+    el_radio_recovery_begin(radio_needs_reset() ? el_radio_recovery_reason() : RADIO_RECOVERY_BEACON_LOSS);
+    int ok = radio_begin() == 0 && radio_start_rx() == 0;
+    el_radio_recovery_end(ok);
     s->tx_slots = 0;
     retry_later(&s->retry, board_millis(), RADIO_RESET_BACKOFF_MAX_MS);
 }

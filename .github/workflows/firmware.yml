@@ -38,10 +38,10 @@ jobs:
           key: nrf-deps-${{ hashFiles('device/firmware/Makefile') }}
 
       # The USB `I` line reports the release tag as the firmware version
-      # (v1.2.3 -> 1.2.3); builds without a tag report the Makefile default.
+      # unchanged (v1.2.3); builds without a tag report the Makefile default.
       - name: Version from tag
         if: github.ref_type == 'tag'
-        run: echo "FW_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+        run: echo "FW_VERSION=${GITHUB_REF_NAME}" >> "$GITHUB_ENV"
 
       - name: Build
         run: make -C device/firmware

@@ -15,6 +15,7 @@
   --accent-primary: #3b82f6;
   --accent-secondary: #8b5cf6;
   --accent-success: #27a644;
+  --accent-pending: #facc15;
   --accent-warning: #f59e0b;
   --accent-danger: #ef4444;
 
@@ -232,6 +233,14 @@ textarea {
 .card-body {
   padding: 1.25rem;
 }
+
+.card-header .disclosure {
+  flex-shrink: 0;
+  font-size: 1.5rem;
+  line-height: 1;
+  color: var(--text-secondary);
+}
+.card-header .disclosure.is-open { transform: rotate(90deg); }
 
 /* Form */
 .form-group {

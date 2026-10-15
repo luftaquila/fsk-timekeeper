@@ -11,7 +11,7 @@ const box = ref(null);
 const lines = computed(() => (hideHeartbeat.value ? device.consoleLines.filter((l) => !(l.dir === "rx" && l.text.startsWith("H "))) : device.consoleLines));
 
 watch(
-  () => lines.value.length,
+  [open, () => lines.value.length, () => lines.value[lines.value.length - 1]],
   async () => {
     if (!open.value) return;
     await nextTick();
@@ -34,12 +34,12 @@ function send() {
 
 <template>
   <div class="card">
-    <div class="card-header console-header" @click="open = !open">
-      <h3>🖥️ Serial console <span class="muted">{{ device.stats.lines }} lines · {{ device.stats.events }} events · {{ device.stats.acks }} acks · {{ device.stats.duplicates }} dup</span></h3>
-      <span class="chev">{{ open ? "▾" : "▸" }}</span>
+    <div class="card-header console-header" :class="{ 'is-open': open }" @click="open = !open">
+      <h3><span class="heading-icon" aria-hidden="true">🖥️</span><span>Serial Console</span> <span class="muted">{{ device.stats.lines }} lines · {{ device.stats.events }} events · {{ device.stats.acks }} acks · {{ device.stats.duplicates }} dup</span></h3>
+      <span class="disclosure" :class="{ 'is-open': open }" aria-hidden="true">›</span>
     </div>
     <div v-if="open" class="card-body">
-      <label class="opt"><input type="checkbox" v-model="hideHeartbeat" /> hide heartbeat (H) lines</label>
+      <label class="opt"><input type="checkbox" v-model="hideHeartbeat" /> Hide Heartbeat (H) Lines</label>
       <div ref="box" class="log mono">
         <div v-for="(l, i) in lines" :key="i" class="line" :class="l.dir">
           <span class="ts">{{ fmt(l.t) }}</span><span class="dir">{{ l.dir === "tx" ? "→" : "←" }}</span>{{ l.text }}
@@ -59,6 +59,7 @@ function send() {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 1rem;
   cursor: pointer;
   user-select: none;
 }
@@ -67,9 +68,7 @@ function send() {
   font-weight: 400;
   font-size: 0.8rem;
 }
-.chev {
-  color: var(--text-tertiary);
-}
+.console-header:not(.is-open) { border-bottom: 0; }
 .opt {
   display: flex;
   align-items: center;

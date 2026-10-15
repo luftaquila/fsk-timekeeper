@@ -201,8 +201,9 @@ static void radio_recovery(mac_master_t *m)
     if (!radio_needs_reset()) { return; }
     uint32_t now = board_millis();
     if (!retry_due(&m->retry, now)) { return; }
-    el_note(EL_RADIO_RESET);
-    if (radio_begin() == 0) { radio_start_rx(); }
+    el_radio_recovery_begin(el_radio_recovery_reason());
+    int ok = radio_begin() == 0 && radio_start_rx() == 0;
+    el_radio_recovery_end(ok);
     retry_later(&m->retry, board_millis(), RADIO_RESET_BACKOFF_MAX_MS);
 }
 

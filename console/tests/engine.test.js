@@ -116,8 +116,8 @@ describe("createRun", () => {
     assert.equal(run.verification, "pending");
     assert.equal(run.boundaryTick, String(T0));
     assert.equal(run.schema, RUN_SCHEMA);
-    assert.equal(run.radioProto, 13);
-    assert.equal(run.usbProto, 4);
+    assert.equal(run.radioProto, 14);
+    assert.equal(run.usbProto, 5);
     assert.equal(run.calibration, null);
     assert.equal(run.durationNs, null);
   });

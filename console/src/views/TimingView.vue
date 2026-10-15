@@ -57,7 +57,7 @@ function delta(ns) {
 
       <div v-if="mode === 'sprint'" class="sensors">
         <div class="card">
-          <div class="card-header"><h3>🟢 Start sensor</h3></div>
+          <div class="card-header"><h3>🟢 Start Sensor</h3></div>
           <div class="card-body">
             <div v-if="!startList.length" class="empty-state">No crossing yet</div>
             <ul v-else class="rec-list">
@@ -70,7 +70,7 @@ function delta(ns) {
           </div>
         </div>
         <div class="card">
-          <div class="card-header"><h3>🏁 Finish sensor</h3></div>
+          <div class="card-header"><h3>🏁 Finish Sensor</h3></div>
           <div class="card-body">
             <div v-if="!finishList.length" class="empty-state">No crossing yet</div>
             <ul v-else class="rec-list">
@@ -109,7 +109,7 @@ function delta(ns) {
         </div>
 
         <div class="card">
-          <div class="card-header"><h3>🔄 Lap times<span v-if="verification === 'invalid' && laps.length" class="sub"> — confirmed laps before the loss</span></h3></div>
+          <div class="card-header"><h3>🔄 Lap Times<span v-if="verification === 'invalid' && laps.length" class="sub"> — confirmed laps before the loss</span></h3></div>
           <div class="card-body">
             <div v-if="!laps.length" class="empty-state">{{ startList.length ? "First crossing recorded — waiting for lap 1" : "No crossing yet" }}</div>
             <div v-else class="table-scroll">
@@ -118,7 +118,7 @@ function delta(ns) {
                   <tr>
                     <th>Lap</th>
                     <th>Time</th>
-                    <th>Δ best</th>
+                    <th>Δ Best</th>
                     <th></th>
                   </tr>
                 </thead>

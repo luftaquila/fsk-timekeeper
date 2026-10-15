@@ -6,10 +6,10 @@ import { crc32, crc32Hex } from "../src/lib/crc32.js";
 const withCrc = (body) => `${body} ${crc32Hex(body)}`;
 const C_LINE = withCrc("E 17 0D2243B0 C 1234 7 3735928559 305419896 120 -91.50 9.25 42 2 123456789012345678 123456789028345678");
 const L_LINE = withCrc("E 18 0D2243B0 L 1235 7 3735928559 305419896 120 -91.50 9.25 44 45 123456789030000000 123456789031000000");
-const K_LINE = withCrc("E 19 0D2243B0 K 1236 7 3735928559 305419896 120 -91.50 9.25 45 123456789040000000");
+const K_LINE = withCrc("E 19 0D2243B0 K 1236 7 3735928559 305419896 120 -91.50 9.25 45 123456789040000000 1 2 3 4 5 6 3 1 2 2");
 const M_LINE = withCrc("E 20 0 L 0 0 3735928559 3735928559 0 0.00 0.00 0 0 123456789050000000 123456789050000000");
-const D_LINE = "D 0D2243B0 OK 12 3 0 4321 -91.50 9.25 22 315 3987 0 1 1 1 XTAL 800 0 0 0 0 5 0 0 4 305419896 3735928559";
-const D_MASTER = "D 0 OK 0 0 0 0 0.00 0.00 0 305 4123 2 1 1 1 XTAL 0 0 0 3 1 256 7 2 0 0 3735928559";
+const D_LINE = "D 0D2243B0 OK 12 3 0 4321 -91.50 9.25 22 315 3987 0 1 1 1 XTAL 800 0 0 0 0 5 0 0 4 305419896 3735928559 3 1 2 2";
+const D_MASTER = "D 0 OK 0 0 0 0 0.00 0.00 0 305 4123 2 1 1 1 XTAL 0 0 0 3 1 256 7 2 0 0 3735928559 0 0 0 0";
 
 describe("crc32", () => {
   it("is CRC-32/IEEE", () => {
@@ -19,11 +19,21 @@ describe("crc32", () => {
 });
 
 describe("parseLine", () => {
-  it("parses I v4 and checks the contract", () => {
-    const i = parseLine("I FSK-WL 4 1.0.0 0123456789ABCDEF M 13 922900 7 250.00 16000 4 -9 0");
-    assert.deepEqual(i, { type: "I", product: "FSK-WL", usbProto: 4, fw: "1.0.0", devid: "0123456789ABCDEF", role: "M", radioProto: 13, freqKhz: 922900, sf: 7, bw: 250, ticksPerMs: 16000, resetReason: 4, powerDbm: -9, lbt: 0, v1: false });
+  it("distinguishes radio clock and initialization faults from MCU HFXO", () => {
+    assert.deepEqual(errorNames(0x3020), ["HFXO restart", "radio oscillator / PLL failure", "radio initialization failure"]);
+  });
+  it("parses USB key readback without accepting malformed or partial keys", () => {
+    assert.deepEqual(parseLine(`K ${"AB".repeat(32)}`), { type: "K", key: "ab".repeat(32) });
+    assert.deepEqual(parseLine("K NONE"), { type: "K", key: "" });
+    for (const line of ["K", "K NONE extra", `K ${"a".repeat(63)}`, `K ${"z".repeat(64)}`]) {
+      assert.deepEqual(parseLine(line), { type: "K", key: null });
+    }
+  });
+  it("parses I v5 and checks the contract", () => {
+    const i = parseLine("I FSK-WL 5 1.0.0 0123456789ABCDEF M 14 922900 7 250.00 16000 4 -9 0");
+    assert.deepEqual(i, { type: "I", product: "FSK-WL", usbProto: 5, fw: "1.0.0", devid: "0123456789ABCDEF", role: "M", radioProto: 14, freqKhz: 922900, sf: 7, bw: 250, ticksPerMs: 16000, resetReason: 4, powerDbm: -9, lbt: 0, v1: false });
     assert.deepEqual(radioOf(i), { freqKhz: 922900, powerDbm: -9, lbt: 0 });
-    assert.equal(radioOf(parseLine("I FSK-WL 3 1.0.0 0123456789ABCDEF M 13 921.30 7 250.00 16000 4")), null);
+    assert.equal(radioOf(parseLine("I FSK-WL 3 1.0.0 0123456789ABCDEF M 14 921.30 7 250.00 16000 4")), null);
     assert.deepEqual(contractOf(i), { ok: true, reason: null });
     assert.equal(contractOf({ ...i, usbProto: 3 }).reason, CONTRACT_VERSION);
     assert.equal(contractOf({ ...i, role: "S" }).reason, CONTRACT_SENSOR_ROLE);
@@ -52,7 +62,16 @@ describe("parseLine", () => {
     assert.equal(parseLine("Z foo").type, "?");
   });
 
-  it("parses the 28-token D line", () => {
+  it("rejects incomplete or invalid recovery summaries", () => {
+    const prefix = D_LINE.split(" ").slice(0, 28).join(" ");
+    for (const suffix of ["", "1 0 2", "1 2 2 2", "-1 0 2 2", "65536 0 2 2", "1 0 9 2", "1 0 2 4", "0 0 2 2", "1 0 0 0"]) {
+      assert.equal(parseLine(`${prefix} ${suffix}`).telemetry, null, suffix);
+    }
+    assert.deepEqual(normalizeTelemetry(parseLine(D_LINE).telemetry).recovery, { count: 3, failures: 1, reason: 2, result: 2 });
+    assert.deepEqual(errorNames(1), []); // legacy reset history must never become an active error
+  });
+
+  it("parses the 32-token D line", () => {
     const t = normalizeTelemetry(parseLine(D_LINE).telemetry, 1_000_000);
     assert.equal(t.node_id, "0D2243B0");
     assert.equal(t.link_state, "online");
@@ -61,7 +80,7 @@ describe("parseLine", () => {
     assert.equal(t.received_at, 1_000_000);
     assert.equal(t.sync_age_ms, 800);
     assert.equal(t.err_flags, 5);
-    assert.deepEqual(errorNames(t.err_flags), ["radio reset", "SPI timeout"]);
+    assert.deepEqual(errorNames(t.err_flags), ["SPI timeout"]);
     assert.equal(t.reset_reason, 4);
     assert.deepEqual(resetNames(t.reset_reason), ["soft reset"]);
     assert.deepEqual(resetNames(0), ["power-on"]);
@@ -79,9 +98,20 @@ describe("parseLine", () => {
 });
 
 describe("parseEventLine", () => {
+  it("requires checkpoint history, bounds counters, and includes it in the CRC", () => {
+    const body = "E 1 0D2243B0 K 1 7 1 2 0 0.00 0.00 1 9";
+    for (const tail of ["", "0 0 0 0 0 0 0 0 0", "65536 0 0 0 0 0 0 0 0 0", "0 0 0 0 0 0 1 2 2 2", "0 0 0 0 0 0 0 0 2 2"]) {
+      assert.equal(parseEventLine(withCrc(`${body} ${tail}`)).stage, "invalid", tail);
+    }
+    const valid = withCrc(`${body} 65535 2 3 4 5 6 65535 123 8 3`);
+    const p = parseEventLine(valid);
+    assert.equal(p.stage, "valid");
+    assert.deepEqual(p.rows[0].radio_history, { faults: [65535, 2, 3, 4, 5, 6], recovery: { count: 65535, failures: 123, reason: 8, result: 3 } });
+    assert.equal(parseEventLine(valid.replace("65535 2", "65534 2")).stage, "crc");
+  });
   it("keeps adjacent 64-bit boot IDs distinct through parsing, row keys and ACKs", () => {
     const ids = ["9007199254740992", "9007199254740993", "18446744073709551615"];
-    const packets = ids.map((id) => parseEventLine(withCrc(`E 1 0D2243B0 K 1 7 ${id} ${id} 0 0.00 0.00 1 9`)));
+    const packets = ids.map((id) => parseEventLine(withCrc(`E 1 0D2243B0 K 1 7 ${id} ${id} 0 0.00 0.00 1 9 0 0 0 0 0 0 0 0 0 0`)));
     assert.equal(new Set(packets.map((p) => rowKey(p.rows[0]))).size, ids.length);
     for (let i = 0; i < ids.length; i++) {
       assert.equal(packets[i].masterBootId, ids[i]);
@@ -112,7 +142,7 @@ describe("parseEventLine", () => {
       ],
     );
     assert.equal(p.rows[0].raw, C_LINE);
-    assert.equal(p.rows[0].usb_proto, 4);
+    assert.equal(p.rows[0].usb_proto, 5);
     assert.equal(rowKey(p.rows[1]), "3735928559:0D2243B0:305419896:capture:43:123456789028345678");
     assert.equal(formatAck(p), `C 17 3735928559 ${C_LINE.slice(-8)}`);
   });

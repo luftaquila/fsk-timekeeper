@@ -19,7 +19,7 @@ function act(fn) {
 
 <template>
   <div class="card">
-    <div class="card-header"><h3>🧪 Simulator (development build only)</h3></div>
+    <div class="card-header"><h3><span class="heading-icon" aria-hidden="true">🧪</span><span>Simulator (development build only)</span></h3></div>
     <div class="card-body">
       <div class="row">
         <button v-if="!fake" class="btn btn-primary btn-sm" :disabled="device.connected" @click="connectFake">Connect fake master</button>

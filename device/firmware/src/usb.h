@@ -3,6 +3,8 @@
 #ifndef USB_H
 #define USB_H
 
+#include <stdint.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -16,6 +18,12 @@ void usb_task(void);
 /* Queue one complete NUL-terminated line if the CDC FIFO has room for all of it.
  * Returns 1 only when every byte was queued. */
 int usb_write(const char *s);
+
+/* A console has opened the CDC port and asserted DTR. Enumeration alone is not
+ * permission to send reports. Epoch changes invalidate old command fragments
+ * and pending control replies, including a close/reopen within one main pass. */
+int usb_console_ready(void);
+uint32_t usb_console_epoch(void);
 
 /* One byte from the CDC port (0-255), or -1 if none. */
 int usb_read_byte(void);

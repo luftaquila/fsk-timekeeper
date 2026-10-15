@@ -90,10 +90,28 @@ void usb_task(void)
     tud_task();
 }
 
+static uint32_t s_console_epoch;
+static bool s_console_dtr;
+
+int usb_console_ready(void) { return tud_cdc_connected() ? 1 : 0; }
+uint32_t usb_console_epoch(void) { return s_console_epoch; }
+
+void tud_mount_cb(void)
+{
+    s_console_dtr = false;
+    s_console_epoch++;
+}
+
+void tud_umount_cb(void)
+{
+    s_console_dtr = false;
+    s_console_epoch++;
+}
+
 int usb_write(const char *s)
 {
-    /* Whole line or nothing; callers that need delivery retry. Not gated on DTR:
-     * some hosts never assert it. */
+    /* Whole line or nothing; callers that need delivery retry. */
+    if (!usb_console_ready()) { return 0; }
     size_t len = strlen(s);
     if (tud_cdc_write_available() < len) { return 0; }
     uint32_t written = tud_cdc_write(s, len);
@@ -138,6 +156,14 @@ void tud_cdc_line_state_cb(uint8_t itf, bool dtr, bool rts)
 {
     (void)itf;
     (void)rts;
+    if (s_console_dtr != dtr) {
+        s_console_dtr = dtr;
+        s_console_epoch++;
+    }
+    if (!dtr) {
+        tud_cdc_write_clear();
+        tud_cdc_read_flush();
+    }
     if (!dtr && s_last_baud == 1200) {
         NRF_POWER->GPREGRET = 0x57; /* DFU_MAGIC_UF2_RESET (Adafruit nRF52 bootloader) */
         NVIC_SystemReset();

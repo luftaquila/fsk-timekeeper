@@ -46,6 +46,13 @@ export function createSerialTransport({ onLine, onDisconnect }) {
     port = candidate;
     intentionalClose = false;
     readLoop();
+    try {
+      // Firmware starts reporting only after DTR. Start the reader first.
+      await candidate.setSignals({ dataTerminalReady: true });
+    } catch (error) {
+      await close();
+      throw error;
+    }
     return port.getInfo?.() || {};
   }
 
@@ -86,7 +93,7 @@ export function createSerialTransport({ onLine, onDisconnect }) {
   // Serialized writes: concurrent callers never interleave bytes.
   function write(line) {
     const task = async () => {
-      if (!port?.writable) return false;
+      if (intentionalClose || !port?.writable) return false;
       const writer = port.writable.getWriter();
       try {
         await writer.write(new TextEncoder().encode(line + "\n"));
@@ -104,6 +111,13 @@ export function createSerialTransport({ onLine, onDisconnect }) {
   async function close() {
     intentionalClose = true;
     const current = port;
+    await writeChain;
+    try {
+      // Stop reports while the reader can still drain the last transfer.
+      await current?.setSignals({ dataTerminalReady: false });
+    } catch {
+      /* unplugged device; closing the port also drops DTR */
+    }
     try {
       await reader?.cancel();
     } catch {

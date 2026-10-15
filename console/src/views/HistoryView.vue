@@ -55,7 +55,7 @@ async function clearAll() {
       </select>
       <span class="count muted">{{ rows.length }} run{{ rows.length === 1 ? "" : "s" }}</span>
       <div class="spacer"></div>
-      <label class="opt"><input type="checkbox" v-model="withEvidence" /> include raw evidence (JSON)</label>
+      <label class="opt"><input type="checkbox" v-model="withEvidence" /> Include Raw Evidence (JSON)</label>
       <button class="btn btn-ghost btn-sm" :disabled="!rows.length" @click="history.exportCsv(filter || null)">Export CSV</button>
       <button class="btn btn-ghost btn-sm" :disabled="!rows.length" @click="history.exportJson(filter || null, { withEvidence })">Export JSON</button>
       <button class="btn btn-sm" :class="confirmClear ? 'btn-danger' : 'btn-ghost'" :disabled="!history.rows.length" @click="clearAll">{{ confirmClear ? "Confirm clear all" : "Clear all" }}</button>

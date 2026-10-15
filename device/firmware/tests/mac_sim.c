@@ -34,12 +34,12 @@
 #define REC_MAX     20000
 #define EDGE_MAX    20000
 #define STEP_US     200u
-/* Worst case: RX, TX and CAD each wait for the TCXO first (RadioLib setTCXO
- * default delay). Standby on the TCXO (radio.cpp) saves some of these waits. */
-#define TCXO_US     5000u
+/* Conservative oscillator startup allowance, not a measured XTAL delay.
+ * XOSC standby avoids most starts; retain the existing worst-case budget. */
+#define OSC_START_BUDGET_US 5000u
 #define CAD_US      2560u   /* 4 symbols at SF7/BW250 */
-#define TX_SETUP_US (TX_SETUP_MS * 1000u) /* SPI (~1.5 ms at 1 MHz: packet, params) + TCXO + PA ramp */
-#define RX_SETUP_US 5500u   /* SPI + TCXO before the receiver listens */
+#define TX_SETUP_US (TX_SETUP_MS * 1000u) /* SPI (~1.5 ms at 1 MHz: packet, params) + oscillator + PA ramp */
+#define RX_SETUP_US 5500u   /* SPI + oscillator before the receiver listens */
 #define HEADER_US   10400u  /* preamble + header before HEADER_VALID */
 
 static uint32_t mix(uint32_t x) { x ^= x >> 16; x *= 0x7FEB352Du; x ^= x >> 15; x *= 0x846CA68Bu; x ^= x >> 16; return x; }
@@ -305,7 +305,7 @@ int radio_cad(void)
 {
     if (cad_error) { cur->now_us += CAD_US; return RADIO_CAD_ERROR; }
     deliver(cur);
-    uint64_t t0 = cur->now_us + TCXO_US; /* listens only after the TCXO start */
+    uint64_t t0 = cur->now_us + OSC_START_BUDGET_US; /* listens only after the oscillator start */
     cur->now_us = t0 + CAD_US;
     unsigned from = air_n > 64u ? air_n - 64u : 0u;
     for (unsigned i = from; i < air_n; i++) {
@@ -402,6 +402,8 @@ static int host_acks = 1;
 static uint32_t last_hseq;
 static unsigned d_lines;
 
+int usb_console_ready(void) { return 1; }
+uint32_t usb_console_epoch(void) { return 0; }
 int usb_write(const char *s)
 {
     if (s[0] == 'D') { d_lines++; }
@@ -453,7 +455,7 @@ static void host_line(const char *line)
         r.end_tick = strtoull(tok[14], NULL, 10);
         recs[n_recs++] = r;
     } else {
-        assert(r.kind == 'K' && nt == 14);
+        assert(r.kind == 'K' && nt == 24);
         r.end_seq = r.seq;
         r.tick = r.end_tick = strtoull(tok[12], NULL, 10);
         recs[n_recs++] = r;

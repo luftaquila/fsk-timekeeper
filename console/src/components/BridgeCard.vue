@@ -1,116 +1,85 @@
 <script setup>
-import { computed, ref, onMounted, onUnmounted } from "vue";
+import { computed } from "vue";
 import { useDeviceStore } from "../stores/device";
-import { fmtAgeMs } from "../lib/format";
-import { radioOf } from "../lib/protocol";
+import NodeDiagnostics from "./NodeDiagnostics.vue";
+import NodeAge from "./NodeAge.vue";
+import MasterConnectionLight from "./MasterConnectionLight.vue";
+import { USB_PROTO_VERSION, RADIO_PROTO_VERSION } from "../lib/protocol";
 
 const device = useDeviceStore();
-const now = ref(Date.now());
-let timer = null;
-onMounted(() => {
-  timer = setInterval(() => (now.value = Date.now()), 1000);
+const versions = computed(() => {
+  const id = device.identity;
+  return [
+    { label: "Firmware", value: id?.fw ?? "…" },
+    { label: "USB", title: "USB Protocol", value: id?.usbProto != null ? `v${id.usbProto}` : "—", mismatch: id && id.usbProto !== USB_PROTO_VERSION },
+    { label: "Radio", title: "Radio Protocol", value: id?.radioProto != null ? `v${id.radioProto}` : "—", mismatch: id && id.radioProto !== RADIO_PROTO_VERSION },
+  ];
 });
-onUnmounted(() => clearInterval(timer));
+const deviceId = computed(() => {
+  const id = device.identity?.devid;
+  if (!/^[0-9a-f]{16}$/i.test(id ?? "")) return "…";
+  const low = id.slice(8).toUpperCase();
+  const high = id.slice(0, 8).toUpperCase();
+  // Match the firmware's node_sender_id(), including its zero-word fallback.
+  return low !== "00000000" ? low : high !== "00000000" ? high : "00000001";
+});
 
-const fresh = computed(() => device.masterFresh(now.value));
-const uptime = computed(() => (device.heartbeat ? fmtAgeMs(device.heartbeat.uptimeMs) : "—"));
-const lastLine = computed(() => (device.connected ? fmtAgeMs(now.value - device.lastLineAt) : "—"));
-const radio = computed(() => {
-  const r = radioOf(device.identity);
-  if (!r) return "…";
-  return `${(r.freqKhz / 1000).toFixed(3)} MHz · ${r.powerDbm} dBm · LBT ${r.lbt ? "on" : "off"} · SF${device.identity.sf} · BW${device.identity.bw}`;
-});
+function disconnect() {
+  if (window.confirm("Disconnect from the master?")) device.disconnect();
+}
 </script>
 
 <template>
   <div class="card">
-    <div class="card-header"><h3>📡 Master</h3></div>
+    <div class="card-header master-header">
+      <h3><span class="heading-icon" aria-hidden="true">📡</span><span>Master</span><MasterConnectionLight class="dot" /></h3>
+      <button v-if="!device.connected" class="btn btn-success btn-sm conn-btn" :disabled="device.connecting || !device.supported" @click="device.connect()">Connect</button>
+      <button v-else class="btn btn-ghost btn-sm conn-btn disconnect-btn" @click="disconnect">Disconnect</button>
+    </div>
     <div class="card-body">
-      <div class="conn-row">
-        <span class="dot" :class="device.connected ? (fresh ? 'ok' : 'warn') : 'bad'"></span>
-        <span class="state">
-          {{ device.connected ? (fresh ? "Connected" : "Connected — no data") : device.connecting ? "Connecting…" : "Disconnected" }}
-          <span v-if="device.transportKind === 'fake'" class="badge badge-warning">simulator</span>
-        </span>
-        <button v-if="!device.connected" class="btn btn-success btn-sm conn-btn" :disabled="device.connecting || !device.supported" @click="device.connect()">Connect</button>
-        <button v-else class="btn btn-ghost btn-sm conn-btn" @click="device.disconnect()">Disconnect</button>
-      </div>
       <p v-if="!device.supported" class="hint">Web Serial is not available in this browser. Use Chrome or Edge on a desktop.</p>
+      <p v-else-if="!device.connected" class="hint">Connect the master over USB to view its status and configure your boards.</p>
 
-      <dl v-if="device.connected" class="info">
-        <dt>Firmware</dt>
-        <dd class="mono">{{ device.identity ? `${device.identity.product} ${device.identity.fw}` : "…" }}</dd>
-        <dt>Protocol</dt>
-        <dd :class="device.contract.ok ? 'ok' : 'bad'">{{ device.contract.ok ? `USB v${device.identity.usbProto} · radio v${device.identity.radioProto}` : device.contract.reason }}</dd>
-        <dt>Device ID</dt>
-        <dd class="mono">{{ device.identity?.devid || "…" }}</dd>
-        <dt>Radio (stored)</dt>
-        <dd class="mono">{{ radio }}</dd>
-        <dt>Uptime</dt>
-        <dd class="mono">{{ uptime }}</dd>
-        <dt>Sensors seen</dt>
-        <dd class="mono">{{ device.heartbeat?.nseen ?? "…" }}</dd>
-        <dt>Last line</dt>
-        <dd class="mono">{{ lastLine }} ago</dd>
-      </dl>
+      <div v-if="device.connected" class="device-heading">
+        <h4 class="mono" :title="device.identity?.devid">{{ deviceId }}</h4>
+        <NodeAge node-id="0" />
+        <div class="device-versions" aria-label="Firmware and Protocol Versions">
+          <span v-for="version in versions" :key="version.label" class="version-item" :title="version.title">
+            <span>{{ version.label }}</span>
+            <span class="mono version-value" :class="{ mismatch: version.mismatch }">{{ version.value }}</span>
+          </span>
+        </div>
+      </div>
+      <div v-if="device.connected" class="master-details">
+        <NodeDiagnostics node-id="0" />
+      </div>
     </div>
   </div>
 </template>
 
 <style scoped>
-.conn-row {
+.master-header {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 0.6rem;
-}
-.state {
-  flex: 1;
-  font-weight: 600;
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-}
-.dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  display: inline-block;
-}
-.dot.ok {
-  background: var(--accent-success);
-  box-shadow: 0 0 6px var(--accent-success);
-}
-.dot.warn {
-  background: var(--accent-warning);
-}
-.dot.bad {
-  background: var(--accent-danger);
+  gap: 0.75rem 1.5rem;
 }
 .conn-btn {
   margin-left: auto;
 }
+.disconnect-btn:hover:not(:disabled), .disconnect-btn:focus-visible {
+  color: #fff;
+  background: var(--accent-danger);
+}
 .hint {
-  margin-top: 0.6rem;
   font-size: 0.8rem;
   color: var(--text-tertiary);
 }
-.info {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 0.25rem 1rem;
-  margin-top: 1rem;
-  font-size: 0.85rem;
-}
-.info dt {
-  color: var(--text-tertiary);
-}
-.info dd {
-  margin: 0;
-}
-.info dd.ok {
-  color: var(--accent-success);
-}
-.info dd.bad {
-  color: var(--accent-danger);
-}
+.device-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem; margin-bottom: 1rem; }
+.device-heading h4 { font-size: 0.95rem; margin: 0; }
+.device-versions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 0.35rem 1rem; margin-left: auto; color: var(--text-secondary); font-size: 0.75rem; }
+.version-item { display: inline-flex; align-items: baseline; gap: 0.35rem; white-space: nowrap; }
+.version-value { font-size: 0.8rem; font-weight: 600; }
+.version-value.mismatch { color: var(--accent-danger); }
+.master-details { container: master-layout / inline-size; }
 </style>

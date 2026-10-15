@@ -40,7 +40,7 @@
 #define LORA_CR         5       /* coding rate 4/5 */
 #define LORA_SYNCWORD   0x12
 #define LORA_PREAMBLE   8
-#define LORA_TCXO_V     1.6f    /* Ra-01SH TCXO via DIO3 */
+#define LORA_TCXO_V     0.0f    /* Ra-01SH passive XTAL: do not enable DIO3 TCXO power */
 
 /* Settings of a board that has none stored. KR 920 MHz USN rule: channels 26-32
  * (922.1-923.3 MHz) allow 25 mW EIRP; 922.9 MHz keeps all 250 kHz inside them and
@@ -56,10 +56,10 @@
 #define RADIO_POWER_MIN_DBM (-9)
 #define RADIO_POWER_MAX_DBM 22
 
-/* RSSI listen-before-talk (KR rule: listen >= 5 ms, send only at <= -65 dBm). The
- * threshold keeps 3 dB under the limit until the module's RSSI is checked (DESIGN §10). */
+/* RSSI listen-before-talk: listen >= 5 ms, send only at <= -65 dBm.
+ * Module RSSI accuracy still needs measurement (DESIGN §10). */
 #define LBT_LISTEN_MS      5u
-#define LBT_THRESHOLD_DBM  (-68)
+#define LBT_THRESHOLD_DBM  (-65)
 
 /* Time on air in us of a len-byte packet: the SX126x datasheet formula RadioLib's getTimeOnAir()
  * uses, for an explicit header, CRC on, SF7..SF12 without LDRO and LORA_CR = 4 + CR. */
@@ -81,12 +81,12 @@
 #define SLOT_LEN_MS        110u
 #define SLOT_COUNT         6u
 #define SLOT_LATE_MS       10u  /* latest TX start within a slot, CAD included; later -> skip the slot */
-#define TX_SETUP_MS        7u   /* SPI + TCXO start after a CAD until the preamble is on air */
+#define TX_SETUP_MS        7u   /* SPI + oscillator startup budget after CAD, until preamble */
 #define SLOT_GUARD_MS      5u   /* spare at the end of a slot for the unmeasured parts of this budget */
 #define BEACON_LBT_MAX_MS  50u  /* re-sense a busy channel this long, then send the beacon anyway */
 #define RX_DRAIN_MAX_MS    100u /* longest wait for a reception in progress before a CAD */
 #define RX_HEADER_WAIT_MS  12u  /* a preamble without a header after this long is noise */
-#define CAD_TIMEOUT_MS     10u  /* a CAD takes ~2.5 ms (4 symbols at SF7/BW250), ~7.5 ms after a TCXO start */
+#define CAD_TIMEOUT_MS     10u  /* ~2.5 ms CAD (4 symbols at SF7/BW250) plus oscillator startup margin */
 
 /* Periodic checkpoint + diagnostics: in the cycle whose beacon seq % this == table entry % this,
  * in the sensor's last slot of that cycle. */
@@ -131,8 +131,8 @@
 /* A radio that fails to come up at boot is retried after this, doubling up to
  * RADIO_RESET_BACKOFF_MAX_MS: one bad start must not silence a board. */
 #define RADIO_BOOT_RETRY_MS        1000u
-/* BUSY wait per SX1262 command. Legitimate waits are a few ms (TCXO start 5 ms,
- * calibration); RadioLib's 1 s default stalls the main loop on a dead radio. */
+/* BUSY wait per SX1262 command: allow oscillator startup and calibration.
+ * RadioLib's 1 s default stalls the main loop on a dead radio. */
 #define RADIO_SPI_TIMEOUT_MS       50u
 /* After NRST the chip must answer its version string within this before a
  * begin() is tried; begin() on a silent radio would block ~10 s. */

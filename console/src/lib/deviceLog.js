@@ -1,14 +1,15 @@
 // Device log (IndexedDB `log`): every X line and every I line's reset reason, kept 30 days
-// and at most LOG_MAX_ENTRIES entries. Entry: { id, at, kind: "X"|"boot"|"console", code, text, devid, masterBootId }.
+// and at most LOG_MAX_ENTRIES entries. Entry: { id, at, kind: "X"|"boot"|"console"|"radio"|"state", code, text, devid, masterBootId }.
 import { add, getAll, clear, removeByIndex, count, transaction, done } from "./idb";
 import * as eventLog from "./eventLog";
 import { LOG_RETENTION_MS, LOG_MAX_ENTRIES } from "./constants";
+import { logCode } from "./deviceLogFormat";
 
 let memory = [];
 let memoryId = 0;
 
 export async function addEntry(entry) {
-  const row = { ...entry };
+  const row = { ...entry, code: logCode(entry.code) };
   const db = eventLog.getDb();
   if (db) {
     try {
@@ -35,7 +36,7 @@ export async function listEntries() {
       stored = [];
     }
   }
-  return [...stored, ...memory].sort((a, b) => b.at - a.at || b.id - a.id);
+  return [...stored, ...memory].map((e) => ({ ...e, code: logCode(e.code) })).sort((a, b) => b.at - a.at || b.id - a.id);
 }
 
 export async function clearEntries() {
@@ -55,12 +56,16 @@ export async function pruneEntries(now = Date.now()) {
     const tx = transaction(db, eventLog.STORE_LOG, "readwrite");
     const finished = done(tx);
     let surplus = total - LOG_MAX_ENTRIES;
-    const req = tx.objectStore(eventLog.STORE_LOG).openKeyCursor();
+    const req = tx.objectStore(eventLog.STORE_LOG).openCursor();
     req.onsuccess = () => {
       const cursor = req.result;
       if (!cursor || surplus <= 0) return;
-      tx.objectStore(eventLog.STORE_LOG).delete(cursor.primaryKey);
-      surplus--;
+      // Keep the hidden Clear watermark until its 30-day expiry; otherwise
+      // replaying retained checkpoints could resurrect intentionally cleared logs.
+      if (cursor.value.kind !== "state") {
+        tx.objectStore(eventLog.STORE_LOG).delete(cursor.primaryKey);
+        surplus--;
+      }
       cursor.continue();
     };
     await finished;

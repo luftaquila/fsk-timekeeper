@@ -1,18 +1,19 @@
 <script setup>
-import { ref } from "vue";
+import { computed, ref } from "vue";
 import { useDeviceStore } from "../stores/device";
 import { useNotification } from "../composables/useNotification";
-import { downloadBlob, timestampSlug, fmtDateTime } from "../lib/format";
+import { downloadBlob, timestampSlug } from "../lib/format";
+import { logRecord } from "../lib/deviceLogFormat";
 
 const device = useDeviceStore();
 const notyf = useNotification();
 const open = ref(false);
 const confirmClear = ref(false);
 
-const KIND_LABEL = { X: "Error", boot: "Boot", console: "Console" };
+const rows = computed(() => device.logEntries.map((e) => ({ ...logRecord(e), id: e.id })));
 
 async function exportJson() {
-  const entries = await device.exportLog();
+  const entries = (await device.exportLog()).map(logRecord);
   downloadBlob(new Blob([JSON.stringify({ exported_at: new Date().toISOString(), entries }, null, 2)], { type: "application/json" }), `fsk-timekeeper-log-${timestampSlug()}.json`);
 }
 
@@ -30,14 +31,14 @@ async function clearAll() {
 
 <template>
   <div class="card">
-    <div class="card-header log-header" @click="open = !open">
-      <h3>📋 Device log <span class="muted">{{ device.logEntries.length }} entries</span></h3>
-      <span class="chev">{{ open ? "▾" : "▸" }}</span>
+    <div class="card-header log-header" :class="{ 'is-open': open }" @click="open = !open">
+      <h3><span class="heading-icon" aria-hidden="true">📋</span><span>Device Log</span> <span class="muted">{{ device.logEntries.length }} entries</span></h3>
+      <span class="disclosure" :class="{ 'is-open': open }" aria-hidden="true">›</span>
     </div>
     <div v-if="open" class="card-body">
       <div class="toolbar">
         <button class="btn btn-ghost btn-sm" :disabled="!device.logEntries.length" @click="exportJson">Export JSON</button>
-        <button class="btn btn-sm" :class="confirmClear ? 'btn-danger' : 'btn-ghost'" :disabled="!device.logEntries.length" @click="clearAll">{{ confirmClear ? "Confirm clear" : "Clear" }}</button>
+        <button class="btn btn-sm" :class="confirmClear ? 'btn-danger' : 'btn-ghost'" :disabled="!device.logEntries.length" @click="clearAll">{{ confirmClear ? "Confirm Clear" : "Clear" }}</button>
       </div>
       <div v-if="!device.logEntries.length" class="empty-state">No entries.</div>
       <div v-else class="table-scroll">
@@ -45,19 +46,19 @@ async function clearAll() {
           <thead>
             <tr>
               <th>Time</th>
-              <th>Kind</th>
+              <th>Type</th>
               <th>Code</th>
               <th>Board</th>
               <th>Line</th>
             </tr>
           </thead>
           <tbody>
-            <tr v-for="e in device.logEntries" :key="e.id">
-              <td class="mono nowrap">{{ fmtDateTime(e.at) }}</td>
-              <td>{{ KIND_LABEL[e.kind] || e.kind }}</td>
+            <tr v-for="e in rows" :key="e.id">
+              <td class="mono nowrap">{{ e.time }}</td>
+              <td>{{ e.type }}</td>
               <td class="mono">{{ e.code }}</td>
-              <td class="mono">{{ e.devid || "—" }}</td>
-              <td class="mono text">{{ e.text }}</td>
+              <td class="mono">{{ e.board }}</td>
+              <td class="text">{{ e.line }}</td>
             </tr>
           </tbody>
         </table>
@@ -71,6 +72,7 @@ async function clearAll() {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 1rem;
   cursor: pointer;
   user-select: none;
 }
@@ -79,9 +81,7 @@ async function clearAll() {
   font-weight: 400;
   font-size: 0.8rem;
 }
-.chev {
-  color: var(--text-tertiary);
-}
+.log-header:not(.is-open) { border-bottom: 0; }
 .toolbar {
   display: flex;
   gap: 0.5rem;
@@ -107,7 +107,7 @@ async function clearAll() {
   white-space: nowrap;
 }
 .text {
-  word-break: break-all;
+  overflow-wrap: anywhere;
   color: var(--text-secondary);
 }
 </style>

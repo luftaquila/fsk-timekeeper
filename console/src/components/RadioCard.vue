@@ -1,21 +1,30 @@
 <script setup>
 import { ref, computed, watch } from "vue";
+import MetricValue from "./MetricValue.vue";
 import { useDeviceStore } from "../stores/device";
 import { useTimingStore } from "../stores/timing";
-import { useNotification } from "../composables/useNotification";
-import { radioOf, isRadioConfig, RADIO_FREQ_MIN_KHZ, RADIO_FREQ_MAX_KHZ, RADIO_POWER_MIN_DBM, RADIO_POWER_MAX_DBM } from "../lib/protocol";
+import { useNotification, useActionResult, notificationText } from "../composables/useNotification";
+import { radioOf, isRadioConfig, RADIO_FREQ_MIN_KHZ, RADIO_FREQ_MAX_KHZ, RADIO_POWER_MIN_DBM, RADIO_POWER_MAX_DBM, RADIO_DEFAULT_CONFIG } from "../lib/protocol";
 
 const notyf = useNotification();
 const device = useDeviceStore();
 const timing = useTimingStore();
 
-const freq = ref(""); // MHz
-const power = ref(""); // dBm at the chip
-const lbt = ref(true);
+const frequency = ref("");
+const power = ref(null);
+const lbt = ref(1);
+const frequencyRange = `${RADIO_FREQ_MIN_KHZ / 1000} ~ ${RADIO_FREQ_MAX_KHZ / 1000} MHz`;
+const powerOptions = Array.from({ length: RADIO_POWER_MAX_DBM - RADIO_POWER_MIN_DBM + 1 }, (_, i) => RADIO_POWER_MIN_DBM + i);
+const frequencyKhz = computed(() => {
+  const value = frequency.value.trim();
+  if (!/^\d+(?:\.\d{1,3})?$/.test(value)) return null;
+  const khz = Math.round(Number(value) * 1000);
+  return khz >= RADIO_FREQ_MIN_KHZ && khz <= RADIO_FREQ_MAX_KHZ ? khz : null;
+});
 const busy = ref(false);
-const lastResult = ref(null);
-const resultText = computed(() => ({
-  ok: "Radio settings stored and applied (A R OK).",
+const lastResult = useActionResult();
+const resultText = computed(() => notificationText({
+  ok: "Saved",
   cfgapply: "Settings stored, but radio startup failed. The board will retry automatically.",
   cfgpending: "Settings stored. Application is pending until board initialization succeeds.",
   cfgfail: "Settings could not be stored on the board.",
@@ -23,17 +32,11 @@ const resultText = computed(() => ({
 }[lastResult.value] || "The board rejected the settings."));
 
 const board = computed(() => radioOf(device.identity));
-const boardText = computed(() => {
-  const b = board.value;
-  if (!b) return device.connected ? "…" : "not connected";
-  return `${(b.freqKhz / 1000).toFixed(3)} MHz · ${b.powerDbm} dBm · LBT ${b.lbt ? "on" : "off"}`;
-});
+const blocked = computed(() => busy.value || !device.connected || device.keyReadState === "loading" || timing.armed);
 
 const cfg = computed(() => {
-  const f = freq.value.trim();
-  const p = power.value.trim();
-  if (!/^\d+(\.\d{1,3})?$/.test(f) || !/^-?\d+$/.test(p)) return null;
-  const c = { freqKhz: Math.round(Number(f) * 1000), powerDbm: Number(p), lbt: lbt.value ? 1 : 0 };
+  if (frequencyKhz.value == null || power.value == null) return null;
+  const c = { freqKhz: frequencyKhz.value, powerDbm: power.value, lbt: lbt.value };
   return isRadioConfig(c) ? c : null;
 });
 const onBoard = computed(() => {
@@ -41,25 +44,46 @@ const onBoard = computed(() => {
   const c = cfg.value;
   return !!b && !!c && b.freqKhz === c.freqKhz && b.powerDbm === c.powerDbm && b.lbt === c.lbt;
 });
+const isDefault = (c) => c && Object.entries(RADIO_DEFAULT_CONFIG).every(([k, v]) => c[k] === v);
+const defaultDisabled = computed(() => blocked.value || !board.value || (isDefault(board.value) && isDefault(cfg.value)));
+watch([frequency, power, lbt], () => { lastResult.value = null; });
 
 function load(b) {
-  freq.value = (b.freqKhz / 1000).toFixed(3);
-  power.value = String(b.powerDbm);
-  lbt.value = b.lbt === 1;
+  frequency.value = (b.freqKhz / 1000).toFixed(3);
+  power.value = b.powerDbm;
+  lbt.value = b.lbt;
   lastResult.value = null;
 }
 
-// The first board seen fills the form; later boards keep it, so one setting goes to every board.
-watch(board, (b) => {
-  if (b && !freq.value && !power.value) load(b);
+// Load each connection's settings without overwriting edits on periodic identity reports.
+watch(() => device.identity?.devid, () => {
+  if (board.value) load(board.value);
+  else {
+    frequency.value = "";
+    power.value = null;
+    lbt.value = 1;
+    lastResult.value = null;
+  }
 }, { immediate: true });
 
 async function apply() {
-  if (!cfg.value || busy.value) return;
+  if (!cfg.value || onBoard.value || blocked.value) return;
+  if (!window.confirm("Apply these radio settings to the connected board?")) return;
+  await save(cfg.value);
+}
+
+async function restoreDefaults() {
+  if (defaultDisabled.value) return;
+  if (!window.confirm("Restore default radio settings on the connected board?\n922.900 MHz · 12 dBm · Listen Before Talk On\nThese settings will be saved and applied immediately.")) return;
+  load(RADIO_DEFAULT_CONFIG);
+  if (!isDefault(board.value)) await save(RADIO_DEFAULT_CONFIG);
+}
+
+async function save(config) {
   busy.value = true;
   lastResult.value = null;
   try {
-    const result = await device.configureRadio(cfg.value);
+    const result = await device.configureRadio(config);
     lastResult.value = result;
     if (result === "ok") notyf.success(resultText.value);
     else notyf.error(resultText.value);
@@ -72,123 +96,102 @@ async function apply() {
 </script>
 
 <template>
-  <div class="card">
-    <div class="card-header"><h3>📻 Radio</h3></div>
-    <div class="card-body">
-      <ol class="help">
-        <li>Connect a board over USB, press Apply.</li>
-        <li>Repeat for every master and sensor: boards on another frequency never hear each other.</li>
-      </ol>
-
-      <div class="fields">
-        <label class="field">
-          <span>Frequency</span>
-          <input v-model="freq" class="form-input mono freq" type="text" inputmode="decimal" spellcheck="false" placeholder="922.900" />
-          <span class="unit">MHz</span>
-        </label>
-        <label class="field">
-          <span>Output power</span>
-          <input v-model="power" class="form-input mono power" type="text" inputmode="numeric" spellcheck="false" placeholder="12" />
-          <span class="unit">dBm at the chip</span>
-        </label>
-        <label class="field opt"><input v-model="lbt" type="checkbox" /> Listen before talk (LBT)</label>
+  <section class="settings-section" aria-labelledby="radio-title">
+    <div class="section-heading">
+      <h4 id="radio-title">Radio</h4>
+    </div>
+    <div class="section-content">
+      <div class="radio-grid" role="group" aria-label="Radio Settings">
+        <div class="radio-column-labels" aria-hidden="true"><span>Setting</span><span>Saved Value</span><span>New Value</span></div>
+        <div class="radio-row">
+          <div class="setting-name"><label for="radio-frequency">Frequency</label><small id="frequency-range">{{ frequencyRange }}</small></div>
+          <div class="saved-value"><span class="mobile-label">Saved: </span><MetricValue class="frequency-current" :value="board ? (board.freqKhz / 1000).toFixed(3) : '—'" unit="MHz" /></div>
+          <div>
+            <div class="frequency-input">
+              <input id="radio-frequency" v-model="frequency" class="form-input mono freq" type="text" inputmode="decimal" aria-label="Frequency" aria-describedby="frequency-range frequency-error" :aria-invalid="frequency !== '' && frequencyKhz == null" />
+              <span class="unit">MHz</span>
+            </div>
+            <small v-if="frequency !== '' && frequencyKhz == null" id="frequency-error" class="bad">Enter {{ frequencyRange }}, up to 3 decimal places.</small>
+          </div>
+        </div>
+        <div class="radio-row">
+          <div class="setting-name"><label for="radio-power">Output Power</label><small id="power-range">{{ RADIO_POWER_MIN_DBM }} ~ {{ RADIO_POWER_MAX_DBM }} dBm</small></div>
+          <div class="saved-value"><span class="mobile-label">Saved: </span><MetricValue class="power-current" :value="board?.powerDbm" unit="dBm" /></div>
+          <div class="power-input">
+            <select id="radio-power" aria-describedby="power-range power-unit" v-model="power" class="form-select power">
+              <option :value="null" disabled>Select</option>
+              <option v-for="dbm in powerOptions" :key="dbm" :value="dbm">{{ dbm }}</option>
+            </select>
+            <span id="power-unit" class="unit">dBm</span>
+          </div>
+        </div>
+        <div class="radio-row">
+          <div class="setting-name"><label for="radio-lbt">Listen Before Talk</label><small>5 ms / Scan</small></div>
+          <div class="saved-value"><span class="mobile-label">Saved: </span><MetricValue class="lbt-current" :value="board ? (board.lbt ? 'On' : 'Off') : '—'" /></div>
+          <select id="radio-lbt" v-model="lbt" class="form-select lbt">
+            <option :value="1">On</option>
+            <option :value="0">Off</option>
+          </select>
+        </div>
+        <div class="radio-row fixed-radio-row">
+          <div class="setting-name">Spreading Factor<small title="SX1262 Supported Range">SF5 ~ SF12</small></div>
+          <div class="saved-value"><span class="mobile-label">Saved: </span><MetricValue :value="device.identity ? `SF${device.identity.sf}` : '—'" /></div>
+          <div class="fixed-value" title="Fixed in Firmware">Fixed</div>
+        </div>
+        <div class="radio-row fixed-radio-row">
+          <div class="setting-name">Bandwidth<small title="SX1262 Supported Steps: 7.81, 10.42, 15.63, 20.83, 31.25, 41.67, 62.5, 125, 250, 500 kHz">7.81 ~ 500 kHz</small></div>
+          <div class="saved-value"><span class="mobile-label">Saved: </span><MetricValue :value="device.identity?.bw" unit="kHz" /></div>
+          <div class="fixed-value" title="Fixed in Firmware">Fixed</div>
+        </div>
       </div>
-      <div class="meta">
-        <span v-if="(freq || power) && !cfg" class="bad">
-          Frequency {{ RADIO_FREQ_MIN_KHZ / 1000 }}–{{ RADIO_FREQ_MAX_KHZ / 1000 }} MHz (1 kHz steps), power {{ RADIO_POWER_MIN_DBM }} to {{ RADIO_POWER_MAX_DBM }} dBm
-        </span>
-      </div>
-      <div class="board">
-        Stored on this board: <span class="mono">{{ boardText }}</span>
-        <span v-if="onBoard" class="ok">✓ stored values match</span>
-      </div>
-
-      <div class="btn-row">
-        <button class="btn btn-primary btn-sm" type="button" :disabled="!board" @click="load(board)">Load from board</button>
-        <button class="btn btn-success btn-sm send" type="button" :disabled="!cfg || !device.connected || busy || timing.armed" @click="apply">
-          {{ busy ? "Applying…" : "Apply to connected board" }}
-        </button>
+      <div class="section-actions radio-actions">
+        <span v-if="lastResult" class="action-result" :class="lastResult === 'ok' ? 'ok' : 'bad'" role="status">{{ resultText }}</span>
+        <div class="apply-group">
+          <div v-if="board && cfg && !onBoard" class="config-status" aria-live="polite">
+            <span class="unsaved">Unsaved Changes</span>
+          </div>
+          <button class="btn btn-ghost btn-sm restore-defaults" type="button" :disabled="defaultDisabled" @click="restoreDefaults">Default</button>
+          <button class="btn btn-success btn-sm send" type="button" :disabled="!cfg || onBoard || blocked" @click="apply">
+            {{ busy ? "Applying…" : "Apply" }}
+          </button>
+        </div>
       </div>
       <p v-if="timing.armed" class="hint">Stop the run to change the radio.</p>
-
-      <div v-if="lastResult" class="result" :class="lastResult === 'ok' ? 'ok' : 'bad'">
-        {{ resultText }}
-      </div>
     </div>
-  </div>
+  </section>
 </template>
 
 <style scoped>
-.help {
-  font-size: 0.85rem;
-  color: var(--text-secondary);
-  padding-left: 1.1rem;
-  margin-bottom: 0.9rem;
-}
-.fields {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.75rem 1.25rem;
+.radio-row, .radio-column-labels {
+  display: grid;
+  grid-template-columns: minmax(105px, 1fr) minmax(110px, 1fr) minmax(220px, 1.4fr);
+  gap: 0.75rem;
   align-items: center;
 }
-.field {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  font-size: 0.9rem;
-}
-.freq {
-  width: 7.5rem;
-}
-.power {
-  width: 4rem;
-}
-.unit {
-  color: var(--text-secondary);
-  font-size: 0.85rem;
-}
-.meta {
-  margin: 0.3rem 0 0.5rem;
-  font-size: 0.8rem;
-  min-height: 1rem;
-}
-.board {
-  font-size: 0.85rem;
-  color: var(--text-secondary);
-  margin-bottom: 0.7rem;
-}
-.btn-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-}
-.send {
-  margin-left: auto;
-}
-.hint {
-  margin-top: 0.5rem;
-  font-size: 0.8rem;
-  color: var(--text-secondary);
-}
-.result {
-  margin-top: 0.75rem;
-  padding: 0.5rem 0.75rem;
-  border-radius: 8px;
-  font-size: 0.85rem;
-  font-weight: 600;
-}
-.result.ok {
-  background: rgba(16, 185, 129, 0.15);
-  color: var(--accent-success);
-}
-.result.bad {
-  background: rgba(239, 68, 68, 0.15);
-  color: var(--accent-danger);
-}
-.ok {
-  color: var(--accent-success);
-}
-.bad {
-  color: var(--accent-danger);
+.radio-column-labels { color: var(--text-primary); background: var(--bg-secondary); font-size: 0.875rem; font-weight: 600; padding: 0.65rem 0; }
+.fixed-value { font-size: 0.85rem; color: var(--text-secondary); }
+.radio-row { min-height: 4.5rem; box-sizing: border-box; padding: 0.75rem 0; border-top: 1px solid var(--border-color); }
+.setting-name { font-size: 0.85rem; }
+.saved-value { font-size: 0.95rem; color: var(--text-primary); overflow-wrap: anywhere; }
+.mobile-label { display: none; }
+.setting-name small { display: block; margin-top: 0.3rem; color: var(--text-tertiary); font-size: 0.75rem; font-weight: 400; }
+.frequency-input, .power-input { display: flex; align-items: center; gap: 0.5rem; }
+.freq, .power { min-width: 0; }
+#frequency-error { display: block; margin-top: 0.35rem; font-size: 0.75rem; }
+.unit { color: var(--text-secondary); font-size: 0.8rem; }
+.config-status { min-width: 0; text-align: right; color: var(--text-secondary); font-size: 0.8rem; }
+.radio-actions { flex-wrap: nowrap; }
+.send { flex-shrink: 0; }
+.hint { margin-top: 0.5rem; font-size: 0.8rem; color: var(--text-secondary); }
+.ok { color: var(--accent-success); }
+.unsaved { color: var(--accent-warning); }
+.bad { color: var(--accent-danger); }
+@media (max-width: 600px) {
+  .radio-column-labels { display: none; }
+  .radio-row { grid-template-columns: minmax(0, 1fr); gap: 0.5rem; padding: 1rem 0; }
+  .radio-row:first-of-type { border-top: 0; }
+  .mobile-label { display: inline; }
+  .setting-name { font-weight: 600; }
+  .saved-value { font-size: 0.8rem; }
 }
 </style>

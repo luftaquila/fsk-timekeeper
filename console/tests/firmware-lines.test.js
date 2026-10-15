@@ -1,4 +1,4 @@
-// The USB v4 contract on both sides: device/firmware/tests/usb_lines.txt holds lines printed
+// The USB v5 contract on both sides: device/firmware/tests/usb_lines.txt holds lines printed
 // by the firmware's own formatters with extreme values (`make test` checks the file against
 // them), and the console parses the same file.
 import { describe, it } from "vitest";
@@ -12,10 +12,10 @@ const LINES = readFileSync(resolve(__dirname, "../../device/firmware/tests/usb_l
 describe("firmware-formatted lines", () => {
   it("I: the contract accepts a master and names a sensor-role board", () => {
     const m = parseLine(LINES[0]);
-    assert.equal(m.usbProto, 4);
+    assert.equal(m.usbProto, 5);
     assert.deepEqual(radioOf(m), { freqKhz: 922900, powerDbm: 12, lbt: 1 });
     assert.deepEqual(radioOf(parseLine(LINES[1])), { freqKhz: 803000, powerDbm: -9, lbt: 0 });
-    assert.equal(m.radioProto, 13);
+    assert.equal(m.radioProto, 14);
     assert.equal(m.devid, "0123ABCD89EF4567");
     assert.equal(m.role, "M");
     assert.equal(m.ticksPerMs, 16000);
@@ -41,6 +41,10 @@ describe("firmware-formatted lines", () => {
     assert.equal(unknown.rows[0].end_seq, 3);
     assert.equal(parseEventLine(LINES[5]).rows[0].end_tick, "9000");
     assert.equal(parseEventLine(LINES[6]).rows[0].kind, "checkpoint");
+    assert.deepEqual(parseEventLine(LINES[6]).rows[0].radio_history, {
+      faults: [65535, 65535, 65535, 65535, 65535, 65535],
+      recovery: { count: 65535, failures: 123, reason: 2, result: 2 },
+    });
     const end = parseEventLine(LINES[7]);
     assert.equal(end.stage, "valid");
     assert.equal(end.node, "0");
@@ -56,7 +60,7 @@ describe("firmware-formatted lines", () => {
     assert.equal(s.sync_valid, 1);
     assert.equal(s.skew_valid, 0);
     assert.equal(s.fifo_drop, 2);
-    assert.deepEqual(errorNames(s.err_flags), ["radio reset", "ACK anomaly"]);
+    assert.deepEqual(errorNames(s.err_flags), ["ACK anomaly"]);
     assert.equal(s.reset_reason, 64);
     assert.equal(s.sensor_boot_id, "9007199254740993");
     const m = normalizeTelemetry(parseLine(LINES[9]).telemetry, 1000);

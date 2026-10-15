@@ -51,7 +51,7 @@ function onTarget(e) {
       </div>
 
       <div v-if="mode === 'laps'" class="form-group">
-        <label class="form-label">Auto-stop after N laps</label>
+        <label class="form-label">Auto-Stop After N Laps</label>
         <input type="text" inputmode="numeric" class="form-input lap-target" :value="settings.state.lapTarget ?? ''" placeholder="off" :disabled="timing.armed" @input="digitsOnly" @change="onTarget" />
       </div>
 

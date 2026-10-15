@@ -1,20 +1,23 @@
-/* FSK-WL USB line protocol v4 (newline-delimited ASCII, one space between tokens).
+/* FSK-WL USB line protocol v5 (newline-delimited ASCII, one space between tokens).
  *
  * Master -> host:
  *   I FSK-WL <usb_proto> <fw> <devid16> <M|S> <radio_proto> <freq_khz> <sf> <bw> <ticks_per_ms> <reset_reason>
  *     <power_dbm> <lbt>
  *   H <now_tick> <uptime_ms> <beacon_seq> <nseen>
  *   E <hseq> <node> <C|L|K> <ev_seq> <flags> <master_boot_id> <sensor_boot_id> <sync_age_ms> <rssi> <snr>
- *     <capture_seq> <payload...> <crc>   C: <count> <tick>...  L: <end_seq> <tick> <end_tick>  K: <tick>
+ *     <capture_seq> <payload...> <crc>   C: <count> <tick>...  L: <end_seq> <tick> <end_tick>  K: <tick> <cad_count> <spi_count> <tx_count> <rx_count> <clock_count> <init_count>
+ *       <recovery_count> <recovery_failures> <recovery_reason> <recovery_result>
  *   D <node> <OK|STALE|LOST> <skew_ppm> <rx_miss> <beacon_gap> <last_seen_ms> <rssi> <snr> <lat_ms>
  *     <temp_c10> <batt_mv> <sec_drop> <provisioned> <sync_valid> <skew_valid> <XTAL|RC> <sync_age_ms>
  *     <capture_overflow> <fifo_drop> <queue_depth> <queue_overflow> <err_flags> <ver_drop> <tx_drop>
- *     <reset_reason> <sensor_boot_id> <master_boot_id>
+ *     <reset_reason> <sensor_boot_id> <master_boot_id> <recovery_count> <recovery_failures> <recovery_reason> <recovery_result>
+ *     D recovery fields are master-only; sensor D uses four zeroes (history is in E K).
  *   T <request_id> <tick> <master_boot_id>
  *   P <pps_tick> <utc_s|0> <ppb> <pps_valid> <fix> <sats> <span_s> <seg> <n>
+ *   K <64hex|NONE> (USB key readback)
  *   A <cmd> OK
  *   X <code> [args...]
- * Host -> master: ?ID ?STATUS PING CP K <64hex> T <32hex> C <hseq> <master_boot_id> <crc>
+ * Host -> master: ?ID ?STATUS ?KEY PING CP K <64hex> T <32hex> C <hseq> <master_boot_id> <crc>
  *   R <freq_khz> <power_dbm> <0|1>   (store/apply: I, then A R OK; X cfgapply/cfgpending if not running)
  *
  * 64-bit ticks stay decimal strings (BigInt on use). Node "0" is the master; sensors are
@@ -25,14 +28,16 @@ import { USB_PRODUCT } from "./constants";
 import { MASTER_TICKS_PER_MS } from "./event-timing";
 
 export const NODE_MASTER = "0";
-export const RADIO_PROTO_VERSION = 13;
-export const USB_PROTO_VERSION = 4;
+export const RADIO_PROTO_VERSION = 14;
+export const USB_PROTO_VERSION = 5;
 
 // What the Ra-01SH is rated for (firmware config.h); the board stores what R sends.
 export const RADIO_FREQ_MIN_KHZ = 803000;
 export const RADIO_FREQ_MAX_KHZ = 930000;
 export const RADIO_POWER_MIN_DBM = -9;
 export const RADIO_POWER_MAX_DBM = 22;
+// Keep aligned with RADIO_DEF_* in device/firmware/src/config.h.
+export const RADIO_DEFAULT_CONFIG = Object.freeze({ freqKhz: 922900, powerDbm: 12, lbt: 1 });
 
 export const FLAG_SYNC = 0x01;
 export const FLAG_SKEW = 0x02;
@@ -51,7 +56,7 @@ export const LINK_STALE_MS = 17000;
 export const RESET_BITS = Object.freeze({ PIN: 0x01, DOG: 0x02, SREQ: 0x04, LOCKUP: 0x08, OFF: 0x10, VBUS: 0x20, FAULT: 0x40, OTHER: 0x80 });
 const RESET_LABEL = { PIN: "reset pin", DOG: "watchdog", SREQ: "soft reset", LOCKUP: "CPU lockup", OFF: "wake from off", VBUS: "USB wake", FAULT: "fault reboot", OTHER: "other" };
 
-// Sticky per-boot error flags (D line err_flags).
+// Active radio faults and sticky non-radio error flags (D line err_flags).
 export const ERROR_BITS = Object.freeze({
   RADIO_RESET: 0x0001,
   CAD_TIMEOUT: 0x0002,
@@ -65,6 +70,8 @@ export const ERROR_BITS = Object.freeze({
   USB_DROP: 0x0200,
   ACK: 0x0400,
   ID_COLLISION: 0x0800,
+  RADIO_CLOCK: 0x1000,
+  RADIO_INIT: 0x2000,
 });
 const ERROR_LABEL = {
   RADIO_RESET: "radio reset",
@@ -79,13 +86,31 @@ const ERROR_LABEL = {
   USB_DROP: "USB line dropped",
   ACK: "ACK anomaly",
   ID_COLLISION: "sensor id collision",
+  RADIO_CLOCK: "radio oscillator / PLL failure",
+  RADIO_INIT: "radio initialization failure",
 };
 
 export function errorNames(flags) {
   if (!Number.isInteger(flags)) return [];
   return Object.entries(ERROR_BITS)
-    .filter(([, bit]) => flags & bit)
+    .filter(([name, bit]) => name !== "RADIO_RESET" && (flags & bit))
     .map(([name]) => ERROR_LABEL[name]);
+}
+
+export const RADIO_FAULT_MASK = ERROR_BITS.CAD_TIMEOUT | ERROR_BITS.SPI_TIMEOUT |
+  ERROR_BITS.TX_FAIL | ERROR_BITS.RX_FAIL | ERROR_BITS.RADIO_CLOCK | ERROR_BITS.RADIO_INIT;
+export const RADIO_HISTORY_LABELS = ["CAD failures", "SPI timeouts", "TX failures", "RX failures", "oscillator / PLL failures", "initialization failures"];
+export const RADIO_RECOVERY_REASONS = ["none", "startup retry", "no master beacon for 10 s",
+  "SPI timeout", "CAD failure", "oscillator / PLL failure", "RX failure", "initialization failure", "TX failure"];
+export const RADIO_RECOVERY_RESULTS = ["none", "pending", "receiver restarted", "failed"];
+
+function normalizeRadioRecovery(r) {
+  if (!r || !Number.isInteger(r.count) || r.count < 0 || r.count > 65535 ||
+      !Number.isInteger(r.failures) || r.failures < 0 || r.failures > r.count ||
+      !Number.isInteger(r.reason) || r.reason < 0 || r.reason >= RADIO_RECOVERY_REASONS.length ||
+      !Number.isInteger(r.result) || r.result < 0 || r.result >= RADIO_RECOVERY_RESULTS.length) return null;
+  if (r.count === 0 ? r.failures !== 0 || r.reason !== 0 || r.result !== 0 : r.reason === 0 || r.result === 0) return null;
+  return { count: r.count, failures: r.failures, reason: r.reason, result: r.result };
 }
 
 export function resetNames(reason) {
@@ -152,10 +177,14 @@ export function parseLine(line) {
   const t = text.split(/\s+/);
   if (!t[0]) return null;
   switch (t[0]) {
+    case "K":
+      return { type: "K", key: t.length === 2 ? (t[1] === "NONE" ? "" : isHexKey(t[1]) ? t[1].toLowerCase() : null) : null };
     case "E":
       return { type: "E", raw: text };
-    case "D":
-      if (t.length !== 28) return { type: "D", telemetry: null };
+    case "D": {
+      if (t.length !== 32 || !t.slice(28).every((v) => /^\d+$/.test(v))) return { type: "D", telemetry: null };
+      const recovery = normalizeRadioRecovery({ count: num(t[28]), failures: num(t[29]), reason: num(t[30]), result: num(t[31]) });
+      if (!recovery) return { type: "D", telemetry: null };
       return {
         type: "D",
         telemetry: {
@@ -186,8 +215,10 @@ export function parseLine(line) {
           reset_reason: num(t[25]),
           sensor_boot_id: bootIdText(t[26]),
           master_boot_id: bootIdText(t[27]),
+          recovery,
         },
       };
+    }
     case "H":
       return { type: "H", nowTick: t[1], uptimeMs: num(t[2]), beaconSeq: num(t[3]), nseen: num(t[4]) };
     case "T":
@@ -323,8 +354,13 @@ export function parseEventLine(raw) {
     rows = [{ ...base, kind: "loss", capture_seq: captureSeq, end_seq: endSeq, master_tick: tick, end_tick: endTick }];
   } else {
     const tick = tickOf(payload[0]);
-    if (payload.length !== 1 || tick == null) return invalid("checkpoint payload");
-    rows = [{ ...base, kind: "checkpoint", capture_seq: captureSeq, end_seq: captureSeq, master_tick: tick, end_tick: tick }];
+    if (payload.length !== 11 || tick == null) return invalid("checkpoint payload");
+    const faults = payload.slice(1, 7).map((v) => uint(v, 65535));
+    const values = payload.slice(7).map((v) => uint(v, 65535));
+    const recovery = normalizeRadioRecovery({ count: values[0], failures: values[1], reason: values[2], result: values[3] });
+    if (faults.includes(null) || !recovery) return invalid("checkpoint history");
+    rows = [{ ...base, kind: "checkpoint", capture_seq: captureSeq, end_seq: captureSeq, master_tick: tick, end_tick: tick,
+      radio_history: { faults, recovery } }];
   }
   if (node === NODE_MASTER && (kind !== "L" || evSeq !== 0 || flags !== 0 || captureSeq !== 0 || rows[0].end_seq !== 0)) return invalid("master record");
   return { stage: "valid", raw: line, hseq, crc, masterBootId, node, kind, rows };
@@ -379,6 +415,7 @@ export function normalizeTelemetry(t, now = Date.now()) {
     master_boot_id: bootIdText(t.master_boot_id),
     last_seen_at: heardAgeMs === null ? null : now - heardAgeMs,
     received_at: now,
+    recovery: normalizeRadioRecovery(t.recovery),
   };
 }
 

@@ -26,6 +26,8 @@ if (!globalThis.localStorage) {
   };
 }
 
+const { crc32Hex } = await import("../src/lib/crc32.js");
+const deviceLog = await import("../src/lib/deviceLog.js");
 const eventLog = await import("../src/lib/eventLog.js");
 const { fakeDefaults } = await import("../src/transport/fake.js");
 const { useDeviceStore } = await import("../src/stores/device.js");
@@ -82,12 +84,167 @@ async function mapSprint(device, settings) {
 }
 
 describe("pipeline with the fake master", () => {
+  it("persists checkpoint history even when a transient cleared before telemetry, and deduplicates replay/reload", async () => {
+    const { device } = await boot();
+    const identity = "I FSK-WL 5 1.0.0 0123456789ABCDEF M 14 922900 7 250.00 16000 0 12 1";
+    await device.handleLine(identity);
+    const diag = (flags, boot = "7001") =>
+      `D 0250FEB2 OK 0 0 0 0 -60.00 8.00 0 300 4000 0 1 1 1 XTAL 100 0 0 0 0 ${flags} 0 0 0 ${boot} 8001 0 0 0 0`;
+    const checkpoint = (hseq, evSeq, counters = "0 2 0 0 0 1", recovery = "3 1 3 2", boot = "7001", node = "0250FEB2") => {
+      const body = `E ${hseq} ${node} K ${evSeq} 7 8001 ${boot} 100 -60.00 8.00 0 ${1000 + hseq} ${counters} ${recovery}`;
+      return `${body} ${crc32Hex(body)}`;
+    };
+    const history = (store = device) => store.logEntries.filter((e) => e.code === "radio_history");
+    // The only live report is already healthy: history must come from the sensor, not D transitions.
+    await device.handleLine(diag(0));
+    const first = checkpoint(1, 1);
+    await Promise.all([device.handleLine(first), device.handleLine(first)]);
+    assert.equal(history().length, 1);
+    assert.match(history()[0].text, /SPI timeouts: 2 since boot/);
+    assert.match(history()[0].text, /reinitializations: 3, failed: 1.*receiver restarted/);
+    assert.equal(history()[0].nodeBootId, "7001");
+    assert.deepEqual(eventLog.since(0).find((r) => r.hseq === 1).radio_history.faults, [0, 2, 0, 0, 0, 1]);
+    assert.equal(device.telemetry["0250FEB2"].err_flags, 0);
+    await device.handleLine(checkpoint(2, 2)); // identical cumulative summary, new checkpoint
+    assert.equal(history().length, 1);
+    await Promise.all([device.handleLine(diag(0x2004)), device.handleLine(diag(0x2004))]);
+    assert.equal(device.logEntries.filter((e) => e.code === "radio_fault").length, 1);
+    await device.handleLine(diag(0));
+    assert.equal(device.logEntries.filter((e) => e.code === "radio_restored").length, 1);
+    // Reload from the actual database, not just the in-memory store.
+    eventLog._reset();
+    await eventLog.init();
+    setActivePinia(createPinia());
+    const reloaded = useDeviceStore();
+    await reloaded.loadLog();
+    await reloaded.handleLine(identity);
+    await reloaded.handleLine(first);
+    await reloaded.handleLine(diag(0));
+    assert.equal(history(reloaded).length, 1);
+    await reloaded.handleLine(checkpoint(3, 3, "0 65535 0 0 0 1", "65535 1 3 2"));
+    assert.match(history(reloaded)[0].text, /65535\+/);
+    await reloaded.handleLine(checkpoint(4, 1, "0 1 0 0 0 0", "1 0 2 2", "7002"));
+    await reloaded.handleLine(checkpoint(5, 1, "0 1 0 0 0 0", "1 0 2 2", "7001", "0250FEB3"));
+    assert.equal(history(reloaded).length, 4); // reboot and another sensor have independent histories
+    // Recovery after a crash between event storage and display-log creation.
+    await deviceLog.clearEntries();
+    setActivePinia(createPinia());
+    const rebuilt = useDeviceStore();
+    await rebuilt.loadLog();
+    assert.equal(history(rebuilt).length, 4);
+    await rebuilt.clearLog();
+    await rebuilt.loadLog();
+    assert.equal(rebuilt.logEntries.length, 0); // intentional clear is not crash recovery
+    setActivePinia(createPinia());
+    const afterClear = useDeviceStore();
+    await afterClear.loadLog();
+    assert.equal(afterClear.logEntries.length, 0);
+  });
+
+  it("stores checkpoint history before ACK, including a long gap between reports", async () => {
+    const { device } = await boot();
+    const fake = await connectFake(device);
+    const [node] = fake.sensors.keys();
+    const sensor = fake.sensors.get(node);
+    const write = fake.write;
+    let checked = false;
+    const spy = vi.spyOn(fake, "write").mockImplementation(async (line) => {
+      const checkpoint = eventLog.since(0).find((r) => r.node_id === node && r.radio_history?.faults[1] === 7);
+      if (line.startsWith("C ") && checkpoint && Number(line.split(" ")[1]) === checkpoint.hseq) {
+        const logs = await deviceLog.listEntries();
+        assert.ok(logs.some((e) => e.nodeId === node && e.code === "radio_history" && e.historySnapshot.faults[1] === 7));
+        checked = true;
+      }
+      return write(line);
+    });
+    try {
+      sensor.evSeq += 40000; // more than half the 16-bit sequence space while disconnected
+      sensor.faultCounts = [0, 7, 0, 0, 0, 0];
+      sensor.recovery = { count: 1, failures: 0, reason: 3, result: 2 };
+      fake.checkpoint(node, { immediate: true });
+      await waitFor(() => checked);
+      assert.ok(device.logEntries.some((e) => e.nodeId === node && /SPI timeouts: 7/.test(e.text)));
+    } finally {
+      spy.mockRestore();
+      await device.disconnect();
+    }
+  });
+
   beforeEach(async () => {
     toasts.success.length = toasts.error.length = toasts.warning.length = 0;
     await new Promise((resolve) => {
       const req = indexedDB.deleteDatabase(eventLog.DB_NAME);
       req.onsuccess = req.onerror = req.onblocked = () => resolve();
     });
+  });
+
+  it("preserves rejected startup lines after the serial console evicts them", async () => {
+    const { device } = await boot();
+    const first = "broken startup fragment";
+    await device.handleLine(first);
+    assert.equal(device.dropped.reasons.unknown_line, 1);
+    assert.ok(device.logEntries.some((e) => e.code === "unknown_line" && e.text === first));
+    await device.handleLine("I FSK-WL 5 1.0.0 0123456789ABCDEF M 14 922900 7 250.00 16000 0 12 1");
+    for (const line of ["D malformed", "P malformed", "E malformed"]) await device.handleLine(line);
+    await waitFor(() => ["tel_format", "pps", "event_unreadable"].every((code) => device.logEntries.some((e) => e.code === code)));
+    const secret = "ab".repeat(32);
+    await device.handleLine(secret); // a bare key fragment must not leak into either log
+    for (let i = 0; i < 310; i++) await device.handleLine("A PING OK");
+    assert.equal(device.consoleLines.length, 300);
+    assert.ok(!device.consoleLines.some((e) => e.text === first));
+    await device.loadLog();
+    assert.ok(device.logEntries.some((e) => e.code === "unknown_line" && e.text === first));
+    assert.ok(!JSON.stringify(await device.exportLog()).includes(secret));
+    assert.ok(device.logEntries.some((e) => e.code === "unknown_line" && e.text === "****"));
+  });
+
+  it("loads keys per connection, redacts logs, and handles missing/old/invalid replies", { timeout: 10000 }, async () => {
+    const { device } = await boot();
+    const fake = await connectFake(device);
+    const initial = "0123456789abcdef".repeat(4);
+    const replacement = "ab".repeat(32);
+    try {
+      assert.equal(device.radioKey, initial);
+      assert.equal(device.keyReadState, "ready");
+      assert.equal(await device.provisionKey(replacement), "ok");
+      assert.equal(device.radioKey, replacement);
+      device.readRadioKey();
+      await waitFor(() => device.keyReadState === "ready");
+      assert.equal(device.radioKey, replacement);
+      assert.ok(device.consoleLines.some((line) => line.dir === "rx" && line.text === "K ****"));
+      assert.ok(!JSON.stringify(device.consoleLines).includes(replacement));
+      assert.ok(!JSON.stringify(device.logEntries).includes(replacement));
+      fake.setProvisioned(false);
+      device.readRadioKey();
+      await waitFor(() => device.keyReadState === "empty");
+      assert.equal(device.radioKey, "");
+      const write = fake.write;
+      const spy = vi.spyOn(fake, "write");
+      for (const [reply, state] of [["X badcmd", "unsupported"], ["K broken", "invalid"]]) {
+        spy.mockImplementation(async (line) => {
+          if (line === "?KEY") { await device.handleLine(reply); return true; }
+          return write(line);
+        });
+        device.readRadioKey();
+        await waitFor(() => device.keyReadState === state);
+        assert.equal(device.radioKey, null);
+      }
+      spy.mockImplementation((line) => line === "?KEY" ? Promise.resolve(true) : write(line));
+      device.readRadioKey();
+      await assert.rejects(device.provisionKey(replacement), /Wait for the board settings/);
+      await waitFor(() => device.keyReadState === "timeout");
+      assert.equal(device.radioKey, null);
+      device.readRadioKey();
+      await device.disconnect();
+      assert.equal(device.radioKey, null);
+      assert.equal(device.keyReadState, "idle");
+      spy.mockRestore();
+      await connectFake(device);
+      assert.equal(device.radioKey, initial, "a new board does not inherit the previous board key");
+    } finally {
+      vi.restoreAllMocks();
+      await device.disconnect();
+    }
   });
 
   it("acks every event, decides a sprint on its two first crossings, freezes the calibration and records it", { timeout: 20000 }, async () => {
@@ -466,7 +623,7 @@ describe("pipeline with the fake master", () => {
   it("logs X lines and boot reasons, warns on ver_drop, and reports storage failure", { timeout: 20000 }, async () => {
     const { device, settings, timing, history } = await boot();
     const fake = await connectFake(device);
-    assert.ok(device.logEntries.some((e) => e.kind === "boot" && e.code === "power-on"));
+    assert.ok(device.logEntries.some((e) => e.kind === "boot" && e.code === "power_on"));
     fake.emitError("radio_reset", 3);
     await waitFor(() => device.logEntries.some((e) => e.kind === "X" && e.code === "radio_reset"));
     fake.setMasterDiag({ verDrop: 1 });

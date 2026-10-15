@@ -191,6 +191,7 @@ uplink_pl_t *sq_checkpoint(sensor_queue_t *q, uint64_t master_boot_id, uint32_t 
     if (!sq_idle(q)) { return NULL; }
     memset(&q->pkt, 0, sizeof(q->pkt));
     q->pkt.kind = UL_KIND_CHECKPOINT;
+    q->pkt.u.history = el_radio_history();
     q->pkt.flags = flags;
     q->pkt.master_boot_id = master_boot_id;
     q->pkt.capture_seq = seq;

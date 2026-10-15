@@ -1,4 +1,4 @@
-/* Development fake of the FSK-WL master, USB line protocol v4. Same interface as serial.js.
+/* Development fake of the FSK-WL master, USB line protocol v5. Same interface as serial.js.
  *
  * Each sensor keeps its records (captures, losses, checkpoints) in order; a record reaches the
  * master queue one slot delay after it was made, consecutive captures bundled up to 5 per E
@@ -36,6 +36,7 @@ export function createFakeTransport({ onLine, onDisconnect }) {
   let beaconSeq = 0;
   let hseq = 0;
   let provisioned = true;
+  let radioKey = "0123456789abcdef".repeat(4); // simulator key only
   let radio = { freqKhz: 922900, powerDbm: 12, lbt: 1 };
   let open = false;
   let queue = []; // { hseq, mboot, crc, line }
@@ -140,7 +141,7 @@ export function createFakeTransport({ onLine, onDisconnect }) {
     } else if (head.kind === "bad") {
       body = (h) => `${common(h, "Z", head.flags, head.seq)} 1 ${head.tick}`;
     } else {
-      body = (h) => `${common(h, "K", head.flags, head.seq)} ${head.tick}`;
+      body = (h) => `${common(h, "K", head.flags, head.seq)} ${head.tick} ${head.history.join(" ")}`;
     }
     if (!enqueue(body)) return; // host queue full: the sensor keeps the records (backpressure)
     s.records.splice(0, count);
@@ -158,14 +159,14 @@ export function createFakeTransport({ onLine, onDisconnect }) {
   function diagLine(node, s) {
     const age = Date.now() - s.lastUplinkAt;
     const state = age <= 12000 ? "OK" : age <= 17000 ? "STALE" : "LOST";
-    return `D ${node} ${state} 12 0 0 ${age} ${fmt(s.rssi)} ${fmt(s.snr)} 22 312 ${s.batt} 0 1 1 1 XTAL ${400 + Math.round(Math.random() * 600)} 0 0 0 0 0 0 0 0 ${s.boot} ${masterBoot}`;
+    return `D ${node} ${state} 12 0 0 ${age} ${fmt(s.rssi)} ${fmt(s.snr)} 22 312 ${s.batt} 0 1 1 1 XTAL ${400 + Math.round(Math.random() * 600)} 0 0 0 0 ${s.errFlags ?? 0} 0 0 0 ${s.boot} ${masterBoot} 0 0 0 0`;
   }
   function masterDiag() {
     const depth = queueDepthOverride ?? queue.length;
-    return `D 0 OK 0 0 0 0 0.00 0.00 0 305 4980 0 ${provisioned ? 1 : 0} 1 1 XTAL 0 0 0 ${depth} ${queueOverflow} ${errFlags} ${verDrop} ${txDrop} 0 0 ${masterBoot}`;
+    return `D 0 OK 0 0 0 0 0.00 0.00 0 305 4980 0 ${provisioned ? 1 : 0} 1 1 XTAL 0 0 0 ${depth} ${queueOverflow} ${errFlags} ${verDrop} ${txDrop} 0 0 ${masterBoot} 0 0 0 0`;
   }
   function identity() {
-    return `I FSK-WL ${proto.usb} 1.0.0 ${devid} ${role} ${proto.radio} ${radio.freqKhz} 7 250.00 ${proto.ticks} 0 ${radio.powerDbm} ${radio.lbt}`;
+    return `I FSK-WL ${proto.usb} v1.0.0 ${devid} ${role} ${proto.radio} ${radio.freqKhz} 7 250.00 ${proto.ticks} 0 ${radio.powerDbm} ${radio.lbt}`;
   }
   function heartbeat() {
     return `H ${nowTick()} ${Date.now() - t0} ${beaconSeq % 256} ${sensors.size}`;
@@ -203,7 +204,9 @@ export function createFakeTransport({ onLine, onDisconnect }) {
     if (!s) return;
     const at = nowTick();
     const tick = s.lastTick != null && s.lastTick >= at ? s.lastTick + TICKS_PER_MS : at;
-    push(s, { kind: "checkpoint", seq: s.captureSeq, tick, flags: HEALTHY }, immediate);
+    const r = s.recovery ?? {};
+    const history = [...(s.faultCounts ?? [0, 0, 0, 0, 0, 0]), r.count ?? 0, r.failures ?? 0, r.reason ?? 0, r.result ?? 0];
+    push(s, { kind: "checkpoint", seq: s.captureSeq, tick, flags: HEALTHY, history }, immediate);
   }
   function requestCheckpoint() {
     if (cpTimer || !open) return;
@@ -284,6 +287,9 @@ export function createFakeTransport({ onLine, onDisconnect }) {
         if (pps.last) emit(ppsLine(pps.last));
         emit("A STATUS OK");
         break;
+      case "?KEY":
+        emit(`K ${provisioned ? radioKey : "NONE"}`);
+        break;
       case "PING":
         emit("A PING OK");
         break;
@@ -298,6 +304,7 @@ export function createFakeTransport({ onLine, onDisconnect }) {
       case "K":
         if (/^[0-9a-fA-F]{64}$/.test(t[1] || "")) {
           provisioned = true;
+          radioKey = t[1].toLowerCase();
           emit("A K OK");
         } else emit("X keyfail");
         break;

@@ -8,7 +8,7 @@ const OLD_KEYS = ["tk.settings.v1", "tk.runs.v1", "tk.fleetKey.v1"];
 
 function defaults() {
   return {
-    mapping: {}, // NODE8HEX -> { role, note, enabled }
+    mapping: {}, // NODE8HEX -> { role, note }; unused excludes a sensor from timing
     mode: "sprint",
     lapTarget: null,
     lastNote: "",
@@ -31,7 +31,8 @@ function load() {
       if (saved.mapping && typeof saved.mapping === "object") {
         for (const [node, m] of Object.entries(saved.mapping)) {
           if (!validateNodeId(node) || !m || !ROLES.includes(m.role)) continue;
-          base.mapping[node.toUpperCase()] = { role: m.role, note: typeof m.note === "string" ? m.note : "", enabled: m.enabled !== false };
+          // Preserve notes while migrating the former Enabled checkbox.
+          base.mapping[node.toUpperCase()] = { role: m.enabled === false ? "unused" : m.role, note: typeof m.note === "string" ? m.note : "" };
         }
       }
       if (MODES.includes(saved.mode)) base.mode = saved.mode;
@@ -66,10 +67,10 @@ export const useSettingsStore = defineStore("settings", () => {
       .sort((a, b) => a.node_id.localeCompare(b.node_id)),
   );
 
-  // Enabled sensors whose role the mode uses; other roles are ignored by that mode.
+  // Only roles used by the mode participate; unused sensors stay in the mapping.
   function mappingsFor(mode) {
     const roles = REQUIRED_ROLES[mode] || [];
-    return mappingList.value.filter((m) => m.enabled && roles.includes(m.role));
+    return mappingList.value.filter((m) => roles.includes(m.role));
   }
 
   function mappingOf(node) {
@@ -78,11 +79,11 @@ export const useSettingsStore = defineStore("settings", () => {
     return m ? { node_id: id, ...m } : null;
   }
 
-  function setMapping(node, { role, note = "", enabled = true }) {
+  function setMapping(node, { role, note = "" }) {
     const id = String(node).toUpperCase();
     if (!validateNodeId(id) || id === "0") throw new Error("Invalid node id.");
     if (!ROLES.includes(role)) throw new Error("Invalid role.");
-    state.mapping[id] = { role, note: String(note ?? ""), enabled: !!enabled };
+    state.mapping[id] = { role, note: String(note ?? "") };
   }
 
   function removeMapping(node) {

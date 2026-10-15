@@ -1,4 +1,4 @@
-/* Sealed LoRa packet formats, radio protocol v13 (DESIGN §2.6, §2.8, §2.11).
+/* Sealed LoRa packet formats, radio protocol v14 (DESIGN §2.6, §2.8, §2.11).
  *
  * Wire = [cleartext header | ciphertext payload | 16-byte Poly1305 tag]
  * (secure.h). The type byte carries PROTO_VER in its high nibble, so every
@@ -13,13 +13,14 @@
 
 #include <assert.h>
 #include <stdint.h>
+#include "radio_health.h"
 
 /* Low nibble of the type byte. */
 #define PKT_TYPE_BEACON   0x01u
 #define PKT_TYPE_UPLINK   0x02u
 
-/* v13: full slot identities and 64-bit boot ids. */
-#define PROTO_VER 13u
+/* v14: active radio faults; cumulative history in the existing checkpoint union. */
+#define PROTO_VER 14u
 
 #define SEC_VT(ver, type) ((uint8_t)(((uint8_t)(ver) << 4) | ((uint8_t)(type) & 0x0Fu)))
 #define SEC_VT_TYPE(b)    ((uint8_t)((b) & 0x0Fu))
@@ -77,7 +78,7 @@ typedef struct __attribute__((packed)) {
     int16_t  temp_c10;         /* die temperature, 0.1 C */
     uint16_t capture_overflow; /* lost/ambiguous hardware captures since boot */
     uint16_t fifo_drop;        /* records discarded (session change) since boot */
-    uint16_t err_flags;        /* ERR_* (proto_usb.h), sticky per boot */
+    uint16_t err_flags;        /* active radio faults; non-radio bits sticky per boot */
     uint8_t  reset_reason;     /* RESET_* (proto_usb.h) */
 } ul_diag_t;
 
@@ -90,6 +91,7 @@ typedef struct __attribute__((packed)) {
     uint64_t tick;           /* master time */
     uint16_t sync_age_ms;    /* anchor age when the first record was stamped */
     union __attribute__((packed)) {
+        radio_history_t history; /* CHECKPOINT only; frozen until acknowledged */
         struct __attribute__((packed)) {
             uint8_t  count;                   /* 1..UL_EDGES_MAX */
             uint32_t dt[UL_EDGES_MAX - 1];    /* tick deltas of edges 2..count */
@@ -115,6 +117,7 @@ typedef struct __attribute__((packed)) {
 #define WIRE_UPLINK   SEC_WIRE_LEN(SEC_HDR_UL, sizeof(uplink_pl_t))  /* 94 B, ~82 ms */
 #define WIRE_MAX      128 /* RX buffer size */
 
+static_assert(sizeof(radio_history_t) == 17, "checkpoint history layout");
 static_assert(sizeof(beacon_pl_t) == 81, "beacon payload layout");
 static_assert(sizeof(uplink_pl_t) == 62, "uplink payload layout");
 static_assert(WIRE_UPLINK <= WIRE_MAX && WIRE_BEACON <= WIRE_MAX, "packets must fit the RX buffer");

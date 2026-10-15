@@ -15,6 +15,11 @@ export function telemetryFresh(telemetry, now = Date.now()) {
   return telemetryAgeMs(telemetry, now) <= WIRELESS_STATUS_MAX_AGE_MS;
 }
 
+// Shared by the Link field and the age badge beside each node's heading.
+export function telemetryLinkState(telemetry, now = Date.now()) {
+  return telemetryFresh(telemetry, now) ? telemetry.link_state || "lost" : "none";
+}
+
 // master: D 0 telemetry. head: { hseq, firstSeenAt, lastSeenAt } of the latest E line.
 export function pipelineHealth({ master, head, connected, now = Date.now() }) {
   if (master && Number.isInteger(master.queue_depth) && master.queue_depth > MASTER_QUEUE_CAPACITY * QUEUE_HEALTH_RATIO) {

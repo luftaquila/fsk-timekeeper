@@ -78,9 +78,24 @@ static void lb_node(lb_t *b, uint32_t node_id, int is_master)
 static struct { char line[CTL_LINE_MAX]; uint32_t at_ms; } s_ctl[CTL_QUEUE_LEN];
 static unsigned s_ctl_head, s_ctl_count;
 static uint32_t s_tx_drop;
+static char s_line[80];      /* holds "K " + 64 hex + NUL */
+static unsigned s_len;
+static uint32_t s_usb_epoch;
+
+static int console_ready(void)
+{
+    uint32_t epoch = usb_console_epoch();
+    int ready = usb_console_ready();
+    if (epoch != s_usb_epoch || !ready) {
+        s_usb_epoch = epoch;
+        s_ctl_head = s_ctl_count = s_len = 0;
+    }
+    return ready;
+}
 
 static void write_control(const char *line)
 {
+    if (!console_ready()) { return; }
     if (s_ctl_count == 0 && usb_write(line)) { return; }
     if (s_ctl_count >= CTL_QUEUE_LEN || strlen(line) >= CTL_LINE_MAX) { el_note(EL_USB_DROP); return; }
     unsigned at = (s_ctl_head + s_ctl_count) % CTL_QUEUE_LEN;
@@ -91,11 +106,13 @@ static void write_control(const char *line)
 
 static void write_periodic(const char *line)
 {
+    if (!console_ready()) { return; }
     if (!usb_write(line) && s_tx_drop != UINT32_MAX) { s_tx_drop++; }
 }
 
 void pu_service(uint32_t now_ms)
 {
+    if (!console_ready()) { return; }
     while (s_ctl_count) {
         if ((uint32_t)(now_ms - s_ctl[s_ctl_head].at_ms) > CTL_MAX_WAIT_MS) {
             el_note(EL_USB_DROP);
@@ -112,7 +129,7 @@ uint32_t pu_tx_drop(void) { return s_tx_drop; }
 /* ---- emit helpers ------------------------------------------------------------ */
 /* FW_VERSION comes from the Makefile (the release tag in CI). */
 #ifndef FW_VERSION
-#define FW_VERSION "0.0.0"
+#define FW_VERSION "v0.0.0"
 #endif
 
 void pu_emit_identity(uint32_t devid_hi, uint32_t devid_lo, int is_master, uint8_t reset_reason,
@@ -182,6 +199,10 @@ void pu_emit_diag(const pu_diag_t *d)
     lb_sp(&b); lb_u32(&b, d->reset_reason);
     lb_sp(&b); lb_u64(&b, d->sensor_boot_id);
     lb_sp(&b); lb_u64(&b, d->master_boot_id);
+    lb_sp(&b); lb_u32(&b, d->recovery.count);
+    lb_sp(&b); lb_u32(&b, d->recovery.failures);
+    lb_sp(&b); lb_u32(&b, RADIO_RECOVERY_REASON(d->recovery));
+    lb_sp(&b); lb_u32(&b, RADIO_RECOVERY_RESULT(d->recovery));
     lb_finish(&b);
     write_periodic(line);
 }
@@ -221,6 +242,24 @@ void pu_emit_ack(const char *cmd)
     char line[24];
     lb_t b; lb_init(&b, line, sizeof(line));
     lb_str(&b, "A "); lb_str(&b, cmd); lb_str(&b, " OK");
+    lb_finish(&b);
+    write_control(line);
+}
+
+void pu_emit_key(const uint8_t *key)
+{
+    static const char hex[] = "0123456789abcdef";
+    char line[68];
+    lb_t b; lb_init(&b, line, sizeof(line));
+    lb_str(&b, "K ");
+    if (key) {
+        for (unsigned i = 0; i < 32u; i++) {
+            lb_ch(&b, hex[key[i] >> 4]);
+            lb_ch(&b, hex[key[i] & 0x0fu]);
+        }
+    } else {
+        lb_str(&b, "NONE");
+    }
     lb_finish(&b);
     write_control(line);
 }
@@ -312,6 +351,14 @@ int pu_format_uplink(char *buf, unsigned cap, uint32_t hseq, uint32_t node_id, u
         lb_sp(&b); lb_u64(&b, u->u.loss.end_tick);
     } else if (u->kind == UL_KIND_CHECKPOINT) {
         lb_sp(&b); lb_u64(&b, u->tick);
+        for (unsigned i = 0; i < RADIO_HISTORY_FAULTS; i++) {
+            lb_sp(&b); lb_u32(&b, u->u.history.faults[i]);
+        }
+        radio_recovery_diag_t r = u->u.history.recovery;
+        lb_sp(&b); lb_u32(&b, r.count);
+        lb_sp(&b); lb_u32(&b, r.failures);
+        lb_sp(&b); lb_u32(&b, RADIO_RECOVERY_REASON(r));
+        lb_sp(&b); lb_u32(&b, RADIO_RECOVERY_RESULT(r));
     }
     return lb_seal(&b, buf, crc);
 }
@@ -328,8 +375,6 @@ int pu_format_timebase_end(char *buf, unsigned cap, uint32_t hseq, uint64_t mast
 }
 
 /* ---- command parser -------------------------------------------------------- */
-static char s_line[80];      /* holds "K " + 64 hex + NUL */
-static unsigned s_len;
 static uint8_t s_key[32];
 static radio_cfg_t s_radio;
 static uint32_t s_ack_hseq, s_ack_crc;
@@ -444,6 +489,7 @@ static pu_cmd_t classify(const char *s)
     if (s[0] == '\0') { return PU_CMD_NONE; }
     if (!strcmp(s, "?ID")) { return PU_CMD_ID; }
     if (!strcmp(s, "?STATUS")) { return PU_CMD_STATUS; }
+    if (!strcmp(s, "?KEY")) { return PU_CMD_GETKEY; }
     if (!strcmp(s, "PING")) { return PU_CMD_PING; }
     if (!strcmp(s, "CP")) { return PU_CMD_CHECKPOINT; }
     if (s[0] == 'K' && s[1] == ' ') { return parse_key(s + 2) ? PU_CMD_SETKEY : PU_CMD_BAD; }
@@ -461,6 +507,7 @@ static pu_cmd_t classify(const char *s)
 
 pu_cmd_t pu_feed(int c)
 {
+    if (!console_ready()) { return PU_CMD_NONE; }
     if (c == '\n' || c == '\r') {
         s_line[s_len] = '\0';
         s_len = 0;

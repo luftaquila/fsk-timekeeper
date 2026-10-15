@@ -10,8 +10,8 @@ export const MODE_LABEL = {
   laps: "Laps",
 };
 
-export const ROLES = ["start", "finish"];
-export const ROLE_LABEL = { start: "Start", finish: "Finish" };
+export const ROLES = ["unused", "start", "finish"];
+export const ROLE_LABEL = { unused: "Unused", start: "Start", finish: "Finish" };
 
 // Roles a mode needs mapped before it can be armed; other roles are ignored by that mode.
 export const REQUIRED_ROLES = Object.freeze({

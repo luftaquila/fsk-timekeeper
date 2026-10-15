@@ -3,7 +3,7 @@
 #   make                 build; clones the pinned dependencies into vendor/ on first run
 #   make clean           remove build/
 #   make distclean       remove build/ and vendor/
-#   FW_VERSION=1.2.3 make   version reported on the USB `I` line (CI passes the release tag)
+#   FW_VERSION=v1.2.3 make   version reported on the USB `I` line (CI passes the release tag)
 #   NODE_DEBUG=1 make       print chip id / role over USB once per second (testing only)
 #   make test              host tests: GPS, sync, queues, MAC simulator (C11 compiler, no ARM deps)
 #
@@ -13,7 +13,7 @@
 # reserved flash page (src/keystore.c), so this build is safe to publish from CI.
 
 TARGET     := fsk-timekeeper
-FW_VERSION ?= 1.0.0
+FW_VERSION ?= v1.0.0
 BUILD      := build
 VENDOR     := vendor
 
