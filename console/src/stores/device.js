@@ -38,6 +38,7 @@ export const useDeviceStore = defineStore("device", () => {
   const telemetry = reactive({}); // node_id -> normalized telemetry
   const masterBootId = ref(null);
   const pps = ref(null); // latest P report
+  let lastPpsTick = null; // retained across reconnects to the same master boot
   const ppsEdges = ref([]); // qualified PPS edges of ppsBootId, sorted by tick
   const ppsBootId = ref(null);
   const unprovisioned = ref(false);
@@ -324,7 +325,8 @@ export const useDeviceStore = defineStore("device", () => {
 
   function setMasterBoot(id) {
     if (masterBootId.value === id) return;
-    if (masterBootId.value != null) pps.value = null;
+    pps.value = null;
+    lastPpsTick = null;
     masterBootId.value = id;
     useTimingStore().onMasterBoot(id);
     if (ppsBootId.value !== id) useEdgesOf(id);
@@ -347,9 +349,13 @@ export const useDeviceStore = defineStore("device", () => {
     if (!p) {
       return drop("pps", line);
     }
+    // Legacy zero/duplicate reports are status traffic, not evidence of a new PPS.
+    const tick = BigInt(p.tick);
+    if (tick === 0n || (lastPpsTick != null && tick <= lastPpsTick)) return;
+    lastPpsTick = tick;
     pps.value = p;
     const bootId = masterBootId.value;
-    if (!p.seg || bootId == null || ppsBootId.value !== bootId) return;
+    if (!p.fix || !p.seg || bootId == null || ppsBootId.value !== bootId) return;
     if (ppsEdges.value.some((e) => e.tick === p.tick)) return;
     const edge = { master_boot_id: bootId, tick: p.tick, seg: p.seg, n: p.n, utc: p.utc, received_at: now };
     const list = ppsEdges.value;
@@ -498,7 +504,7 @@ export const useDeviceStore = defineStore("device", () => {
   // Latest GPS report for the START snapshot (reference only), or null when stale.
   function gpsReport(now = Date.now()) {
     const p = pps.value;
-    if (!p || now - p.at > GPS_REPORT_MAX_AGE_MS) return null;
+    if (!p || p.tick === "0" || now - p.at >= GPS_REPORT_MAX_AGE_MS) return null;
     return { valid: p.valid, ppb: p.ppb, fix: p.fix, sats: p.sats, span: p.span, utc: p.utc, tick: p.tick };
   }
 

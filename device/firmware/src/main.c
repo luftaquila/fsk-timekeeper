@@ -231,6 +231,7 @@ static void emit_self(int timebase_ok)
 
 static void emit_pps(void)
 {
+    if (!gps_report_due()) { return; } /* includes explicit ?STATUS requests */
     gps_report_t g;
     gps_report(&g);
     pu_emit_pps(g.pps_tick, g.utc_s, g.ppb, g.pps_valid, g.fix, g.sats, g.span_s, g.seg, g.n);
@@ -351,7 +352,7 @@ static void run_master(int st)
         }
         if (!master_clock_check()) { continue; }
         gps_poll();
-        if (sec_ready() && !radio_needs_reset() && gps_report_due()) { emit_pps(); }
+        if (sec_ready() && !radio_needs_reset()) { emit_pps(); }
 
         if (mac_master_step(&g_mac)) {
             uint8_t sent = (uint8_t)(g_mac.seq - 1u);

@@ -30,11 +30,15 @@ const voltage = (mv) => metric(mv == null ? "—" : (mv / 1000).toFixed(3), "V")
 function clockDrift(r) {
   if (isMaster(r)) {
     const p = device.gpsReport(now.value);
-    if (!p) return { value: "NO REPORT", tone: "warn" };
-    if (p.valid === 1) return {
+    if (!p) return { value: "NO PPS", tone: "warn" };
+    if (p.span < 8) return { value: p.fix ? "MEASURING" : "MEASURING (NO FIX)", tone: "warn" };
+    if (!p.fix && p.span >= 8) return {
+      parts: [metric(fmtPpm(p.ppb).replace(/ ppm$/, ""), "ppm"), "(NO FIX)"],
+      tone: "warn",
+    };
+    if (p.valid === 1 && p.fix) return {
       parts: [metric(fmtPpm(p.ppb).replace(/ ppm$/, ""), "ppm")],
     };
-    if (!p.fix) return { value: "NO GPS", tone: "warn" };
     return { value: "NOT READY", tone: "warn" };
   }
   return { parts: [metric(fmtNum(r.skew_ppm), "ppm")] };

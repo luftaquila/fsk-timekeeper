@@ -15,11 +15,11 @@ extern "C" {
 typedef struct {
     uint64_t pps_tick;  /* TIMER1 tick of the reported PPS edge (0 = none yet) */
     uint32_t utc_s;     /* UTC of that edge, Unix seconds (0 = unknown) */
-    int32_t  ppb;       /* HFXO error, + = timebase fast (0 when invalid) */
+    int32_t  ppb;       /* HFXO vs PPS, + = timebase fast; display only unless qualified */
     uint8_t  pps_valid; /* 1 = >= PPS_MIN_SPAN_S qualified edges in the window */
     uint8_t  fix;       /* GGA fix quality (0 = none) */
     uint8_t  sats;      /* GGA satellites used */
-    uint8_t  span_s;    /* seconds in the estimation window (0 when invalid) */
+    uint8_t  span_s;    /* seconds in the estimation window (0 = no estimate, even for display) */
     uint32_t seg;       /* qualification segment of the edge, 0 = not qualified */
     uint32_t n;         /* index of the edge in its segment (seconds since its first edge) */
 } gps_report_t;
@@ -32,11 +32,12 @@ void gps_init(void);
  * association current. Call every main-loop pass. */
 void gps_poll(void);
 
-/* A P line is due: a new edge got its RMC (or waited GPS_RMC_LAG_MAX_MS), or
- * 1 s passed since the last report. */
+/* A P line is due only once per new edge, after its RMC arrives or
+ * GPS_RMC_LAG_MAX_MS expires. No periodic report without a captured edge. */
 int gps_report_due(void);
 
-/* Fill the report (the newest settled edge) and clear the due state. */
+/* Fill the report (the newest settled edge) and clear the due state.
+ * USB callers must first check gps_report_due(). */
 void gps_report(gps_report_t *out);
 
 #ifdef __cplusplus

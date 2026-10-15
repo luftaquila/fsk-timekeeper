@@ -104,23 +104,34 @@ describe("app under jsdom", () => {
 
     // GPS qualification and PPS measurement share the Clock Drift field.
     const previousPps = device.pps;
-    const ppsReport = { valid: 0, fix: 0, ppb: 0, span: 0, at: Date.now() };
+    const ppsReport = { tick: "16000000", valid: 0, fix: 0, ppb: 0, span: 0, at: Date.now() };
     const masterStatus = wrapper.find(".master-diagnostics");
     assert.ok(!masterStatus.findAll("dt").some((label) => label.text() === "GPS"));
     for (const [pps, expected] of [
-      [null, "NO REPORT"],
-      [ppsReport, "NO GPS"],
-      [{ ...ppsReport, fix: 1 }, "NOT READY"],
-      [{ ...ppsReport, valid: 1, ppb: 1230, span: 8 }, "+1.23 ppm"],
-      [{ ...ppsReport, valid: 1, ppb: -1230, span: 16 }, "−1.23 ppm"],
-      [{ ...ppsReport, valid: 1, span: 8 }, "+0.00 ppm"],
-      [{ ...ppsReport, valid: 1, at: Date.now() - 60000 }, "NO REPORT"],
+      [null, "NO PPS"],
+      [{ ...ppsReport, tick: "0" }, "NO PPS"],
+      [ppsReport, "MEASURING (NO FIX)"],
+      [{ ...ppsReport, fix: 1 }, "MEASURING"],
+      [{ ...ppsReport, fix: 1, span: 8 }, "NOT READY"],
+      [{ ...ppsReport, ppb: 1230, span: 8 }, "+1.23 ppm (NO FIX)"],
+      [{ ...ppsReport, ppb: -1230, span: 16 }, "−1.23 ppm (NO FIX)"],
+      [{ ...ppsReport, span: 8 }, "+0.00 ppm (NO FIX)"],
+      [{ ...ppsReport, valid: 1, ppb: 1230, span: 8 }, "+1.23 ppm (NO FIX)"],
+      [{ ...ppsReport, valid: 1, fix: 1, ppb: 1230, span: 8 }, "+1.23 ppm"],
+      [{ ...ppsReport, valid: 1, fix: 1, ppb: -1230, span: 16 }, "−1.23 ppm"],
+      [{ ...ppsReport, valid: 1, fix: 1, span: 8 }, "+0.00 ppm"],
+      [{ ...ppsReport, valid: 1, at: Date.now() - 60000 }, "NO PPS"],
     ]) {
       device.pps = pps;
       await flushPromises();
       const field = masterStatus.findAll("dt").find((label) => label.text() === "Clock Drift").element.parentElement;
       assert.equal(field.querySelector("dd").textContent.trim().replace(/\s+/g, " "), expected);
     }
+    // A periodic all-zero P report is not a captured PPS pulse (real device log).
+    await device.handleLine("P 0 0 0 0 0 0 0 0 0");
+    await flushPromises();
+    const noPpsField = masterStatus.findAll("dt").find((label) => label.text() === "Clock Drift").element.parentElement;
+    assert.equal(noPpsField.querySelector("dd").textContent.trim(), "NO PPS");
     device.pps = previousPps;
 
     // radio settings: the board answers R with its new I line (not a new boot), then A R OK

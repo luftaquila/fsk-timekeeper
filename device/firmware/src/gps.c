@@ -79,6 +79,7 @@ static int s_cfg_due;
 static uint64_t s_pps_ring[PPS_RING];
 static uint8_t s_pps_w;      /* next write index */
 static uint8_t s_pps_count;  /* consecutive gated edges stored (<= PPS_RING) */
+static uint8_t s_pps_observed; /* interval-checked edges for display, including no fix */
 static uint64_t s_pps_last_tick;
 static uint32_t s_pps_last_ms;
 static int s_pps_have;
@@ -97,7 +98,7 @@ typedef struct {
 } edge_t;
 static edge_t s_edge;        /* newest edge, until reported */
 static int s_edge_pending;
-static edge_t s_rep;         /* newest reported edge (repeated by later reports) */
+static edge_t s_rep;         /* newest consumed edge; only pending edges trigger USB reports */
 
 /* RMC A is a conservative, expiring prerequisite, not a PPS lock or accuracy flag (NMEA has no
  * timepulse validity): a cached A never qualifies edges after UART reception stops. The interval
@@ -108,10 +109,18 @@ static uint32_t s_hfxo_stops;
 
 static int reference_ready(uint32_t now_ms)
 {
+    /* Run from gps_poll even when no report is sent. A stale pending edge must
+     * not be emitted later as though it were a newly received pulse. */
+    if (!s_pps_have || (uint32_t)(now_ms - s_pps_last_ms) >= PPS_STALE_MS) {
+        s_pps_count = 0;
+        s_pps_observed = 0;
+        s_edge_pending = 0;
+    }
     if (s_nav_valid && (uint32_t)(now_ms - s_rmc_last_ms) >= GPS_RMC_STALE_MS) {
         s_nav_valid = 0;
     }
     uint32_t stops = board_hfxo_stops(); /* a stop already over still breaks the window */
+    if (!board_hfclk_xtal() || stops != s_hfxo_stops) { s_pps_observed = 0; }
     if (!s_nav_valid || !board_hfclk_xtal() || stops != s_hfxo_stops) {
         s_hfxo_stops = stops;
         s_pps_count = 0;
@@ -125,7 +134,10 @@ static void pps_feed(uint64_t tick, uint32_t now_ms)
     int ready = reference_ready(now_ms);
     if (s_pps_have) {
         int64_t d = (int64_t)(tick - s_pps_last_tick) - (int64_t)TICKS_PER_S;
-        if (d > PPS_MAX_DEV_TICKS || d < -PPS_MAX_DEV_TICKS) { s_pps_count = 0; }
+        if (d > PPS_MAX_DEV_TICKS || d < -PPS_MAX_DEV_TICKS) {
+            s_pps_count = 0;
+            s_pps_observed = 0;
+        }
     }
     s_pps_have = 1;
     s_pps_last_tick = tick;
@@ -133,6 +145,8 @@ static void pps_feed(uint64_t tick, uint32_t now_ms)
     s_pps_ring[s_pps_w] = tick;
     s_pps_w = (uint8_t)((s_pps_w + 1u) % PPS_RING);
     if (s_pps_count < PPS_RING) { s_pps_count++; }
+    if (s_pps_observed < PPS_RING) { s_pps_observed++; }
+    if (!board_hfclk_xtal()) { s_pps_observed = 0; }
     if (!ready) { s_pps_count = 0; } /* retain the edge, not a calibration sample */
 
     s_edge = (edge_t){ .tick = tick, .ms = now_ms };
@@ -143,12 +157,12 @@ static void pps_feed(uint64_t tick, uint32_t now_ms)
 }
 
 /* ppb = err * 1e9 / (n * 16e6) = err * 125 / (2 n); |err| <= 64 * 3200 so no overflow. */
-static int pps_estimate(int32_t *ppb, uint8_t *span_s)
+static int pps_estimate(uint8_t count, int32_t *ppb, uint8_t *span_s)
 {
-    if (s_pps_count < PPS_MIN_SPAN_S + 1u) { return 0; }
-    unsigned n = s_pps_count - 1u;
+    if (count < PPS_MIN_SPAN_S + 1u) { return 0; }
+    unsigned n = count - 1u;
     unsigned newest = (s_pps_w + PPS_RING - 1u) % PPS_RING;
-    unsigned oldest = (s_pps_w + PPS_RING - s_pps_count) % PPS_RING;
+    unsigned oldest = (s_pps_w + PPS_RING - count) % PPS_RING;
     int64_t err = (int64_t)(s_pps_ring[newest] - s_pps_ring[oldest]) - (int64_t)n * (int64_t)TICKS_PER_S;
     *ppb = (int32_t)(err * 125 / (2 * (int64_t)n));
     *span_s = (uint8_t)n;
@@ -162,7 +176,6 @@ static int s_nactive;
 static uint8_t s_fix, s_sats;
 static uint32_t s_rmc_utc;      /* epoch of the last valid RMC (status A), 0 = none */
 static int s_rmc_valid;
-static uint32_t s_last_report_ms;
 
 static int hexval(char c)
 {
@@ -322,7 +335,6 @@ void gps_init(void)
 
     tx_line(PCAS03_GGA_RMC);
     s_cfg_sent_ms = board_millis();
-    s_last_report_ms = s_cfg_sent_ms;
     s_hfxo_stops = board_hfxo_stops();
 }
 
@@ -350,7 +362,8 @@ static int edge_settled(uint32_t now)
 int gps_report_due(void)
 {
     uint32_t now = board_millis();
-    return edge_settled(now) || (uint32_t)(now - s_last_report_ms) >= 1000u;
+    reference_ready(now);
+    return edge_settled(now);
 }
 
 void gps_report(gps_report_t *out)
@@ -359,20 +372,20 @@ void gps_report(gps_report_t *out)
     int32_t ppb = 0;
     uint8_t span = 0;
     int ready = reference_ready(now);
-    if (!s_pps_have || (uint32_t)(now - s_pps_last_ms) >= PPS_STALE_MS) s_pps_count = 0;
     if (edge_settled(now)) {
         s_rep = s_edge;
         s_edge_pending = 0;
     }
-    int valid = ready && pps_estimate(&ppb, &span);
+    int valid = ready && pps_estimate(s_pps_count, &ppb, &span);
+    /* An unqualified estimate is diagnostic only; it never grants an edge a segment. */
+    if (!valid) { pps_estimate(s_pps_observed, &ppb, &span); }
     out->pps_tick = s_rep.tick;
     out->utc_s = s_rep.utc;
-    out->ppb = valid ? ppb : 0;
+    out->ppb = ppb;
     out->pps_valid = (uint8_t)(valid ? 1u : 0u);
     out->fix = s_fix;
     out->sats = s_sats;
-    out->span_s = valid ? span : 0;
+    out->span_s = span;
     out->seg = s_rep.seg;
     out->n = s_rep.n;
-    s_last_report_ms = now;
 }

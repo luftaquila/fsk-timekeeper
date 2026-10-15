@@ -8,9 +8,9 @@ CXXFLAGS := -std=gnu++17 -g -O1 -Wall -Wextra -Werror -fno-exceptions -fno-rtti 
 SRC := ../src
 RADIOLIB := ../vendor/RadioLib/src
 
-GPS_CASES := healthy frequency_scale stale_rmc resume_after_silence void_transition malformed_active \
+GPS_CASES := no_pps healthy frequency_scale no_fix_observation stale_rmc resume_after_silence void_transition malformed_active \
 	bad_date bad_time bad_checksum hfxo_recovery missed_pps report_expiry \
-	status_not_exact_a millis_wrap segments report_timeout glitch hfxo_stop_between_edges
+	status_not_exact_a millis_wrap segments report_timeout silent_expiry glitch hfxo_stop_between_edges
 SIM_CASES := steady init_recovery latency latency_lbt_off lbt_jam overflow sync_gap long_gap reboot reboot_new_tag reboot_full faults \
 	id_collision ev_wrap hfxo_stop session_replay late_seal cad_failure load_2 load_5 load_noise
 RADIO_CASES := fault_recovery rx_fault_recovery xosc_stuck rx_stuck device_errors errors_unreadable probe_frame probe_silent probe_busy_stuck begin init_recovery config_range lbt_listen begin_dead receive receive_zero_length cad_timeout cad_wrong_modem

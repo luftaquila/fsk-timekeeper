@@ -73,7 +73,14 @@ uint32_t node_devid_hi(void) { return 1; }
 uint32_t node_devid_lo(void) { return 2; }
 int16_t meas_temp_c10(void) { return 250; }
 uint16_t meas_vddh_mv(void) { return 4000; }
-void gps_report(gps_report_t *r) { memset(r, 0, sizeof *r); }
+static int pps_pending;
+int gps_report_due(void) { return pps_pending; }
+void gps_report(gps_report_t *r) {
+    assert(pps_pending);
+    memset(r, 0, sizeof *r);
+    r->pps_tick = 16000000;
+    pps_pending = 0;
+}
 static int console_open = 1;
 int usb_console_ready(void) { return console_open; }
 uint32_t usb_console_epoch(void) { return 0; }
@@ -230,6 +237,14 @@ static void queue_pressure_report(void)
 int main(void)
 {
     mq_init(&g_queue);
+    command(PU_CMD_STATUS);
+    assert(!strstr(output, "P ") && strstr(output, "A STATUS OK"));
+    pps_pending = 1;
+    command(PU_CMD_STATUS);
+    assert(strstr(output, "P 16000000 ") && !pps_pending);
+    command(PU_CMD_STATUS);
+    assert(!strstr(output, "P "));
+    puts("PASS main_pps_status_does_not_repeat");
     command(PU_CMD_CLOCK);
     assert(strstr(output, "9007199254740993"));
     xtal = 0; stops++;

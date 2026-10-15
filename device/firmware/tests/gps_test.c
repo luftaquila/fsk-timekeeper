@@ -88,7 +88,17 @@ int main(int argc, char **argv)
     assert(argc == 2);
     gps_init();
     const char *scenario = argv[1];
-    if (!strcmp(scenario, "healthy")) {
+    if (!strcmp(scenario, "no_pps")) {
+        for (unsigned i = 1; i <= 10; i++) {
+            now_ms = i * 1000u;
+            gps_poll();
+            assert(!gps_report_due());
+            gps_report_t out = report();
+            assert(out.pps_tick == 0 && out.ppb == 0 && out.span_s == 0);
+            assert(out.pps_valid == 0 && out.seg == 0);
+            assert(!gps_report_due());
+        }
+    } else if (!strcmp(scenario, "healthy")) {
         now_ms = 100; rmc(1);
         for (unsigned i = 1; i <= 8; i++) edge(i, 1);
         assert(report().pps_valid == 0);
@@ -101,11 +111,52 @@ int main(int argc, char **argv)
         gps_report_t out = report();
         assert(out.pps_valid == 1 && out.ppb == 50000 && out.span_s == 8);
         assert(out.utc_s != 0);
+    } else if (!strcmp(scenario, "no_fix_observation")) {
+        clock_ppm = 50;
+        for (unsigned i = 1; i <= 8; i++) edge(i, 0);
+        assert(report().span_s == 0);
+        edge(9, 0);
+        gps_report_t out = report();
+        assert(out.ppb == 50000 && out.span_s == 8);
+        assert(out.pps_valid == 0 && out.seg == 0 && out.fix == 0 && out.utc_s == 0);
+        for (unsigned i = 10; i <= 80; i++) edge(i, 0);
+        out = report();
+        assert(out.ppb == 50000 && out.span_s == 64 && out.seg == 0);
+        /* Missing PPS clears even the display estimate. */
+        now_ms += PPS_STALE_MS;
+        out = report();
+        assert(out.span_s == 0 && out.ppb == 0 && out.pps_valid == 0);
+        for (unsigned i = 83; i <= 91; i++) edge(i, 0);
+        assert(report().span_s == 8);
+        /* A short/spurious interval must restart the observation window. */
+        now_ms += 50;
+        next_pps = capture_now64(); have_pps = 1;
+        gps_poll();
+        assert(report().span_s == 0);
+        for (unsigned i = 92; i <= 101; i++) edge(i, 0);
+        assert(report().span_s >= 8);
+        hfxo_stops++;
+        gps_poll();
+        assert(report().span_s == 0);
+        for (unsigned i = 102; i <= 110; i++) edge(i, 0);
+        assert(report().span_s == 8);
+        /* Observations must not shorten qualification after fix returns. */
+        edge(111, 1);
+        assert(report().pps_valid == 0 && report().seg == 0);
+        for (unsigned i = 112; i <= 119; i++) edge(i, 1);
+        assert(report().pps_valid == 0);
+        edge(120, 1);
+        out = report();
+        assert(out.pps_valid == 1 && out.ppb == 50000 && out.span_s == 8);
+        xtal = 0;
+        gps_poll();
+        out = report();
+        assert(out.pps_valid == 0 && out.span_s == 0 && out.ppb == 0);
     } else if (!strcmp(scenario, "stale_rmc")) {
         warm();
         for (unsigned i = 10; i <= 13; i++) edge(i, -1);
         gps_report_t out = report();
-        assert(out.pps_valid == 0 && out.span_s == 0 && out.ppb == 0);
+        assert(out.pps_valid == 0 && out.span_s == 12 && out.ppb == 0);
     } else if (!strcmp(scenario, "resume_after_silence")) {
         warm();
         for (unsigned i = 10; i <= 13; i++) edge(i, -1);
@@ -217,8 +268,10 @@ int main(int argc, char **argv)
         edge(17, 1);
         out = report();
         assert(out.seg == 3 && out.n == 0);
-        /* a repeat without a new edge reports the same edge again */
+        /* A read may inspect the snapshot, but must not trigger another USB report. */
         now_ms += 1000;
+        gps_poll();
+        assert(!gps_report_due());
         out = report();
         assert(out.seg == 3 && out.n == 0 && out.pps_tick == next_pps);
     } else if (!strcmp(scenario, "glitch")) {
@@ -258,12 +311,43 @@ int main(int argc, char **argv)
         next_pps = capture_now64(); have_pps = 1;
         gps_poll(); /* edge without its RMC */
         now_ms = 10000 + GPS_RMC_LAG_MAX_MS - 1u;
-        s_last_report_ms = now_ms; /* only the edge can make a report due */
         assert(!gps_report_due());
         now_ms = 10000 + GPS_RMC_LAG_MAX_MS;
         assert(gps_report_due());
         gps_report_t out = report();
         assert(out.pps_tick == next_pps && out.seg == 1 && out.n == 8 && out.utc_s == 0);
+        assert(!gps_report_due());
+    } else if (!strcmp(scenario, "silent_expiry")) {
+        warm();
+        now_ms = 11499;
+        gps_poll();
+        assert(s_pps_observed == 9 && s_pps_count == 9);
+        assert(!gps_report_due());
+        now_ms = 11500;
+        gps_poll(); /* maintenance must expire both windows without gps_report */
+        assert(s_pps_observed == 0 && s_pps_count == 0);
+        assert(!gps_report_due());
+        for (unsigned i = 12; i <= 20; i++) edge(i, 0);
+        assert(gps_report_due());
+        gps_report_t out = report();
+        assert(out.span_s == 8 && out.pps_valid == 0 && out.seg == 0);
+        assert(!gps_report_due());
+        /* No RMC at all: still report the real edge exactly once after 900 ms. */
+        edge(21, -1);
+        now_ms = 21899;
+        gps_poll();
+        assert(!gps_report_due());
+        now_ms = 21900;
+        gps_poll();
+        assert(gps_report_due());
+        out = report();
+        assert(out.pps_tick == next_pps && out.utc_s == 0 && out.pps_valid == 0);
+        assert(!gps_report_due());
+        /* Discard an unconsumed report if its edge has already gone stale. */
+        edge(22, -1);
+        now_ms = 24500;
+        gps_poll();
+        assert(!gps_report_due() && s_pps_count == 0 && s_pps_observed == 0);
     } else {
         fprintf(stderr, "unknown scenario: %s\n", scenario);
         return 2;

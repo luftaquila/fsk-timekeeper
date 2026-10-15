@@ -86,6 +86,69 @@ async function mapSprint(device, settings) {
 }
 
 describe("pipeline with the fake master", () => {
+  it("expires PPS by new edge arrival, ignoring zero/replayed ticks across reconnects", async () => {
+    const { device } = await boot();
+    const identity = "I FSK-WL 5 1.0.0 0123456789ABCDEF M 14 922900 7 250.00 16000 0 12 1";
+    await device.handleLine(identity);
+    await device.handleLine("T 00000000000000000000000000000000 0 1234");
+    let now = Date.now();
+    const dateNow = vi.spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      await device.handleLine("P 0 0 0 0 0 0 0 0 0");
+      assert.equal(device.gpsReport(), null);
+      await device.handleLine("P 16000000 0 0 0 0 0 0 0 0");
+      const receivedAt = device.pps.at;
+      assert.equal(device.gpsReport().tick, "16000000");
+      now += 2999;
+      for (const tick of ["0", "16000000", "8000000"]) {
+        await device.handleLine(`P ${tick} 0 0 0 0 0 0 0 0`);
+      }
+      assert.equal(device.pps.at, receivedAt);
+      assert.ok(device.gpsReport());
+      now++;
+      assert.equal(device.gpsReport(), null);
+      await device.handleLine("P 64000000 0 50000 0 0 0 8 0 0");
+      assert.equal(device.gpsReport().ppb, 50000);
+      assert.equal(device.ppsEdges.length, 0);
+
+      await device.disconnect();
+      assert.equal(device.gpsReport(), null);
+      await device.handleLine(identity);
+      await device.handleLine("T 00000000000000000000000000000000 64000000 1234");
+      await device.handleLine("P 64000000 0 50000 0 0 0 8 0 0");
+      assert.equal(device.gpsReport(), null); // same boot's cached report is still a repeat
+      await device.handleLine("P 80000000 0 50000 0 0 0 8 0 0");
+      assert.equal(device.gpsReport().tick, "80000000");
+
+      await device.handleLine("T 00000000000000000000000000000000 0 5678");
+      assert.equal(device.gpsReport(), null);
+      await device.handleLine("P 16000000 0 0 0 0 0 0 0 0");
+      assert.equal(device.gpsReport().tick, "16000000"); // new boot may restart ticks
+      assert.equal(device.gpsReport().span, 0);
+    } finally {
+      dateNow.mockRestore();
+    }
+  });
+
+  it("keeps no-fix drift reports out of calibration even when a segment is supplied", async () => {
+    const { device } = await boot();
+    await device.handleLine("I FSK-WL 5 1.0.0 0123456789ABCDEF M 14 922900 7 250.00 16000 0 12 1");
+    await device.handleLine("T 00000000000000000000000000000000 0 1234");
+    for (const valid of [0, 1]) {
+      await device.handleLine(`P ${16000800 * (valid + 1)} 0 50000 ${valid} 0 0 8 1 ${valid}`);
+      assert.equal(device.gpsReport().ppb, 50000);
+      assert.equal(device.gpsReport().span, 8);
+      assert.equal(device.ppsEdges.length, 0);
+    }
+    // Qualification is still required even when GGA reports a fix.
+    await device.handleLine("P 48002400 0 50000 0 1 9 8 0 0");
+    assert.equal(device.ppsEdges.length, 0);
+    await device.handleLine("P 64003200 0 50000 1 1 9 8 2 0");
+    assert.equal(device.ppsEdges.length, 1);
+    const stored = await (await import("../src/lib/ppsLog.js")).loadEdges(device.masterBootId);
+    assert.deepEqual(stored.map((e) => e.tick), ["64003200"]);
+  });
+
   it("removes fake sensor telemetry and mappings on disconnect without removing other sensors", async () => {
     const { device, settings } = await boot();
     const otherNode = "ABCDEF01";
@@ -648,8 +711,12 @@ describe("pipeline with the fake master", () => {
     const [c, d] = [...fake2.sensors.keys()];
     again.settings.setMapping(c, { role: "start" });
     again.settings.setMapping(d, { role: "finish" });
-    fake2.setGps({ valid: false, fix: 0 });
+    fake2.setGps({ valid: false, fix: 0, ppb: 50000, span: 8 });
     fake2.rebootMaster(); // a fresh boot has no qualified edge yet
+    await waitFor(() => again.device.pps?.fix === 0 && again.device.pps?.ppb === 50000);
+    assert.equal(again.device.gpsReport().valid, 0);
+    assert.equal(again.device.gpsReport().span, 8);
+    assert.equal(again.device.ppsEdges.length, 0);
     await waitFor(() => again.device.contract.ok && again.device.masterBootId === fake2.masterBootId);
     await waitFor(() => fake2.queueLength === 0 && Object.values(again.device.telemetry).every((t) => t.node_id === "0" || t.master_boot_id === fake2.masterBootId), 8000);
     await sleep(5200); // periodic checkpoints under the new session

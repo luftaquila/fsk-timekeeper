@@ -149,7 +149,8 @@
 
 /* PPS qualification (master): consecutive edges one second apart within PPS_MAX_DEV_PPM, fresh
  * RMC status A (an expiring prerequisite, not an accuracy certificate), HFXO running. The ppb
- * window is capped at PPS_MAX_SPAN_S; wire ticks stay raw. */
+ * window is capped at PPS_MAX_SPAN_S; wire ticks stay raw. Unqualified intervals
+ * passing the same period gate also provide a display-only ppb estimate. */
 #define PPS_MAX_DEV_PPM     200u
 #define PPS_MIN_SPAN_S      8u
 #define PPS_MAX_SPAN_S      64u

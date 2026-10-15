@@ -24,6 +24,8 @@
  *       Sensor history is carried by acknowledged E K lines, not periodic D lines.
  *     T <32-hex token> <tick> <master_boot_id>
  *     P <pps_tick> <utc_s> <ppb> <pps_valid> <fix> <sats> <span_s> <seg> <n>
+ *       One report per captured edge; no periodic or ?STATUS replay without a new edge.
+ *       ppb/span_s may describe an unqualified display-only estimate; seg gates calibration.
  *     A <cmd> OK
  *     K <64-hex|NONE>                   (reply to ?KEY over USB only)
  *     X <reason> | X <code> <count> | X fault <pc> <lr> <cause> <cfsr>

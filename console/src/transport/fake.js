@@ -184,7 +184,7 @@ export function createFakeTransport({ onLine, onDisconnect }) {
     return (16_000_000n * BigInt(1_000_000_000 + gps.ppb)) / 1_000_000_000n;
   }
   function ppsLine(edge) {
-    return `P ${edge.tick} ${edge.utc} ${edge.valid ? gps.ppb : 0} ${edge.valid ? 1 : 0} ${gps.fix} ${gps.sats} ${edge.valid ? gps.span : 0} ${edge.seg} ${edge.n}`;
+    return `P ${edge.tick} ${edge.utc} ${gps.span >= 8 ? gps.ppb : 0} ${edge.valid ? 1 : 0} ${gps.fix} ${gps.sats} ${gps.span} ${edge.seg} ${edge.n}`;
   }
   // Emit every PPS edge that has happened by now.
   function emitPps() {
@@ -193,7 +193,7 @@ export function createFakeTransport({ onLine, onDisconnect }) {
       if (tick > nowTick()) return;
       pps.k += 1;
       pps.emitted += 1;
-      const valid = gps.valid;
+      const valid = gps.valid && gps.fix > 0;
       const edge = { tick, utc: gps.fix ? pps.utc0 + pps.emitted : 0, valid, seg: valid ? pps.seg : 0, n: valid ? pps.n : 0 };
       if (valid) pps.n += 1;
       pps.last = edge;
@@ -292,7 +292,6 @@ export function createFakeTransport({ onLine, onDisconnect }) {
         emit(heartbeat());
         for (const [node, s] of sensors) emit(diagLine(node, s));
         emit(masterDiag());
-        if (pps.last) emit(ppsLine(pps.last));
         emit("A STATUS OK");
         break;
       case "?KEY":
@@ -457,8 +456,8 @@ export function createFakeTransport({ onLine, onDisconnect }) {
     // GPS scenario: { ppb, valid, fix, sats, span }
     setGps(patch) {
       reanchor();
-      if (patch.valid === false && gps.valid) pps.seg += 1; // qualification ends: the next valid edge opens a new segment
-      if (patch.valid === false) pps.n = 0;
+      if ((patch.valid === false || patch.fix === 0) && gps.valid && gps.fix > 0) pps.seg += 1;
+      if (patch.valid === false || patch.fix === 0) pps.n = 0;
       Object.assign(gps, patch);
     },
     breakGpsSegment() {
