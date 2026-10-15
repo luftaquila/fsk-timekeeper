@@ -14,7 +14,7 @@ const settings = useSettingsStore();
 
 const missing = computed(() => timing.missingRoles(settings.state.mode));
 const quality = computed(() => timing.qualityFor(settings.state.mode));
-const canStart = computed(() => device.connected && !timing.armed && !timing.starting && !timing.classifying);
+const canStart = computed(() => device.connected && !device.updateInProgress && !timing.armed && !timing.starting && !timing.classifying);
 </script>
 
 <template>

@@ -21,6 +21,7 @@
   },
   "homepage": "https://github.com/luftaquila/fsk-timekeeper#readme",
   "dependencies": {
+    "fflate": "^0.8.3",
     "notyf": "^3.10.0",
     "pinia": "^3.0.4",
     "vue": "^3.5.26",

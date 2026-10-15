@@ -165,6 +165,7 @@ export const useTimingStore = defineStore("timing", () => {
   async function start(mode, note = "") {
     if (starting.value || classifying.value) return false;
     const device = useDeviceStore();
+    if (device.updateInProgress) return false;
     const settings = useSettingsStore();
     if (!MODES.includes(mode)) {
       notyf.error("Invalid mode.");

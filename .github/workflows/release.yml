@@ -56,7 +56,7 @@ jobs:
 
             ### Firmware
 
-            * Windows: double-tap `RST` and copy `fsk-timekeeper.uf2` to the `NICENANO` drive.
-            * Linux / macOS: `./flash.sh [--serial <chip id>] [port]` (serial DFU via adafruit-nrfutil).
-            * Windows (serial DFU): `flash.bat` / `flash.ps1 [-Serial <chip id>] [COMx]` (`-Serial` is not yet tested on Windows).
+            * Open Settings → Firmware Update and choose `fsk-timekeeper-firmware.zip` or its inner `fsk-timekeeper-dfu.zip`.
+            * Check the displayed version, start the update, and select the bootloader port if prompted. A new or unresponsive board may need a double-tap on `RST`.
+            * After transfer, click Reconnect and select the updated board to verify its running version. Both ZIPs include `fsk-timekeeper-metadata.json`.
             * Flash every board and use the matching console: the console refuses a master of another protocol version.

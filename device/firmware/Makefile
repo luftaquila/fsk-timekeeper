@@ -42,7 +42,7 @@ SIZE    := $(PREFIX)size
 APP_C := \
 	src/main.c src/board.c src/meas.c src/capture.c src/crc32.c src/errlog.c \
 	src/fault.c src/power.c src/secure.c src/secure_replay.c src/entropy.c src/nvmc.c src/keystore.c \
-	src/radio_cfg.c src/proto_usb.c src/node_id.c \
+	src/radio_cfg.c src/proto_usb.c src/node_id.c src/firmware_info.c \
 	src/usb.c src/usb_descriptors.c src/gps.c src/sync.c src/sensor_queue.c \
 	src/master_queue.c src/registry.c src/mac_sensor.c src/mac_master.c
 APP_CXX := src/radio_hal.cpp src/radio.cpp src/runtime.cpp
@@ -72,7 +72,7 @@ INC := -Isrc -Iconfig \
 # ---- flags -------------------------------------------------------------------
 MCU  := -mcpu=cortex-m4 -mthumb -mfloat-abi=hard -mfpu=fpv4-sp-d16
 OPT  := -O2 -g -DNDEBUG
-DEFS := -DNRF52840_XXAA -DFW_VERSION=\"$(FW_VERSION)\"
+DEFS := -DNRF52840_XXAA -include $(BUILD)/firmware_info.h
 ifeq ($(NODE_DEBUG),1)
 DEFS += -DNODE_DEBUG
 endif
@@ -90,7 +90,7 @@ ASFLAGS  := $(MCU) -x assembler-with-cpp -DNRF52840_XXAA -D__HEAP_SIZE=4096
 # need the C++ driver so libstdc++ (nano) is linked.
 LDSCRIPT := linker/nrf52840_app.ld
 LDFLAGS  := $(MCU) -T $(LDSCRIPT) -L$(MDK) --specs=nano.specs --specs=nosys.specs \
-	-Wl,--gc-sections -Wl,-Map=$(BUILD)/$(TARGET).map -Wl,--print-memory-usage
+	-Wl,--gc-sections -Wl,--undefined=fsk_firmware_metadata -Wl,-Map=$(BUILD)/$(TARGET).map -Wl,--print-memory-usage
 
 # ---- objects -----------------------------------------------------------------
 APP_OBJ  := $(patsubst %.c,$(BUILD)/%.o,$(APP_C)) $(patsubst %.cpp,$(BUILD)/%.o,$(APP_CXX))
@@ -103,7 +103,7 @@ $(VEND_OBJ): WARN := -w
 $(BUILD)/$(TINYUSB)/src/portable/nordic/nrf5x/dcd_nrf5x.o: CFLAGS += -include src/nrf_clock_compat.h
 
 # ---- targets -----------------------------------------------------------------
-.PHONY: all build deps test clean distclean
+.PHONY: all build deps test clean distclean FORCE
 
 # Dependencies are cloned first, then make re-reads this file so the RadioLib
 # source glob sees them.
@@ -111,6 +111,13 @@ all: deps
 	@$(MAKE) --no-print-directory build
 
 build: $(BUILD)/$(TARGET).uf2 $(BUILD)/$(TARGET).hex $(BUILD)/$(TARGET).bin
+
+# Rewrite only when the build identity changes; incremental version changes must
+# rebuild the USB version string and embedded package metadata together.
+$(BUILD)/firmware_info.h: FORCE tools/firmware_metadata.py src/protocol.h src/proto_usb.h
+	python3 tools/firmware_metadata.py header --version '$(FW_VERSION)' --output $@
+
+$(APP_OBJ) $(VEND_OBJ): $(BUILD)/firmware_info.h
 
 test: deps
 	@$(MAKE) --no-print-directory -C tests test

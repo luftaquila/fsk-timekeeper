@@ -21,7 +21,7 @@ function refresh() {
 watch(fake, refresh, { immediate: true });
 
 async function toggleConnection() {
-  if (connectionBusy.value || device.connecting || (device.connected && !fake.value)) return;
+  if (connectionBusy.value || device.updateInProgress || device.connecting || (device.connected && !fake.value)) return;
   connectionBusy.value = true;
   try {
     if (fake.value) await device.disconnect();
@@ -66,7 +66,7 @@ function deleteSensor() {
       <div class="connection-toolbar">
         <span class="group-title">Master</span>
         <div class="actions">
-          <button class="btn" :class="fake ? 'btn-ghost' : 'btn-primary'" :disabled="connectionBusy || device.connecting || (device.connected && !fake)" @click="toggleConnection">{{ fake ? "Disconnect" : "Connect Fake Master" }}</button>
+          <button class="btn" :class="fake ? 'btn-ghost' : 'btn-primary'" :disabled="connectionBusy || device.updateInProgress || device.connecting || (device.connected && !fake)" @click="toggleConnection">{{ fake ? "Disconnect" : "Connect Fake Master" }}</button>
         </div>
       </div>
       <fieldset class="simulator-controls" :disabled="!fake || connectionBusy" aria-label="Simulator Controls">

@@ -86,6 +86,16 @@ async function mapSprint(device, settings) {
 }
 
 describe("pipeline with the fake master", () => {
+  it("keeps the firmware update lock across disconnect and blocks measurement/configuration", async () => {
+    const { device, timing } = await boot();
+    device.updateInProgress = true;
+    assert.equal(await device.connect({ kind: "fake" }), false);
+    assert.equal(await timing.start("sprint"), false);
+    await assert.rejects(device.provisionKey("a".repeat(64)), /firmware update/);
+    await device.disconnect();
+    assert.equal(device.updateInProgress, true);
+    device.updateInProgress = false;
+  });
   it("keeps older log pages available live and after reload beyond 500 entries", async () => {
     const { device } = await boot();
     await device.clearLog();

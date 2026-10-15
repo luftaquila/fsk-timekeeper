@@ -27,7 +27,7 @@ function serialHarness() {
     getInfo: () => ({ usbVendorId: 0x239a }),
   };
   vi.stubGlobal("navigator", {
-    serial: { requestPort: vi.fn(async () => port), addEventListener: vi.fn() },
+    serial: { requestPort: vi.fn(async () => port), addEventListener: vi.fn(), removeEventListener: vi.fn() },
   });
   const onDisconnect = vi.fn();
   const transport = createSerialTransport({ onLine: vi.fn(), onDisconnect });
@@ -78,5 +78,25 @@ describe("serial console session", () => {
     await closing;
     expect(h.writer.releaseLock).toHaveBeenCalledOnce();
     expect(h.events.slice(-3)).toEqual(["dtr-off", "cancel", "close"]);
+  });
+});
+
+describe("firmware port handoff", () => {
+  it("reconnects an authorized port without opening the chooser and removes listeners", async () => {
+    const h = serialHarness();
+    await h.transport.open({ port: h.port });
+    expect(navigator.serial.requestPort).not.toHaveBeenCalled();
+    await h.transport.close();
+    expect(navigator.serial.removeEventListener).toHaveBeenCalledWith("disconnect", expect.any(Function));
+  });
+
+  it("returns the original application port after the 1200 baud touch", async () => {
+    const h = serialHarness();
+    await h.transport.open();
+    const returned = await h.transport.enterBootloader();
+    expect(returned).toBe(h.port);
+    expect(h.port.open).toHaveBeenLastCalledWith({ baudRate: 1200 });
+    expect(h.port.setSignals).toHaveBeenLastCalledWith({ dataTerminalReady: false, requestToSend: false });
+    expect(h.transport.connected).toBe(false);
   });
 });

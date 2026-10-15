@@ -33,8 +33,8 @@ function disconnect() {
   <div class="card">
     <div class="card-header master-header">
       <h3><span class="heading-icon" aria-hidden="true">📡</span><span>Master</span><MasterConnectionLight class="dot" /></h3>
-      <button v-if="!device.connected" class="btn btn-success btn-sm conn-btn" :disabled="device.connecting || !device.supported" @click="device.connect()">Connect</button>
-      <button v-else class="btn btn-ghost btn-sm conn-btn disconnect-btn" @click="disconnect">Disconnect</button>
+      <button v-if="!device.connected" class="btn btn-success btn-sm conn-btn" :disabled="device.updateInProgress || device.connecting || !device.supported" @click="device.connect()">Connect</button>
+      <button v-else class="btn btn-ghost btn-sm conn-btn disconnect-btn" :disabled="device.updateInProgress" @click="disconnect">Disconnect</button>
     </div>
     <div class="card-body">
       <p v-if="!device.supported" class="hint">Web Serial is not supported by this browser</p>

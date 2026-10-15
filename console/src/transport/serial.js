@@ -18,18 +18,17 @@ export function createSerialTransport({ onLine, onDisconnect }) {
   let writeChain = Promise.resolve(true);
   const filters = [{ usbVendorId: USB_VID, usbProductId: USB_PID }];
 
-  if (isSerialSupported()) {
-    // The read loop may not notice a yanked cable immediately; the OS-level event does.
-    navigator.serial.addEventListener("disconnect", (e) => {
-      if (port && e.target === port) {
-        const wasIntentional = intentionalClose;
-        cleanup();
-        if (!wasIntentional) onDisconnect?.();
-      }
-    });
-  }
+  // The read loop may not notice a yanked cable immediately; the OS event does.
+  const disconnected = (e) => {
+    if (port && e.target === port) {
+      const wasIntentional = intentionalClose;
+      cleanup();
+      if (!wasIntentional) onDisconnect?.();
+    }
+  };
 
   function cleanup() {
+    if (isSerialSupported()) navigator.serial.removeEventListener("disconnect", disconnected);
     try {
       reader?.releaseLock();
     } catch {
@@ -39,12 +38,13 @@ export function createSerialTransport({ onLine, onDisconnect }) {
     port = null;
   }
 
-  async function open() {
+  async function open({ port: selectedPort } = {}) {
     if (!isSerialSupported()) throw new Error("Web Serial is not supported by this browser");
-    const candidate = await navigator.serial.requestPort({ filters });
+    const candidate = selectedPort || await navigator.serial.requestPort({ filters });
     await candidate.open({ baudRate: SERIAL_BAUD });
     port = candidate;
     intentionalClose = false;
+    navigator.serial.addEventListener("disconnect", disconnected);
     readLoop();
     try {
       // Firmware starts reporting only after DTR. Start the reader first.
@@ -58,12 +58,14 @@ export function createSerialTransport({ onLine, onDisconnect }) {
 
   async function readLoop() {
     const current = port;
+    let currentReader;
     const decoder = new TextDecoder();
     let buffer = "";
     try {
-      reader = current.readable.getReader();
+      currentReader = current.readable.getReader();
+      reader = currentReader;
       for (;;) {
-        const { value, done } = await reader.read();
+        const { value, done } = await currentReader.read();
         if (done) break;
         if (!value) continue;
         buffer += decoder.decode(value, { stream: true });
@@ -78,14 +80,15 @@ export function createSerialTransport({ onLine, onDisconnect }) {
       /* device removed / reader cancelled - handled below */
     } finally {
       try {
-        reader?.releaseLock();
+        currentReader?.releaseLock();
       } catch {
         /* ignore */
       }
-      reader = null;
+      if (reader === currentReader) reader = null;
     }
     if (port === current && !intentionalClose) {
       port = null;
+      navigator.serial.removeEventListener("disconnect", disconnected);
       onDisconnect?.();
     }
   }
@@ -149,6 +152,7 @@ export function createSerialTransport({ onLine, onDisconnect }) {
     } catch {
       /* the device usually vanishes before close resolves */
     }
+    return current;
   }
 
   return {

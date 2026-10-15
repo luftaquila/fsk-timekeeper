@@ -45,6 +45,7 @@ test: $(OUT)/gps-test $(OUT)/sync-test $(OUT)/queue-test $(OUT)/fault-test $(OUT
 	"$(OUT)/usb-lines" > "$(OUT)/usb_lines.txt" && diff -u usb_lines.txt "$(OUT)/usb_lines.txt" && \
 		echo "PASS usb_lines" || failed=1; \
 	python3 uf2_test.py || failed=1; \
+	python3 metadata_test.py || failed=1; \
 	exit $$failed
 
 $(OUT)/gps-test: gps_test.c fakes/nrf.h $(SRC)/gps.c $(HEADERS)

@@ -25,6 +25,7 @@ function fmt(t) {
 }
 
 function send() {
+  if (device.updateInProgress) return;
   const s = input.value.trim();
   if (!s) return;
   device.transmitLine(s);
@@ -48,8 +49,8 @@ function send() {
         <div v-if="!lines.length" class="muted">No traffic yet</div>
       </div>
       <form class="send" @submit.prevent="send">
-        <input v-model="input" class="form-input mono" placeholder="?STATUS" :disabled="!device.connected" />
-        <button class="btn btn-ghost btn-sm" type="submit" :disabled="!device.connected">Send</button>
+        <input v-model="input" class="form-input mono" placeholder="?STATUS" :disabled="!device.connected || device.updateInProgress" />
+        <button class="btn btn-ghost btn-sm" type="submit" :disabled="!device.connected || device.updateInProgress">Send</button>
       </form>
     </div>
   </div>

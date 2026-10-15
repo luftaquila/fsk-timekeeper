@@ -41,7 +41,7 @@ function generate() {
 }
 
 async function send() {
-  if (!valid.value || onBoard.value || busy.value || loading.value || !device.connected || timing.armed) return;
+  if (!valid.value || onBoard.value || busy.value || loading.value || !device.connected || device.updateInProgress || timing.armed) return;
   if (!window.confirm("Apply this radio key to the connected board?")) return;
   busy.value = true;
   failure.value = "";
@@ -80,7 +80,7 @@ async function send() {
         </span>
         <div class="apply-group">
           <span v-if="!lastResult && device.connected && valid && !loading && !onBoard" class="key-status unsaved">Unsaved Changes</span>
-          <button class="btn btn-success btn-sm send" type="button" :disabled="!valid || onBoard || !device.connected || busy || loading || timing.armed" @click="send">
+          <button class="btn btn-success btn-sm send" type="button" :disabled="!valid || onBoard || !device.connected || device.updateInProgress || busy || loading || timing.armed" @click="send">
             {{ busy ? "Applying…" : "Apply" }}
           </button>
         </div>

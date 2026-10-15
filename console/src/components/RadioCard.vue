@@ -38,7 +38,7 @@ const resultText = computed(() => notificationText({
 }[lastResult.value] || failure.value || "Settings Rejected"));
 
 const board = computed(() => radioOf(device.identity));
-const blocked = computed(() => busy.value || !device.connected || device.keyReadState === "loading" || timing.armed);
+const blocked = computed(() => busy.value || device.updateInProgress || !device.connected || device.keyReadState === "loading" || timing.armed);
 
 const cfg = computed(() => {
   if (frequencyKhz.value == null || power.value == null) return null;

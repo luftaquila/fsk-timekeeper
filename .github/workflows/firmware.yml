@@ -62,9 +62,10 @@ jobs:
              build/fsk-timekeeper.elf build/fsk-timekeeper.map actions/
           # Serial-DFU package for the Adafruit nRF52 bootloader. The hex is already
           # linked at 0x26000 (S140 user-app base), so no offset conversion is needed.
-          pip install adafruit-nrfutil
+          pip install adafruit-nrfutil==0.5.3.post16
           adafruit-nrfutil dfu genpkg --dev-type 0x0052 \
             --application build/fsk-timekeeper.hex actions/fsk-timekeeper-dfu.zip
+          python3 tools/firmware_metadata.py package actions/fsk-timekeeper-dfu.zip build/fsk-timekeeper.bin
           cp ../../.github/assets/flash.sh ../../.github/assets/flash.ps1 ../../.github/assets/flash.bat actions/
           arm-none-eabi-size build/fsk-timekeeper.elf
 

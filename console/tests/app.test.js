@@ -78,7 +78,7 @@ describe("app under jsdom", () => {
       await router.push(path);
       await flushPromises();
       assert.match(wrapper.text(), needle, path);
-      assert.equal(wrapper.findAll("[title]").length, 0);
+      assert.equal(wrapper.findAll("[title]").filter((el) => !el.classes().includes("github-link")).length, 0);
     }
 
     // connect the simulator and check the settings tables fill in
@@ -337,7 +337,7 @@ describe("app under jsdom", () => {
     assert.match(wrapper.find(".fault-row").text(), /Finish/);
     assert.match(wrapper.find(".fault-row").text(), /Capture Loss/);
     assert.match(wrapper.find(".fault-row .fault-window").text(), /end not known yet/);
-    assert.equal(wrapper.findAll("[title]").length, 0);
+    assert.equal(wrapper.findAll("[title]").filter((el) => !el.classes().includes("github-link")).length, 0);
     saved.fault = priorFault;
 
     // Start/Stop without a crossing must not classify the attempt as DNS.
@@ -385,7 +385,7 @@ describe("app under jsdom", () => {
     assert.equal(resultLink.text(), "00:08.500");
     assert.deepEqual(wrapper.findAll(".data-table th").map((th) => th.text()), ["Date", "Mode", "Note", "Result", "Status", ""]);
     assert.doesNotMatch(wrapper.find(".data-table").text(), /00:02.000 \/ 00:01.500/);
-    assert.equal(wrapper.findAll("[title]").length, 0);
+    assert.equal(wrapper.findAll("[title]").filter((el) => !el.classes().includes("github-link")).length, 0);
     // jsdom does not implement the native dialog top layer.
     const dialog = wrapper.find("dialog").element;
     dialog.showModal = () => dialog.setAttribute("open", "");

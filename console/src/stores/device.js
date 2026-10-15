@@ -45,6 +45,7 @@ export const useDeviceStore = defineStore("device", () => {
   const stats = reactive({ lines: 0, events: 0, duplicates: 0, acks: 0, quarantined: 0, gated: 0 });
   const consoleLines = ref([]);
   const dfuInProgress = ref(false);
+  const updateInProgress = ref(false); // survives the app -> bootloader disconnect
   const durable = ref(true);
   const durableError = ref(null);
   const storageWarning = ref(false); // navigator.storage.persist() refused
@@ -447,6 +448,7 @@ export const useDeviceStore = defineStore("device", () => {
 
   // One provisioning command to the connected board (any role); resolves "ok", one of fails, or "timeout".
   function provision(cmd, line, shown, fails) {
+    if (updateInProgress.value) return Promise.reject(new Error("Wait for the firmware update to finish."));
     if (!transport?.connected) return Promise.reject(new Error("Master not connected"));
     if (keyReadState.value === "loading") return Promise.reject(new Error("Wait for the board settings to load."));
     if (provisionPending) return Promise.reject(new Error("A settings update is already in progress"));
@@ -575,7 +577,8 @@ export const useDeviceStore = defineStore("device", () => {
   }
 
   // kind: "serial" (default) | "fake" (dev simulator).
-  async function connect({ kind = "serial" } = {}) {
+  async function connect({ kind = "serial", port, forUpdate = false } = {}) {
+    if (updateInProgress.value && !forUpdate) return false;
     if (connected.value || connecting.value) return true;
     if (kind === "serial" && !isSerialSupported()) {
       notyf.error("Web Serial is not supported by this browser");
@@ -584,7 +587,7 @@ export const useDeviceStore = defineStore("device", () => {
     connecting.value = true;
     const t = makeTransport(kind);
     try {
-      await t.open();
+      await t.open({ port });
       transport = t;
       transportKind.value = kind;
       connected.value = true;
@@ -595,7 +598,7 @@ export const useDeviceStore = defineStore("device", () => {
       transmitLine("?ID");
       transmitLine("?STATUS");
       readRadioKey();
-      notyf.success(kind === "fake" ? "Fake master connected" : "Master connected");
+      if (!forUpdate) notyf.success(kind === "fake" ? "Fake master connected" : "Master connected");
       return true;
     } catch (e) {
       connecting.value = false;
@@ -620,7 +623,7 @@ export const useDeviceStore = defineStore("device", () => {
     dfuInProgress.value = true;
     const t = transport;
     try {
-      await t.enterBootloader();
+      return await t.enterBootloader();
     } finally {
       if (transport === t) finishDisconnect();
     }
@@ -652,6 +655,7 @@ export const useDeviceStore = defineStore("device", () => {
     stats,
     consoleLines,
     dfuInProgress,
+    updateInProgress,
     durable,
     durableError,
     storageWarning,
