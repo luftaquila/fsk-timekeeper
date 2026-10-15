@@ -111,7 +111,7 @@ async function save(config) {
         <div class="radio-column-labels" aria-hidden="true"><span>Setting</span><span>Saved Value</span><span>New Value</span></div>
         <div class="radio-row">
           <div class="setting-name"><label for="radio-frequency">Frequency</label><small id="frequency-range">{{ frequencyRange }}</small></div>
-          <div class="saved-value"><span class="mobile-label">Saved: </span><MetricValue class="frequency-current" :value="board ? (board.freqKhz / 1000).toFixed(3) : '—'" unit="MHz" /></div>
+          <div class="saved-value"><span class="mobile-label">Saved: </span><MetricValue class="frequency-current" :value="board ? (board.freqKhz / 1000).toFixed(3) : '-'" unit="MHz" /></div>
           <div>
             <div class="frequency-input">
               <input id="radio-frequency" v-model="frequency" class="form-input mono freq" type="text" inputmode="decimal" aria-label="Frequency" aria-describedby="frequency-range frequency-error" :aria-invalid="frequency !== '' && frequencyKhz == null" />
@@ -133,7 +133,7 @@ async function save(config) {
         </div>
         <div class="radio-row">
           <div class="setting-name"><label for="radio-lbt">Listen Before Talk</label><small>5 ms / Scan</small></div>
-          <div class="saved-value"><span class="mobile-label">Saved: </span><MetricValue class="lbt-current" :value="board ? (board.lbt ? 'On' : 'Off') : '—'" /></div>
+          <div class="saved-value"><span class="mobile-label">Saved: </span><MetricValue class="lbt-current" :value="board ? (board.lbt ? 'On' : 'Off') : '-'" /></div>
           <select id="radio-lbt" v-model="lbt" class="form-select lbt">
             <option :value="1">On</option>
             <option :value="0">Off</option>
@@ -141,7 +141,7 @@ async function save(config) {
         </div>
         <div class="radio-row fixed-radio-row">
           <div class="setting-name">Spreading Factor<small>SF5 ~ SF12</small></div>
-          <div class="saved-value"><span class="mobile-label">Saved: </span><MetricValue :value="device.identity ? `SF${device.identity.sf}` : '—'" /></div>
+          <div class="saved-value"><span class="mobile-label">Saved: </span><MetricValue :value="device.identity ? `SF${device.identity.sf}` : '-'" /></div>
           <div class="fixed-value">Fixed</div>
         </div>
         <div class="radio-row fixed-radio-row">
@@ -173,30 +173,28 @@ async function save(config) {
   gap: 0.75rem;
   align-items: center;
 }
-.radio-column-labels { color: var(--text-primary); background: var(--bg-secondary); font-size: 0.875rem; font-weight: 600; padding: 0.65rem 0; }
-.fixed-value { font-size: 0.85rem; color: var(--text-secondary); }
+.radio-column-labels { color: var(--text-primary); background: var(--bg-secondary); font-size: 1rem; font-weight: 600; padding: 0.65rem 0; }
+.fixed-value { font-size: 1rem; color: var(--text-secondary); }
 .radio-row { min-height: 4.5rem; box-sizing: border-box; padding: 0.75rem 0; border-top: 1px solid var(--border-color); }
-.setting-name { font-size: 0.85rem; }
-.saved-value { font-size: 0.95rem; color: var(--text-primary); overflow-wrap: anywhere; }
+.setting-name { font-size: 1rem; }
+.saved-value { font-size: 1rem; color: var(--text-primary); overflow-wrap: anywhere; }
 .mobile-label { display: none; }
-.setting-name small { display: block; margin-top: 0.3rem; color: var(--text-tertiary); font-size: 0.75rem; font-weight: 400; }
+.setting-name small { display: block; margin-top: 0.3rem; color: var(--text-tertiary); font-size: 1rem; font-weight: 400; }
 .frequency-input, .power-input { display: flex; align-items: center; gap: 0.5rem; }
 .freq, .power { min-width: 0; }
-#frequency-error { display: block; margin-top: 0.35rem; font-size: 0.75rem; }
-.unit { color: var(--text-secondary); font-size: 0.8rem; }
-.config-status { min-width: 0; text-align: right; color: var(--text-secondary); font-size: 0.8rem; }
+#frequency-error { display: block; margin-top: 0.35rem; font-size: 1rem; }
+.unit { color: var(--text-secondary); font-size: 1rem; }
+.config-status { min-width: 0; text-align: right; color: var(--text-secondary); font-size: 1rem; }
 .radio-actions { flex-wrap: wrap; }
-.send { flex-shrink: 0; }
-.hint { margin-top: 0.5rem; font-size: 0.8rem; color: var(--text-secondary); }
 .ok { color: var(--accent-success); }
 .unsaved { color: var(--accent-warning); }
 .bad { color: var(--accent-danger); }
 @media (max-width: 600px) {
+  .config-status { flex-basis: 100%; }
   .radio-column-labels { display: none; }
   .radio-row { grid-template-columns: minmax(0, 1fr); gap: 0.5rem; padding: 1rem 0; }
   .radio-row:first-of-type { border-top: 0; }
   .mobile-label { display: inline; }
   .setting-name { font-weight: 600; }
-  .saved-value { font-size: 0.8rem; }
 }
 </style>

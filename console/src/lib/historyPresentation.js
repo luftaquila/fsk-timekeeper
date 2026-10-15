@@ -16,7 +16,7 @@ export function historyRecord(row, edges) {
   return {
     Date: fmtDateTime(row.createdAt),
     Mode: MODE_LABEL[row.mode] || row.mode,
-    Note: row.note || "—",
+    Note: row.note || "-",
     Result: formatDuration(resultNs(row, edges)),
     Status: [statusLabel(row), ...(row.durable === false ? ["Not Saved"] : [])].join("\n"),
   };

@@ -75,7 +75,7 @@ export function createSerialTransport({ onLine, onDisconnect }) {
         }
       }
     } catch {
-      /* device removed / reader cancelled — handled below */
+      /* device removed / reader cancelled - handled below */
     } finally {
       try {
         reader?.releaseLock();

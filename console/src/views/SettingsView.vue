@@ -21,9 +21,9 @@ const isDev = import.meta.env.DEV;
     <details class="card board-settings">
       <summary class="card-header settings-toggle">
         <h3><span class="heading-icon" aria-hidden="true">⚙️</span><span>Device Settings</span></h3>
-        <span class="disclosure" aria-hidden="true">›</span>
+        <svg class="disclosure" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6" /></svg>
       </summary>
-      <p class="settings-notice">All masters and sensors must use the same radio settings, key, and firmware.</p>
+      <p class="settings-notice">All masters and sensors must use the same radio settings, key, and firmware</p>
       <p v-if="timing.armed" class="settings-notice">Stop the run to change device settings</p>
       <div class="settings-sections">
         <RadioCard />
@@ -48,12 +48,16 @@ const isDev = import.meta.env.DEV;
 }
 .settings :deep(.card-header h3) { gap: 0.75rem; }
 .settings :deep(.heading-icon) { flex-shrink: 0; }
+.settings :deep(.btn) {
+  padding: 0.375rem 0.75rem;
+  font-size: 0.9375rem;
+}
 .settings-toggle { display: flex; align-items: center; justify-content: space-between; gap: 1rem; cursor: pointer; user-select: none; list-style: none; }
 .settings-toggle::-webkit-details-marker { display: none; }
 .settings-toggle:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: -3px; }
 .board-settings:not([open]) > .settings-toggle { border-bottom: 0; }
 .board-settings[open] .disclosure { transform: rotate(90deg); }
-.settings-notice { padding: 1rem 1.25rem 0; color: var(--text-secondary); font-size: 0.85rem; }
+.settings-notice { padding: 1rem 1.25rem 0; color: var(--text-secondary); font-size: 1rem; }
 .settings-sections {
   padding: 0 1.25rem;
 }
@@ -67,12 +71,12 @@ const isDev = import.meta.env.DEV;
   border-top: 1px solid var(--border-color);
 }
 .settings-sections :deep(.section-heading h4) {
-  font-size: 0.95rem;
+  font-size: 1.125rem;
   margin: 0 0 0.5rem;
 }
 .settings-sections :deep(.section-content) { min-width: 0; }
 .settings-sections :deep(.help) {
-  font-size: 0.85rem;
+  font-size: 1rem;
   line-height: 1.6;
   color: var(--text-secondary);
   padding-left: 1.1rem;
@@ -86,9 +90,21 @@ const isDev = import.meta.env.DEV;
   margin-top: 1rem;
 }
 
-.settings-sections :deep(.action-result) { min-width: 0; overflow-wrap: anywhere; font-size: 0.8rem; font-weight: 600; }
+.settings-sections :deep(.action-result) { min-width: 0; overflow-wrap: anywhere; font-size: 1rem; font-weight: 600; }
+.settings-sections :deep(.section-actions .btn) {
+  line-height: 1.25;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.settings-sections :deep(.send:disabled) {
+  color: var(--text-secondary);
+  background: var(--bg-hover);
+  box-shadow: inset 0 0 0 1px var(--border-color);
+  opacity: 1;
+}
 .settings-sections :deep(.apply-group) {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: flex-end;
   gap: 0.75rem;

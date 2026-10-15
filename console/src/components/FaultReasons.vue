@@ -15,8 +15,8 @@ defineProps({ reasons: { type: Array, default: () => [] }, boundaryTick: { type:
 </template>
 
 <style scoped>
-.fault-reasons { margin: 0.35rem 0 0; padding-left: 1.2rem; font-size: 0.85rem; overflow-wrap: anywhere; }
+.fault-reasons { margin: 0.35rem 0 0; padding-left: 1.2rem; font-size: 1rem; overflow-wrap: anywhere; }
 li + li { margin-top: 0.6rem; }
 .fault-role { display: block; font-weight: 600; color: var(--text-secondary); }
-.fault-window { display: block; margin-top: 0.15rem; color: var(--text-secondary); font-size: 0.8rem; }
+.fault-window { display: block; margin-top: 0.15rem; color: var(--text-secondary); font-size: 1rem; }
 </style>

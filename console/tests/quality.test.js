@@ -37,7 +37,7 @@ describe("wirelessQuality", () => {
 
   it("fails on the master link, the contract and the pipeline", () => {
     assert.match(gate("sprint", SPRINT, ALL(), { masterFresh: false }).reasons[0].reason, /not connected/);
-    assert.match(gate("sprint", SPRINT, ALL(), { contract: { ok: false, reason: "Firmware and console versions do not match — update both." } }).reasons[0].reason, /versions do not match/);
+    assert.match(gate("sprint", SPRINT, ALL(), { contract: { ok: false, reason: "Firmware and console versions do not match - update both." } }).reasons[0].reason, /versions do not match/);
     assert.match(gate("sprint", SPRINT, ALL(), { pipeline: { ok: false, reason: "queue full" } }).reasons[0].reason, /queue full/);
     const t = ALL();
     t[0] = healthy("0", { received_at: NOW - 12001 });

@@ -37,7 +37,7 @@ function updateMapping(node, changes) {
 <template>
   <div class="card sensor-card">
     <div class="card-header mapping-header">
-      <h3><span class="heading-icon" aria-hidden="true">🔭</span><span>Sensors</span> <span class="sensor-count badge badge-default">{{ nodes.length }}</span></h3>
+      <h3><span class="heading-icon" aria-hidden="true">🔭</span><span>Sensors</span> <span class="sensor-count count-chip">{{ nodes.length }}</span></h3>
       <label class="debounce-control">
         <span>Debounce</span>
         <input type="text" inputmode="numeric" class="form-input debounce-input" :value="settings.state.debounceMs" :disabled="timing.armed" @input="digitsOnly" @change="onDebounce" />
@@ -48,7 +48,7 @@ function updateMapping(node, changes) {
     <div v-else class="sensor-list">
       <article v-for="node in nodes" :key="node" class="sensor" :aria-label="`Sensor ${node}`">
         <div class="sensor-heading">
-          <div class="sensor-title"><h4 class="mono">{{ node }}</h4><NodeAge :node-id="node" /></div>
+          <div class="sensor-title"><h4 class="device-id mono">{{ node }}</h4><NodeAge :node-id="node" /></div>
           <div class="mapping-controls">
             <label class="sensor-role">
               <span>Role</span>
@@ -80,25 +80,13 @@ function updateMapping(node, changes) {
   align-items: center;
   gap: 0.5rem;
   color: var(--text-secondary);
-  font-size: 0.8rem;
+  font-size: 1rem;
 }
 .debounce-input { width: 5rem; padding: 0.4rem 0.5rem; text-align: right; }
 .sensor { padding: 1.25rem; min-width: 0; container: sensor-layout / inline-size; }
 .sensor + .sensor { border-top: 1px solid var(--border-color); }
 .sensor-heading { margin-bottom: 1rem; }
-.sensor-count {
-  justify-content: center;
-  min-width: 1.5rem;
-  padding: 0.125rem 0.5rem;
-  border-radius: 999px;
-  font-size: 0.875rem;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-  line-height: 1.25rem;
-  color: var(--text-primary);
-  background: color-mix(in srgb, var(--text-primary) 10%, var(--bg-primary));
-}
-.sensor-heading h4 { font-size: 0.95rem; margin: 0; }
+
 .sensor-title { display: flex; align-items: center; gap: 0.75rem; flex-shrink: 0; }
 .mapping-controls {
   display: flex;
@@ -109,18 +97,18 @@ function updateMapping(node, changes) {
   align-items: center;
   min-width: 0;
 }
-.mapping-controls label { display: flex; align-items: center; gap: 0.5rem; min-width: 0; color: var(--text-secondary); font-size: 0.8rem; }
+.mapping-controls label { display: flex; align-items: center; gap: 0.5rem; min-width: 0; color: var(--text-secondary); font-size: 1rem; }
 .mapping-controls label > span { flex-shrink: 0; }
-.mapping-controls .form-input, .mapping-controls .form-select { height: 2.5rem; padding: 0.375rem 0.625rem; font-size: 0.95rem; }
+.mapping-controls .form-input, .mapping-controls .form-select { height: 2.5rem; padding: 0.375rem 0.625rem; font-size: 1rem; }
 .mapping-controls .form-select { width: 6.5rem; }
-.mapping-controls .sensor-role { color: var(--text-primary); font-size: 0.875rem; font-weight: 600; }
+.mapping-controls .sensor-role { color: var(--text-primary); font-size: 1rem; font-weight: 600; }
 .sensor-role .form-select { width: 7.25rem; font-weight: 600; color: var(--text-primary); }
 .sensor-note { flex: 0 1 8rem; max-width: 100%; }
 .sensor-note .form-input { min-width: 0; width: 100%; }
-@container sensor-layout (min-width: 828px) {
+@container sensor-layout (min-width: 888px) {
   .sensor-heading {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
     column-gap: 1.5rem;
   }
   .sensor-title { grid-column: 1 / 3; }

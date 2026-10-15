@@ -60,7 +60,7 @@ function deleteSensor() {
   <div class="card simulator">
     <div class="card-header simulator-toggle" :class="{ 'is-open': open }" role="button" tabindex="0" :aria-expanded="open" aria-controls="simulator-body" @click="open = !open" @keydown.enter.prevent="open = !open" @keydown.space.prevent="open = !open">
       <h3><span class="heading-icon" aria-hidden="true">🧪</span><span>Simulator (Development Build Only)</span></h3>
-      <span class="disclosure" :class="{ 'is-open': open }" aria-hidden="true">›</span>
+      <svg class="disclosure" :class="{ 'is-open': open }" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6" /></svg>
     </div>
     <div v-if="open" id="simulator-body" class="card-body">
       <div class="connection-toolbar">
@@ -157,6 +157,8 @@ function deleteSensor() {
 }
 .node {
   min-width: 0;
+  width: auto;
+  max-width: 100%;
   font-family: var(--font-mono);
 }
 .control-group {
@@ -167,13 +169,14 @@ function deleteSensor() {
   padding-bottom: 0;
 }
 .group-title {
-  font-size: 0.95rem;
+  font-size: 1.125rem;
   font-weight: 600;
 }
 .actions {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 1rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
   min-width: 0;
   border: 0;
   padding: 0;
@@ -181,13 +184,12 @@ function deleteSensor() {
 }
 .btn,
 .node {
-  min-height: 44px;
-  padding: 0.625rem 0.75rem;
-  font-size: 0.875rem;
   line-height: 1.4;
 }
-@media (max-width: 1100px) {
-  .actions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.node {
+  min-height: 44px;
+  padding: 0.625rem 0.75rem;
+  font-size: 1rem;
 }
 @media (max-width: 640px) {
   .connection-toolbar,
@@ -196,8 +198,5 @@ function deleteSensor() {
     grid-template-columns: minmax(0, 1fr);
     gap: 1rem;
   }
-}
-@media (max-width: 420px) {
-  .actions { grid-template-columns: minmax(0, 1fr); }
 }
 </style>

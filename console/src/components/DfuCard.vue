@@ -36,8 +36,8 @@ async function enter() {
     </div>
     <div class="section-content">
       <ol class="help">
-        <li>Enter bootloader, or double-tap <code>RST</code> on a new board.</li>
-        <li>Run <code>flash.bat</code> (Windows) or <code>./flash.sh</code> (Linux / macOS) from the release zip.</li>
+        <li>Enter bootloader, or double-tap <code>RST</code> on a new board</li>
+        <li>Run <code>flash.bat</code> (Windows) or <code>./flash.sh</code> (Linux / macOS) from the release zip</li>
       </ol>
 
       <div class="section-actions">
@@ -53,14 +53,9 @@ async function enter() {
 <style scoped>
 code {
   font-family: var(--font-mono);
-  font-size: 0.8rem;
+  font-size: 1rem;
   background: var(--bg-hover);
   padding: 0.05rem 0.3rem;
   border-radius: 4px;
-}
-.muted {
-  margin-left: 0.75rem;
-  font-size: 0.8rem;
-  color: var(--text-tertiary);
 }
 </style>

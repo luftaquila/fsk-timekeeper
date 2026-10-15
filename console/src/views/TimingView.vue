@@ -28,7 +28,7 @@ const laps = computed(() => (verification.value === "invalid" ? timing.lapRows.f
 const lapNs = computed(() => laps.value.map((l) => l.ns).filter((ns) => ns != null));
 const best = computed(() => (lapNs.value.length ? lapNs.value.reduce((a, b) => (b < a ? b : a)) : null));
 const last = computed(() => (lapNs.value.length ? lapNs.value[lapNs.value.length - 1] : null));
-const avgText = computed(() => (lapNs.value.length ? formatDuration(lapNs.value.reduce((a, b) => a + b, 0n), BigInt(lapNs.value.length)) : "—"));
+const avgText = computed(() => (lapNs.value.length ? formatDuration(lapNs.value.reduce((a, b) => a + b, 0n), BigInt(lapNs.value.length)) : "-"));
 const target = computed(() => timing.run?.lapTarget ?? settings.state.lapTarget);
 
 const status = computed(() => {

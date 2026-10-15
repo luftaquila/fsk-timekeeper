@@ -67,7 +67,7 @@ function logLine(e, code) {
 function boardId(id) {
   // Older simulator logs used a non-hex identity and bypassed the short-ID format.
   if (id === "F4KEF4KE00000001") return "00000001";
-  if (!/^[0-9a-f]{16}$/i.test(id ?? "")) return id || "—";
+  if (!/^[0-9a-f]{16}$/i.test(id ?? "")) return id || "-";
   const low = id.slice(8).toUpperCase();
   const high = id.slice(0, 8).toUpperCase();
   return low !== "00000000" ? low : high !== "00000000" ? high : "00000001";

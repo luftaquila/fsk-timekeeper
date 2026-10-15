@@ -22,7 +22,10 @@ const navItems = [
 <style scoped>
 .nav-tabs {
   display: flex;
-  gap: 1rem;
+  gap: 0.25rem;
+  background: transparent;
+  padding: 0.25rem;
+  border-radius: 12px;
   flex: 1;
   justify-content: center;
   flex-wrap: wrap;
@@ -34,12 +37,13 @@ const navItems = [
   gap: 0.5rem;
   padding: 0.5rem 1rem;
   border-radius: 8px;
-  color: #b0b4be;
+  color: var(--text-secondary);
   text-decoration: none;
-  font-size: 0.875rem;
+  font-size: 1rem;
   font-weight: 500;
-  transition: background-color 0.15s ease, color 0.15s ease;
-  background: rgba(255, 255, 255, 0.05);
+  transition: background-color 0.2s ease, color 0.2s ease, box-shadow 0.2s ease;
+  border: none;
+  background: none;
   white-space: nowrap;
 }
 
@@ -49,28 +53,33 @@ const navItems = [
 }
 
 .nav-tab:hover {
-  background: rgba(255, 255, 255, 0.1);
-  color: #e2e4e9;
+  background: var(--bg-hover);
+  color: var(--text-primary);
 }
 
 .nav-tab.active {
-  background: rgba(255, 255, 255, 0.12);
-  color: #e2e4e9;
+  background: var(--bg-tab-active, var(--bg-card));
+  color: var(--text-primary);
+  font-weight: 700;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.16), 0 1px 3px rgba(0, 0, 0, 0.1);
 }
 
-@media (max-width: 640px) {
+@media (max-width: 1024px) {
   .nav-tabs {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-column: 1 / -1;
+    grid-row: 2;
     gap: 0.625rem;
-    order: 3;
-    flex: 0 0 100%;
-    justify-content: center;
   }
 
   .nav-tab {
-    flex: 1;
     justify-content: center;
     padding: 0.45rem 0.6rem;
-    font-size: 0.8rem;
   }
+}
+
+@media (max-width: 380px) {
+  .nav-tab { flex-direction: column; gap: 0.25rem; }
 }
 </style>

@@ -35,8 +35,8 @@ function send() {
 <template>
   <div class="card">
     <div class="card-header console-header" :class="{ 'is-open': open }" @click="open = !open">
-      <h3><span class="heading-icon" aria-hidden="true">🖥️</span><span>Serial Console</span> <span class="muted">{{ device.stats.lines }} lines</span></h3>
-      <span class="disclosure" :class="{ 'is-open': open }" aria-hidden="true">›</span>
+      <h3><span class="heading-icon" aria-hidden="true">🖥️</span><span>Serial Console</span> <span class="count-chip" :aria-label="`${device.stats.lines} lines`">{{ device.stats.lines }}</span></h3>
+      <svg class="disclosure" :class="{ 'is-open': open }" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6" /></svg>
     </div>
     <div v-if="open" class="card-body">
       <p class="muted console-stats">Events: {{ device.stats.events }} · ACKs: {{ device.stats.acks }} · Duplicates: {{ device.stats.duplicates }}</p>
@@ -45,7 +45,7 @@ function send() {
         <div v-for="(l, i) in lines" :key="i" class="line" :class="l.dir">
           <span class="ts">{{ fmt(l.t) }}</span><span class="dir">{{ l.dir === "tx" ? "→" : "←" }}</span>{{ l.text }}
         </div>
-        <div v-if="!lines.length" class="muted">No traffic yet.</div>
+        <div v-if="!lines.length" class="muted">No traffic yet</div>
       </div>
       <form class="send" @submit.prevent="send">
         <input v-model="input" class="form-input mono" placeholder="?STATUS" :disabled="!device.connected" />
@@ -66,16 +66,16 @@ function send() {
   user-select: none;
 }
 .muted {
-  color: var(--text-tertiary);
+  color: var(--text-secondary);
   font-weight: 400;
-  font-size: 0.8rem;
+  font-size: 1rem;
 }
 .console-header:not(.is-open) { border-bottom: 0; }
 .opt {
   display: flex;
   align-items: center;
   gap: 0.4rem;
-  font-size: 0.8rem;
+  font-size: 1rem;
   color: var(--text-secondary);
   margin-bottom: 0.5rem;
 }
@@ -86,7 +86,7 @@ function send() {
   border: 1px solid var(--border-color);
   border-radius: 8px;
   padding: 0.5rem 0.75rem;
-  font-size: 0.75rem;
+  font-size: 1rem;
   line-height: 1.5;
   white-space: pre;
 }
@@ -94,7 +94,7 @@ function send() {
   color: var(--accent-primary);
 }
 .ts {
-  color: var(--text-tertiary);
+  color: var(--text-secondary);
   margin-right: 0.5rem;
 }
 .dir {
@@ -102,6 +102,7 @@ function send() {
 }
 .send {
   display: flex;
+  align-items: center;
   gap: 0.5rem;
   margin-top: 0.5rem;
 }

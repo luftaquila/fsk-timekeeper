@@ -62,20 +62,20 @@ function toggle() {
   justify-content: center;
   width: 40px;
   height: 40px;
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
   border-radius: 8px;
   cursor: pointer;
   transition: background-color 0.15s ease;
 }
 
 .theme-toggle:hover {
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--bg-hover);
 }
 
 .icon {
   width: 20px;
   height: 20px;
-  color: #b0b4be;
+  color: var(--text-secondary);
 }
 </style>

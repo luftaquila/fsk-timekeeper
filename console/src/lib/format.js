@@ -3,9 +3,9 @@
 const pad = (v, n) => String(v).padStart(n, "0");
 
 // ns / divisor -> "MM:SS.mmm" (minutes may exceed 59), milliseconds rounded half up once.
-// null -> "—". Negative spans show as zero.
+// null -> "-". Negative spans show as zero.
 export function formatDuration(ns, divisor = 1n) {
-  if (ns == null) return "—";
+  if (ns == null) return "-";
   let n = BigInt(ns);
   if (n < 0n) n = 0n;
   const d = BigInt(divisor) * 1_000_000n;
@@ -15,7 +15,7 @@ export function formatDuration(ns, divisor = 1n) {
 
 // Signed difference in total seconds, rounded to milliseconds half up.
 export function formatDelta(ns) {
-  if (ns == null) return "—";
+  if (ns == null) return "-";
   const n = BigInt(ns);
   const ms = ((n < 0n ? -n : n) + 500_000n) / 1_000_000n;
   return `${n < 0n ? "−" : n > 0n ? "+" : ""}${ms / 1000n}.${pad(ms % 1000n, 3)}`;

@@ -41,7 +41,7 @@ function load() {
       if (Number.isInteger(saved.debounceMs)) base.debounceMs = clampDebounce(saved.debounceMs);
     }
   } catch {
-    /* corrupt storage — start clean */
+    /* corrupt storage - start clean */
   }
   return base;
 }

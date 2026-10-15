@@ -546,7 +546,7 @@ describe("pipeline with the fake master", () => {
     await device.disconnect();
   });
 
-  it("freezes the debounce at START — a later setting change or a restart never regroups crossings", { timeout: 20000 }, async () => {
+  it("freezes the debounce at START - a later setting change or a restart never regroups crossings", { timeout: 20000 }, async () => {
     const { device, settings, timing } = await boot();
     const fake = await connectFake(device);
     const [a] = [...fake.sensors.keys()];

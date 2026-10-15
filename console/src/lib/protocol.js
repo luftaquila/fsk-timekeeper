@@ -378,7 +378,7 @@ function bitOrNull(v) {
 }
 
 // D line -> telemetry. `received_at` dates the report; `last_seen_at` is when the master
-// last heard the node (informational — the link state is the firmware's).
+// last heard the node (informational - the link state is the firmware's).
 export function normalizeTelemetry(t, now = Date.now()) {
   if (!t || !validateNodeId(String(t.node_id))) return null;
   const heardAgeMs = Number.isFinite(t.last_seen_ms) && t.last_seen_ms >= 0 ? Math.trunc(t.last_seen_ms) : null;

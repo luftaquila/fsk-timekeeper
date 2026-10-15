@@ -111,7 +111,7 @@ async function clearAll() {
               <tr>
                 <td class="mono nowrap">{{ fmtDateTime(r.createdAt) }}</td>
                 <td class="centered"><span class="badge mode-chip" :class="{ 'mode-sprint': r.mode === 'sprint', 'mode-laps': r.mode === 'laps' }">{{ MODE_LABEL[r.mode] || r.mode }}</span></td>
-                <td class="note-cell">{{ r.note || "—" }}</td>
+                <td class="note-cell">{{ r.note || "-" }}</td>
                 <td class="mono nowrap result-cell centered">
                   <button v-if="lapSummaries.get(r.runId)" class="result-link" aria-haspopup="dialog" @click="openLaps(r)">{{ result(r) }}</button>
                   <span v-else>{{ result(r) }}</span>

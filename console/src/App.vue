@@ -47,6 +47,11 @@ onMounted(async () => {
         <div class="header-actions">
           <MasterConnectionLight class="link-dot" />
           <ThemeToggle />
+          <a class="github-link" href="https://github.com/luftaquila/fsk-timekeeper" target="_blank" rel="noopener noreferrer" aria-label="GitHub repository (opens in a new tab)" title="GitHub">
+            <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <path d="M12 .5C5.37.5 0 5.87 0 12.5c0 5.3 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.043-1.61-4.043-1.61-.546-1.387-1.333-1.756-1.333-1.756-1.09-.745.083-.729.083-.729 1.205.085 1.838 1.237 1.838 1.237 1.07 1.835 2.809 1.305 3.495.998.108-.776.418-1.305.762-1.605-2.665-.303-5.467-1.332-5.467-5.93 0-1.31.468-2.381 1.235-3.221-.123-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23a11.52 11.52 0 0 1 3.003-.404c1.02.005 2.047.138 3.003.404 2.291-1.552 3.297-1.23 3.297-1.23.654 1.652.242 2.873.12 3.176.77.84 1.233 1.911 1.233 3.221 0 4.61-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222 0 1.606-.015 2.898-.015 3.293 0 .322.216.694.825.576C20.565 22.296 24 17.8 24 12.5 24 5.87 18.627.5 12 .5Z" />
+            </svg>
+          </a>
         </div>
       </div>
     </header>
@@ -85,6 +90,20 @@ onMounted(async () => {
 .link-dot {
   margin-right: 0.25rem;
 }
+.github-link {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  color: var(--text-secondary);
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  transition: background-color 0.15s ease;
+}
+.github-link:hover { background: var(--bg-hover); }
+.github-link svg { width: 20px; height: 20px; }
 .banner {
   max-width: 1400px;
   margin: 1rem auto 0;
@@ -93,7 +112,7 @@ onMounted(async () => {
   background: rgba(239, 68, 68, 0.12);
   border: 1px solid rgba(239, 68, 68, 0.4);
   color: var(--text-primary);
-  font-size: 0.875rem;
+  font-size: 1rem;
   display: flex;
   align-items: center;
   gap: 0.75rem;

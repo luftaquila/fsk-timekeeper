@@ -25,8 +25,8 @@ function linkState(r) {
 const stateLabel = { online: "ONLINE", degraded: "STALE", lost: "LOST", none: "NO REPORT" };
 
 const metric = (value, unit = "") => ({ value, unit });
-const temperature = (v) => metric(v == null ? "—" : (v / 10).toFixed(1), "°C");
-const voltage = (mv) => metric(mv == null ? "—" : (mv / 1000).toFixed(3), "V");
+const temperature = (v) => metric(v == null ? "-" : (v / 10).toFixed(1), "°C");
+const voltage = (mv) => metric(mv == null ? "-" : (mv / 1000).toFixed(3), "V");
 function clockDrift(r) {
   if (isMaster(r)) {
     const p = device.gpsReport(now.value);
@@ -53,7 +53,7 @@ function timingHealth(r) {
   }
   if (r.capture_overflow || r.fifo_drop) return { state: "bad", label: "DATA LOSS" };
   if (r.sync_valid !== 1 || r.skew_valid !== 1) return { state: "bad", label: "SYNC INVALID" };
-  return { state: "good", label: `OK (${r.sync_age_ms ?? "-"} ms)`, parts: ["OK", { ...metric(r.sync_age_ms ?? "—", "ms"), parenthesized: true }] };
+  return { state: "good", label: `OK (${r.sync_age_ms ?? "-"} ms)`, parts: ["OK", { ...metric(r.sync_age_ms ?? "-", "ms"), parenthesized: true }] };
 }
 const errors = computed(() => {
   const r = report.value;
@@ -84,7 +84,7 @@ function socPct(mv) {
 // SNR focuses on the operating range; only the bar is clamped, never the numeric readout.
 function signalGauge(value, min, max, unit, recommendedMin) {
   const known = Number.isFinite(value);
-  return { min, max, unit, number: known ? fmtNum(value) : "—",
+  return { min, max, unit, number: known ? fmtNum(value) : "-",
     // Color the entire segment containing the warning boundary.
     warningPercent: Math.max(0, Math.min(100, Math.ceil((recommendedMin - min) / (max - min) * 10) * 10)),
     value: known ? Math.max(min, Math.min(max, value)) : null,
@@ -105,8 +105,8 @@ const overview = computed(() => {
     { label: "RSSI", value: `${fmtNum(r.rssi)} dBm`, gauge: signalGauge(r.rssi, -130, 0, "dBm", -105) },
     { label: "SNR", value: `${fmtNum(r.snr)} dB`, gauge: signalGauge(r.snr, -10, 20, "dB", -2.5) },
     { label: "Latency", parts: [metric(fmtNum(r.latency_ms, 0), "ms")] },
-    { label: "Beacons Missed", parts: [metric(r.rx_miss ?? 0, "Total"), "/", metric(r.beacon_gap ?? 0, "Consecutive")] },
-    { label: "Battery", parts: [metric(r.batt_mv == null ? "—" : socPct(r.batt_mv), "%"), { ...voltage(r.batt_mv), parenthesized: true }] },
+    { label: "Beacon Lost", parts: [metric(r.rx_miss ?? 0, "Total"), "/", metric(r.beacon_gap ?? 0, "Consecutive")] },
+    { label: "Battery", parts: [metric(r.batt_mv == null ? "-" : socPct(r.batt_mv), "%"), { ...voltage(r.batt_mv), parenthesized: true }] },
     { label: "Temperature", parts: [temperature(r.temp_c10)] },
   ];
 });
@@ -120,7 +120,7 @@ const detail = computed(() => {
 });
 const fields = computed(() => {
   if (props.nodeId !== "0") return [...overview.value, ...detail.value];
-  const uptime = device.heartbeat ? fmtAgeMs(device.heartbeat.uptimeMs) : "—";
+  const uptime = device.heartbeat ? fmtAgeMs(device.heartbeat.uptimeMs) : "-";
   return [...overview.value,
     { label: "Uptime", parts: [/^\d+[sm]$/.test(uptime) ? metric(uptime.slice(0, -1), uptime.slice(-1)) : metric(uptime)] },
     ...detail.value];
@@ -130,7 +130,7 @@ const fields = computed(() => {
 
 <template>
   <div class="node-diagnostics" :class="{ 'has-errors': hasErrors, 'master-diagnostics': nodeId === '0', 'sensor-diagnostics': nodeId !== '0' }">
-    <p v-if="!report" class="no-report">No status report received.</p>
+    <p v-if="!report" class="no-report">No status report received</p>
     <dl v-if="report || hasErrors || fields.length" class="diagnostic-grid">
       <div v-for="field in fields" :key="field.label">
         <dt>{{ field.label }}</dt>
@@ -166,34 +166,35 @@ const fields = computed(() => {
 <style scoped>
 .diagnostic-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
   gap: 0.65rem 1.5rem;
   margin: 0;
 }
 .diagnostic-grid > div { display: grid; grid-template-columns: 7.5rem minmax(0, 1fr); gap: 0.75rem; min-width: 0; min-height: 1.7rem; align-items: center; }
 .diagnostic-grid > .diagnostic-errors { grid-column: 1 / -1; align-items: center; }
-@container sensor-layout (min-width: 828px) {
+@container sensor-layout (min-width: 888px) {
   .sensor-diagnostics .diagnostic-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
-@container master-layout (min-width: 828px) {
+@container master-layout (min-width: 888px) {
   .master-diagnostics .diagnostic-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
-.signal-value { display: flex; align-items: center; gap: 0.5rem; min-width: 0; }
+@container sensor-layout (max-width: 279px) {
+  .sensor-diagnostics .diagnostic-grid > div { grid-template-columns: 5.5rem minmax(0, 1fr); }
+}
+.signal-value { display: flex; align-items: center; gap: 0.75rem; min-width: 0; }
 .signal-readout {
-  display: inline-grid;
-  grid-template-columns: 6ch 2.6em;
+  display: inline-flex;
   align-items: baseline;
   column-gap: 0.3rem;
   flex-shrink: 0;
   white-space: nowrap;
   font-family: var(--font-mono);
-  font-size: 0.95rem;
+  font-size: 1.125rem;
   font-variant-numeric: tabular-nums;
 }
-.signal-readout :deep(.metric-number) { text-align: right; }
 .metric-parts { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.3rem; }
 .metric-context { color: var(--text-secondary); }
-.timing-value :deep(.parenthesized::before), .timing-value :deep(.parenthesized::after) { color: var(--text-secondary); }
+:deep(.parenthesized::before), :deep(.parenthesized::after) { color: var(--text-secondary); }
 .good .metric-context, .warn .metric-context, .bad .metric-context { color: inherit; }
 .signal-gauge {
   display: block;
@@ -229,10 +230,12 @@ const fields = computed(() => {
 }
 .error-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
 .error-chips .badge { max-width: 100%; }
-dt { color: var(--text-secondary); font-size: 0.875rem; }
-dd { margin: 0; font-family: var(--font-mono); font-size: 0.95rem; font-weight: 600; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+dt { color: var(--text-secondary); font-size: 1rem; }
+dd { margin: 0; color: color-mix(in srgb, var(--text-primary) 30%, var(--text-secondary)); font-family: var(--font-mono); font-size: 1.125rem; font-weight: 600; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+dd :deep(.metric-number) { font-size: 1.125rem; }
+dd :deep(.metric-unit) { color: var(--text-secondary); }
 .good { color: var(--accent-success); }
 .warn { color: var(--accent-warning); }
 .bad { color: var(--accent-danger); }
-.no-report { color: var(--text-tertiary); font-size: 0.85rem; }
+.no-report { color: var(--text-secondary); font-size: 1rem; }
 </style>

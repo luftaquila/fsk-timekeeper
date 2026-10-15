@@ -26,7 +26,7 @@ describe("formatDuration", () => {
     assert.equal(formatDuration(0n), "00:00.000");
     assert.equal(formatDuration(-5n), "00:00.000");
     assert.equal(formatDuration(3_600_000_000_000n), "60:00.000");
-    assert.equal(formatDuration(null), "—");
+    assert.equal(formatDuration(null), "-");
   });
   it("divides before rounding (averages)", () => {
     assert.equal(formatDuration(3_000_000_001n, 2n), "00:01.500");

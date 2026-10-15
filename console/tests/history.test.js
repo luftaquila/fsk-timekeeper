@@ -184,12 +184,12 @@ describe("history rows and exports", () => {
     const lapRecord = snapshot.History.find((r) => r.Mode === "Laps");
     assert.deepEqual(Object.keys(snapshot.History[0]), ["Date", "Mode", "Note", "Result", "Status"]);
     assert.deepEqual(lapRecord["Lap Times"].map((r) => [r.Lap, r.Time, r["Δ Before"], r["Δ Best"]]), [
-      [1, "00:02.000", "—", "+0.500"], [2, "00:01.500", "−0.500", "BEST"],
+      [1, "00:02.000", "-", "+0.500"], [2, "00:01.500", "−0.500", "BEST"],
       [3, "00:02.500", "+1.000", "+1.000"], [4, "00:02.500", "0.000", "+1.000"],
     ]);
     assert.deepEqual(Object.values(lapRecord["Lap Summary"]), [4, "00:01.500 (#2)", "00:02.125", "00:08.500"]);
     assert.equal(snapshot.History.find((r) => r.Note === note).Result, "00:01.000");
-    assert.equal(snapshot.History.find((r) => r.Mode === "Start → Finish" && r.Note === "—").Result, "—");
+    assert.equal(snapshot.History.find((r) => r.Mode === "Start → Finish" && r.Note === "-").Result, "-");
     assert.equal(lapRecord.Errors[0], "Finish\nSensor ABC: Capture Loss\nafter +00:00.100 (end not known yet)");
     const evidence = vi.spyOn(eventLog, "rowsBetween");
     try {
@@ -263,7 +263,7 @@ describe("history rows and exports", () => {
     const exported = history.exportData();
     const sprint = exported.History.find((r) => r.Result === "00:04.000");
     assert.equal(sprint.Status, "Verified\nNot Saved");
-    assert.equal(exported.History.find((r) => r.Status === "DNF").Result, "—");
+    assert.equal(exported.History.find((r) => r.Status === "DNF").Result, "-");
     assert.equal(exported.History.find((r) => r.Mode === "Laps").Result, "00:12.345");
     assert.deepEqual(exported.History.find((r) => r.Mode === "Laps")["Lap Times"].map((r) => r.Time), ["00:06.000", "00:06.345"]);
     assert.equal(history.status(history.rows.find((r) => r.runId === "d")), "DNF");

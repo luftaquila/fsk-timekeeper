@@ -176,7 +176,7 @@ describe("reference cases (D = 300 ms)", () => {
     assert.equal(r.run.finishTick, tick(4010));
   });
 
-  it("A1: the two first crossings alone decide it — no checkpoint needed", () => {
+  it("A1: the two first crossings alone decide it - no checkpoint needed", () => {
     const log = sprintLog();
     const run = start(log, "sprint", SPRINT);
     log.capture("A", 10);

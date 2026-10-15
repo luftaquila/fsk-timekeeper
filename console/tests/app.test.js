@@ -373,7 +373,7 @@ describe("app under jsdom", () => {
     await flushPromises();
     assert.deepEqual(wrapper.findAll(".lap-table th").map((th) => th.text()), ["Lap", "Time", "Δ Before", "Δ Best"]);
     const lapRows = wrapper.findAll(".lap-table tbody tr");
-    assert.deepEqual(lapRows.map((row) => row.findAll("td")[2].text()), ["0.000", "+1.000", "−0.500", "—"]);
+    assert.deepEqual(lapRows.map((row) => row.findAll("td")[2].text()), ["0.000", "+1.000", "−0.500", "-"]);
     assert.deepEqual(lapRows.map((row) => row.findAll("td")[2].classes().includes("slower")), [false, true, false, false]);
     assert.equal(lapRows[2].findAll("td")[3].text(), "BEST");
     assert.doesNotMatch(wrapper.find(".content").text(), /✓|Verified So Far|GPS|nominal 16 MHz/);
@@ -400,7 +400,7 @@ describe("app under jsdom", () => {
     assert.deepEqual(wrapper.findAll(".lap-list th").map((el) => el.text()), ["Lap", "Time", "Δ Before", "Δ Best"]);
     const popupRows = wrapper.findAll(".lap-list tbody tr");
     assert.deepEqual(popupRows.map((row) => row.findAll("td").map((td) => td.text())), [
-      ["1", "00:02.000", "—", "+0.500"],
+      ["1", "00:02.000", "-", "+0.500"],
       ["2", "00:01.500", "−0.500", "BEST"],
       ["3", "00:02.500", "+1.000", "+1.000"],
       ["4", "00:02.500", "0.000", "+1.000"],

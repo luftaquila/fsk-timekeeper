@@ -12,7 +12,7 @@ const tone = computed(() => telemetryLinkState(device.telemetry[props.nodeId], n
 const age = computed(() => {
   const report = device.telemetry[props.nodeId];
   if (props.nodeId === "0") return fmtAgeMs(telemetryAgeMs(report, now.value));
-  return report?.last_seen_at == null ? "—" : fmtAgeMs(Math.max(0, now.value - report.last_seen_at));
+  return report?.last_seen_at == null ? "-" : fmtAgeMs(Math.max(0, now.value - report.last_seen_at));
 });
 let timer;
 onMounted(() => { timer = setInterval(() => (now.value = Date.now()), 1000); });
@@ -28,7 +28,7 @@ onUnmounted(() => clearInterval(timer));
   justify-content: center;
   white-space: nowrap;
   font-family: var(--font-sans);
-  font-size: 0.875rem;
+  font-size: 1rem;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   line-height: 1.25rem;

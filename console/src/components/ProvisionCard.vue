@@ -93,19 +93,16 @@ async function send() {
 <style scoped>
 .key-field { display: flex; align-items: center; gap: 0.5rem; }
 .key-input { min-width: 0; }
-.visibility-toggle { flex-shrink: 0; min-width: 4rem; }
+.visibility-toggle { flex-shrink: 0; }
 .load-message { color: var(--text-secondary); }
-.key-status { font-size: 0.8rem; text-align: right; }
+.key-status { font-size: 1rem; text-align: right; }
 .unsaved { color: var(--accent-warning); }
 .key-input {
   letter-spacing: 0.02em;
 }
 .key-meta {
   margin-top: 0.3rem;
-  font-size: 0.8rem;
-}
-.send {
-  flex-shrink: 0;
+  font-size: 1rem;
 }
 .ok {
   color: var(--accent-success);

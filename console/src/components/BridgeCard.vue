@@ -11,8 +11,8 @@ const versions = computed(() => {
   const id = device.identity;
   return [
     { label: "Firmware", value: id?.fw ?? "…" },
-    { label: "USB", value: id?.usbProto != null ? `v${id.usbProto}` : "—", mismatch: id && id.usbProto !== USB_PROTO_VERSION },
-    { label: "Radio", value: id?.radioProto != null ? `v${id.radioProto}` : "—", mismatch: id && id.radioProto !== RADIO_PROTO_VERSION },
+    { label: "USB", value: id?.usbProto != null ? `v${id.usbProto}` : "-", mismatch: id && id.usbProto !== USB_PROTO_VERSION },
+    { label: "Radio", value: id?.radioProto != null ? `v${id.radioProto}` : "-", mismatch: id && id.radioProto !== RADIO_PROTO_VERSION },
   ];
 });
 const deviceId = computed(() => {
