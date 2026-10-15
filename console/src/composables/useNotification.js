@@ -2,7 +2,7 @@ import { Notyf } from "notyf";
 import { ref, watch, onScopeDispose } from "vue";
 
 export const NOTIFICATION_DURATION = 3500;
-export const notificationText = (text) => String(text ?? "").replace(/\.(?=\s|$)/g, "");
+export const notificationText = (text) => String(text ?? "").replace(/\.\s*$/, "");
 
 const notyf = new Notyf({
   duration: NOTIFICATION_DURATION,

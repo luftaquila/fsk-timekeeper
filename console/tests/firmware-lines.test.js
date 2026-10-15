@@ -21,7 +21,7 @@ describe("firmware-formatted lines", () => {
     assert.equal(m.ticksPerMs, 16000);
     assert.deepEqual(resetNames(m.resetReason), ["reset pin", "fault reboot"]);
     assert.deepEqual(contractOf(m), { ok: true, reason: null });
-    assert.match(contractOf(parseLine(LINES[1])).reason, /booted as a sensor/);
+    assert.match(contractOf(parseLine(LINES[1])).reason, /Board Is Not a Master/);
   });
 
   it("E: every kind parses, crc included, and acks echo hseq / boot / crc", () => {

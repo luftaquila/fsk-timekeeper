@@ -23,7 +23,7 @@ test("clock timeout fails closed and a late response cannot revive the request",
   try {
     let command;
     const clock = createWirelessClock({ send: (value) => { command = value; }, timeoutMs: 100 });
-    const failed = assert.rejects(clock.read(), /did not confirm/);
+    const failed = assert.rejects(clock.read(), /did not respond/);
     vi.advanceTimersByTime(100);
     await failed;
     assert.equal(clock.accept({ ...command, master_tick: "1", master_boot_id: 1 }), false);

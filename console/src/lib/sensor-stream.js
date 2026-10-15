@@ -12,12 +12,12 @@ const HALF = 0x80000000;
 const KIND_ORDER = { capture: 0, loss: 1, checkpoint: 2 };
 
 export const HOLE_REASON = {
-  loss: "lost captures",
-  unknownLoss: "lost a capture at an unknown time",
-  unhealthy: "captured an edge without a valid clock",
-  order: "reported capture times out of order",
-  quarantine: "sent an event the console quarantined",
-  reboot: "rebooted during the run",
+  loss: "Capture Loss",
+  unknownLoss: "Capture Loss (Time Unknown)",
+  unhealthy: "Invalid Capture Clock",
+  order: "Capture Times Out of Order",
+  quarantine: "Invalid Event Quarantined",
+  reboot: "Reboot During Run",
 };
 
 const distance = (seq, base) => (seq - base) >>> 0;

@@ -5,7 +5,7 @@ import { useSettingsStore } from "../stores/settings";
 import { MODE_LABEL } from "../lib/constants";
 import { formatDuration } from "../lib/format";
 import { calibrationLabel } from "../lib/results";
-import { faultWindow } from "../lib/fault-text";
+import FaultReasons from "../components/FaultReasons.vue";
 import RunControlCard from "../components/RunControlCard.vue";
 import RunSetupCard from "../components/RunSetupCard.vue";
 import TimerCard from "../components/TimerCard.vue";
@@ -32,10 +32,10 @@ const target = computed(() => timing.run?.lapTarget ?? settings.state.lapTarget)
 const status = computed(() => {
   const v = verification.value;
   if (!timing.run) return null;
-  if (v === "verified") return { cls: "badge-success", text: timing.run.closed ? "official" : "official so far" };
-  if (v === "invalid") return { cls: "badge-danger", text: "invalid" };
+  if (v === "verified") return { cls: "badge-success", text: timing.run.closed ? "Verified" : "Verified So Far" };
+  if (v === "invalid") return { cls: "badge-danger", text: "Invalid" };
   if (v === "dnf") return { cls: "badge-default", text: timing.run.dnfReason || "DNF" };
-  return { cls: "badge-warning", text: "pending" };
+  return { cls: "badge-warning", text: "Pending" };
 });
 
 function delta(ns) {
@@ -64,7 +64,7 @@ function delta(ns) {
               <li v-for="c in startList" :key="c.key" :class="{ confirmed: c.confirmed }">
                 <span class="mono">{{ formatDuration(c.ns) }}</span>
                 <span class="who mono">{{ c.node_id }}</span>
-                <span class="chk" :title="c.confirmed ? 'Confirmed' : 'Awaiting confirmation'">{{ c.confirmed ? "✓" : "…" }}</span>
+                <span class="chk" role="img" :aria-label="c.confirmed ? 'Confirmed' : 'Awaiting confirmation'">{{ c.confirmed ? "✓" : "…" }}</span>
               </li>
             </ul>
           </div>
@@ -77,7 +77,7 @@ function delta(ns) {
               <li v-for="c in finishList" :key="c.key" :class="{ confirmed: c.confirmed }">
                 <span class="mono">{{ c.ns != null ? `+${formatDuration(c.ns)}` : "—" }}</span>
                 <span class="who mono">{{ c.node_id }}</span>
-                <span class="chk" :title="c.confirmed ? 'Confirmed' : 'Awaiting confirmation'">{{ c.confirmed ? "✓" : "…" }}</span>
+                <span class="chk" role="img" :aria-label="c.confirmed ? 'Confirmed' : 'Awaiting confirmation'">{{ c.confirmed ? "✓" : "…" }}</span>
               </li>
             </ul>
           </div>
@@ -103,15 +103,16 @@ function delta(ns) {
             <div class="v mono">{{ avgText }}</div>
           </div>
           <div class="stat card total">
-            <div class="k">Total{{ verification === "verified" && timing.run?.closed ? " (official)" : "" }}</div>
+            <div class="k">Total</div>
             <div class="v mono">{{ formatDuration(timing.resultNs) }}</div>
           </div>
         </div>
 
         <div class="card">
-          <div class="card-header"><h3>🔄 Lap Times<span v-if="verification === 'invalid' && laps.length" class="sub"> — confirmed laps before the loss</span></h3></div>
+          <div class="card-header"><h3>🔄 Lap Times</h3></div>
           <div class="card-body">
-            <div v-if="!laps.length" class="empty-state">{{ startList.length ? "First crossing recorded — waiting for lap 1" : "No crossing yet" }}</div>
+            <p v-if="verification === 'invalid' && laps.length" class="sub">Confirmed laps before data loss</p>
+            <div v-if="!laps.length" class="empty-state">{{ startList.length ? "Waiting for First Lap" : "No crossing yet" }}</div>
             <div v-else class="table-scroll">
               <table class="lap-table">
                 <thead>
@@ -143,14 +144,9 @@ function delta(ns) {
           <div class="result-meta">
             <span v-if="status" class="badge" :class="status.cls">{{ status.text }}</span>
             <span v-if="timing.run && timing.calibrationMethod" class="badge" :class="timing.calibrationMethod === 'nominal' ? 'badge-default' : 'badge-primary'">{{ calibrationLabel(timing.calibrationMethod) }}</span>
-            <span v-if="timing.run?.note" class="lbl">{{ timing.run.note }}</span>
-            <span v-if="timing.run && timing.run.durable === false" class="lbl bad">not stored durably</span>
+            <span v-if="timing.run && timing.run.durable === false" class="lbl bad">Not Saved</span>
           </div>
-          <ul v-if="timing.run?.fault?.reasons?.length" class="fault-list">
-            <li v-for="(r, i) in timing.run.fault.reasons" :key="i">
-              {{ r.reason }}<span v-if="faultWindow(r, timing.run.boundaryTick)" class="win"> ({{ faultWindow(r, timing.run.boundaryTick) }})</span>
-            </li>
-          </ul>
+          <FaultReasons v-if="timing.run?.fault?.reasons?.length" class="fault-list" :reasons="timing.run.fault.reasons" :boundary-tick="timing.run.boundaryTick" />
         </div>
       </div>
     </section>

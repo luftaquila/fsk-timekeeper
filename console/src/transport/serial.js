@@ -40,7 +40,7 @@ export function createSerialTransport({ onLine, onDisconnect }) {
   }
 
   async function open() {
-    if (!isSerialSupported()) throw new Error("Web Serial is not supported by this browser. Use Chrome or Edge.");
+    if (!isSerialSupported()) throw new Error("Web Serial is not supported by this browser");
     const candidate = await navigator.serial.requestPort({ filters });
     await candidate.open({ baudRate: SERIAL_BAUD });
     port = candidate;

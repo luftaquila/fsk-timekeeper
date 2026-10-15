@@ -72,7 +72,7 @@ export function createRun({
     const checkpoint = findCheckpoint(node, clock.master_boot_id, clock.master_tick);
     const currentBoot = currentSensorBoot(node);
     if (!healthyCheckpoint(checkpoint) || (currentBoot != null && checkpoint.sensor_boot_id !== currentBoot) || now - checkpoint.received_at > statusMaxAgeMs) {
-      throw new EngineError("checkpoint", `Sensor ${node} has not confirmed its latest captures yet. Wait a few seconds and start again.`, node);
+      throw new EngineError("checkpoint", `Sensor ${node}: Capture Confirmation Missing`, node);
     }
     nodes[node] = { boot: checkpoint.sensor_boot_id, seq: checkpoint.capture_seq, role: mapping.role, cpSeq: checkpoint.seq };
     cursor = Math.min(cursor, checkpoint.seq);
@@ -161,7 +161,7 @@ function tickText(v) {
 
 function reasonOf(cut) {
   const hole = cut.hole || {};
-  const reason = hole.master ? hole.reason : `Sensor ${cut.node_id} ${hole.reason}.`;
+  const reason = hole.master ? hole.reason : `Sensor ${cut.node_id}: ${hole.reason}`;
   return { node_id: hole.master ? "0" : cut.node_id, role: cut.role, reason, lo: tickText(hole.lo), hi: tickText(hole.hi) };
 }
 

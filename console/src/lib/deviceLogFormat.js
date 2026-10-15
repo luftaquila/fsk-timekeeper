@@ -1,7 +1,7 @@
-import { RADIO_RECOVERY_REASONS, RADIO_RECOVERY_RESULTS } from "./protocol";
+import { RADIO_RECOVERY_REASONS, RADIO_RECOVERY_RESULTS, RADIO_HISTORY_LABELS } from "./protocol";
 
 const TYPES = { X: "Error", boot: "Boot", console: "Console", radio: "Radio" };
-const FAULTS = ["CAD failures", "SPI timeouts", "TX failures", "RX failures", "PLL/oscillator failures", "init failures"];
+const FAULTS = RADIO_HISTORY_LABELS;
 const CONSOLE_LINES = {
   unknown_line: "Unrecognized USB line.", tel_format: "Invalid status report.",
   pps: "Invalid GPS/PPS report.", event_unreadable: "Unreadable event.",
@@ -10,8 +10,8 @@ const CONSOLE_LINES = {
 };
 const ERRORS = {
   badcmd: "Command rejected.", noprov: "Radio key not set.", keyfail: "Could not save radio key.",
-  cfgfail: "Could not save radio settings.", cfgapply: "Radio settings could not be applied.",
-  cfgpending: "Radio settings saved; recovery pending.", clock: "Clock request rejected.",
+  cfgfail: "Could not save radio settings.", cfgapply: "Settings saved\nRadio start failed; automatic retry pending",
+  cfgpending: "Settings saved\nApply pending", clock: "Clock request rejected.",
 };
 
 export function logCode(code) {
@@ -20,9 +20,20 @@ export function logCode(code) {
 
 const total = (n) => `${n}${n === 65535 ? "+" : ""}`;
 function recoveryLine(r) {
-  const reason = r.reason === 2 ? "no beacon >10 s" : RADIO_RECOVERY_REASONS[r.reason];
-  const result = r.result === 2 ? "RX restarted" : RADIO_RECOVERY_RESULTS[r.result];
-  return `resets ${total(r.count)}, failed ${total(r.failures)}. Last: ${reason} → ${result}`;
+  const reason = RADIO_RECOVERY_REASONS[r.reason];
+  const result = RADIO_RECOVERY_RESULTS[r.result];
+  return `Resets: ${total(r.count)}\nFailed: ${total(r.failures)}\nLast Reason: ${reason}\nLast Result: ${result}`;
+}
+
+// Before snapshots were stored, radio logs contained the same fields in a sentence.
+// Only known field separators are converted; unknown details are preserved.
+function legacyRadioLine(value) {
+  let text = String(value).replace(/^(?:Master|Sensor \S+): /, "");
+  text = text.replace(/\. Reported at this time; event times are unavailable\.$/, "\nEvent Time: Unknown");
+  text = text.replace(/radio reinitializations:? (\d+\+?), failed:? (\d+\+?); latest reason: ([^;]+); latest result: ([^\n]+)/,
+    (_, count, failed, reason, result) => `Resets: ${count}\nFailed: ${failed}\nLast Reason: ${reason}\nLast Result: ${result.replace(/\.$/, "")}`);
+  text = text.replace(/ since boot(?=;|\.|$)/g, "").replace(/; (?=[^;]+:)/g, "\n");
+  return `Since Boot\n${text}`;
 }
 
 function logLine(e, code) {
@@ -31,11 +42,12 @@ function logLine(e, code) {
     const { faults, recovery } = e.historySnapshot;
     const parts = faults.flatMap((n, i) => n ? [`${FAULTS[i]}: ${total(n)}`] : []);
     if (recovery.count) parts.push(recoveryLine(recovery));
-    return `Since boot: ${parts.join("; ")}. Event time unknown.`;
+    return `Since Boot\n${parts.join("\n")}\nEvent Time: Unknown`;
   }
-  if (code === "radio_recovery" && e.radioSnapshot) return `Since boot: ${recoveryLine(e.radioSnapshot)}.`;
+  if (code === "radio_recovery" && e.radioSnapshot) return `Since Boot\n${recoveryLine(e.radioSnapshot)}`;
+  if ((code === "radio_history" || code === "radio_recovery") && e.text) return legacyRadioLine(e.text);
   if (code === "radio_fault" || code === "radio_restored") {
-    return String(e.text ?? "").replace(/^(?:Master|Sensor \S+): /, "");
+    return String(e.text ?? "").replace(/^(?:Master|Sensor \S+): /, "").replace(/, /g, "\n");
   }
   if (e.kind === "console") {
     if (CONSOLE_LINES[code]) return CONSOLE_LINES[code];

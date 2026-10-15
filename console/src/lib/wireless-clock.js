@@ -15,7 +15,7 @@ export function createWirelessClock({ send, timeoutMs = 5000 }) {
         const request_id = randomHex(16);
         const timer = setTimeout(() => {
           pending.delete(request_id);
-          reject(new Error("The master did not confirm the start time."));
+          reject(new Error("The master did not respond to the clock request"));
         }, timeoutMs);
         pending.set(request_id, { resolve, reject, timer });
         try {

@@ -156,7 +156,6 @@ export const useDeviceStore = defineStore("device", () => {
   function raiseAlarm(key, text) {
     if (alarms.value.some((a) => a.key === key)) return;
     alarms.value = [...alarms.value, { key, text, at: Date.now() }];
-    notyf.error(text);
   }
 
   function dismissAlarm(key) {
@@ -173,7 +172,6 @@ export const useDeviceStore = defineStore("device", () => {
   function onStorageFailure(error) {
     durable.value = false;
     durableError.value = error?.message || String(error);
-    raiseAlarm("storage", `Browser storage failed (${durableError.value}) — new evidence and results are kept in memory only.`);
     log({ kind: "console", code: "storage_failure", text: durableError.value });
     useTimingStore().markNonDurable();
   }
@@ -247,7 +245,6 @@ export const useDeviceStore = defineStore("device", () => {
     contract.value = contractOf(msg);
     const reason = Number.isInteger(msg.resetReason) ? resetNames(msg.resetReason).join(", ") : "unknown";
     if (!repeated) log({ kind: "boot", code: reason, text: raw, devid: msg.devid ?? null });
-    if (!contract.value.ok) notyf.error(contract.value.reason);
     useTimingStore().onMasterVersion({ usbProto: msg.usbProto, radioProto: msg.radioProto });
   }
 
@@ -374,7 +371,7 @@ export const useDeviceStore = defineStore("device", () => {
     }
     log({ kind: "X", code: msg.reason, text: msg.text });
     if (provisionPending?.fails.includes(msg.reason)) resolveProvision(msg.reason);
-    else if (msg.reason === "clock") clock.close("The master rejected the clock request (X clock).");
+    else if (msg.reason === "clock") clock.close("The master rejected the clock request");
   }
 
   function noteHead(hseq, now) {
@@ -414,7 +411,6 @@ export const useDeviceStore = defineStore("device", () => {
           stats.quarantined++;
           quarantine.value = { count: stats.quarantined, reason: p.reason, node: p.node, at: now };
           log({ kind: "console", code: "quarantine", text: `${p.reason}: ${p.raw}` });
-          notyf.error(`Quarantined an invalid event from ${p.node === NODE_MASTER ? "the master" : p.node ? `sensor ${p.node}` : "an unknown node"} (${p.reason}).`);
           useTimingStore().onEventRows([marker]);
           return;
         }
@@ -449,7 +445,7 @@ export const useDeviceStore = defineStore("device", () => {
   function provision(cmd, line, shown, fails) {
     if (!transport?.connected) return Promise.reject(new Error("The master is not connected."));
     if (keyReadState.value === "loading") return Promise.reject(new Error("Wait for the board settings to load."));
-    if (provisionPending) return Promise.reject(new Error("A provisioning command is already in progress."));
+    if (provisionPending) return Promise.reject(new Error("A settings update is already in progress"));
     return new Promise((resolve) => {
       const timer = setTimeout(() => resolveProvision("timeout"), PROVISION_TIMEOUT_MS);
       provisionPending = { cmd, fails, resolve, timer };
@@ -462,7 +458,7 @@ export const useDeviceStore = defineStore("device", () => {
 
   // Send the fleet key; resolves "ok" | "keyfail" | "timeout".
   async function provisionKey(hex) {
-    if (!isHexKey(hex)) return Promise.reject(new Error("The key must be 64 hex characters."));
+    if (!isHexKey(hex)) return Promise.reject(new Error("Enter 64 Hex Characters"));
     const boardTransport = transport;
     const result = await provision("K", `K ${hex}`, "K ****", ["keyfail"]);
     if (result === "ok" && transport === boardTransport) finishKeyRead("ready", hex.toLowerCase());
@@ -538,7 +534,7 @@ export const useDeviceStore = defineStore("device", () => {
   function onDisconnect() {
     const wasDfu = dfuInProgress.value;
     finishDisconnect();
-    if (wasDfu) notyf.success("The board should now be in bootloader mode.");
+    if (wasDfu) notyf.success("Bootloader Requested");
     else notyf.error("The master was disconnected.");
   }
 
@@ -576,7 +572,7 @@ export const useDeviceStore = defineStore("device", () => {
   async function connect({ kind = "serial" } = {}) {
     if (connected.value || connecting.value) return true;
     if (kind === "serial" && !isSerialSupported()) {
-      notyf.error("Web Serial is not supported by this browser. Use Chrome or Edge.");
+      notyf.error("Web Serial is not supported by this browser");
       return false;
     }
     connecting.value = true;

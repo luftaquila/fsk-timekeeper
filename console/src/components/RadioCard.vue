@@ -3,10 +3,9 @@ import { ref, computed, watch } from "vue";
 import MetricValue from "./MetricValue.vue";
 import { useDeviceStore } from "../stores/device";
 import { useTimingStore } from "../stores/timing";
-import { useNotification, useActionResult, notificationText } from "../composables/useNotification";
+import { useActionResult, notificationText } from "../composables/useNotification";
 import { radioOf, isRadioConfig, RADIO_FREQ_MIN_KHZ, RADIO_FREQ_MAX_KHZ, RADIO_POWER_MIN_DBM, RADIO_POWER_MAX_DBM, RADIO_DEFAULT_CONFIG } from "../lib/protocol";
 
-const notyf = useNotification();
 const device = useDeviceStore();
 const timing = useTimingStore();
 
@@ -21,15 +20,22 @@ const frequencyKhz = computed(() => {
   const khz = Math.round(Number(value) * 1000);
   return khz >= RADIO_FREQ_MIN_KHZ && khz <= RADIO_FREQ_MAX_KHZ ? khz : null;
 });
+const frequencyError = computed(() => {
+  const value = frequency.value.trim();
+  if (!/^\d+(?:\.\d+)?$/.test(value)) return "Invalid Frequency";
+  if ((value.split(".")[1]?.length ?? 0) > 3) return "Maximum 3 Decimal Places";
+  return "Frequency Out of Range";
+});
 const busy = ref(false);
 const lastResult = useActionResult();
+const failure = ref("");
 const resultText = computed(() => notificationText({
   ok: "Saved",
-  cfgapply: "Settings stored, but radio startup failed. The board will retry automatically.",
-  cfgpending: "Settings stored. Application is pending until board initialization succeeds.",
-  cfgfail: "Settings could not be stored on the board.",
-  timeout: "No reply from the board; storage and application are unconfirmed.",
-}[lastResult.value] || "The board rejected the settings."));
+  cfgapply: "Saved, Radio Start Failed",
+  cfgpending: "Saved, Apply Pending",
+  cfgfail: "Save Failed",
+  timeout: "No Reply, Save Unconfirmed",
+}[lastResult.value] || failure.value || "Settings Rejected"));
 
 const board = computed(() => radioOf(device.identity));
 const blocked = computed(() => busy.value || !device.connected || device.keyReadState === "loading" || timing.armed);
@@ -81,14 +87,14 @@ async function restoreDefaults() {
 
 async function save(config) {
   busy.value = true;
+  failure.value = "";
   lastResult.value = null;
   try {
     const result = await device.configureRadio(config);
     lastResult.value = result;
-    if (result === "ok") notyf.success(resultText.value);
-    else notyf.error(resultText.value);
   } catch (e) {
-    notyf.error(e.message);
+    failure.value = e.message;
+    lastResult.value = "error";
   } finally {
     busy.value = false;
   }
@@ -111,7 +117,7 @@ async function save(config) {
               <input id="radio-frequency" v-model="frequency" class="form-input mono freq" type="text" inputmode="decimal" aria-label="Frequency" aria-describedby="frequency-range frequency-error" :aria-invalid="frequency !== '' && frequencyKhz == null" />
               <span class="unit">MHz</span>
             </div>
-            <small v-if="frequency !== '' && frequencyKhz == null" id="frequency-error" class="bad">Enter {{ frequencyRange }}, up to 3 decimal places.</small>
+            <small v-if="frequency !== '' && frequencyKhz == null" id="frequency-error" class="bad">{{ frequencyError }}</small>
           </div>
         </div>
         <div class="radio-row">
@@ -134,20 +140,20 @@ async function save(config) {
           </select>
         </div>
         <div class="radio-row fixed-radio-row">
-          <div class="setting-name">Spreading Factor<small title="SX1262 Supported Range">SF5 ~ SF12</small></div>
+          <div class="setting-name">Spreading Factor<small>SF5 ~ SF12</small></div>
           <div class="saved-value"><span class="mobile-label">Saved: </span><MetricValue :value="device.identity ? `SF${device.identity.sf}` : '—'" /></div>
-          <div class="fixed-value" title="Fixed in Firmware">Fixed</div>
+          <div class="fixed-value">Fixed</div>
         </div>
         <div class="radio-row fixed-radio-row">
-          <div class="setting-name">Bandwidth<small title="SX1262 Supported Steps: 7.81, 10.42, 15.63, 20.83, 31.25, 41.67, 62.5, 125, 250, 500 kHz">7.81 ~ 500 kHz</small></div>
+          <div class="setting-name">Bandwidth<small>7.81 ~ 500 kHz</small></div>
           <div class="saved-value"><span class="mobile-label">Saved: </span><MetricValue :value="device.identity?.bw" unit="kHz" /></div>
-          <div class="fixed-value" title="Fixed in Firmware">Fixed</div>
+          <div class="fixed-value">Fixed</div>
         </div>
       </div>
       <div class="section-actions radio-actions">
         <span v-if="lastResult" class="action-result" :class="lastResult === 'ok' ? 'ok' : 'bad'" role="status">{{ resultText }}</span>
         <div class="apply-group">
-          <div v-if="board && cfg && !onBoard" class="config-status" aria-live="polite">
+          <div v-if="!lastResult && board && cfg && !onBoard" class="config-status" aria-live="polite">
             <span class="unsaved">Unsaved Changes</span>
           </div>
           <button class="btn btn-ghost btn-sm restore-defaults" type="button" :disabled="defaultDisabled" @click="restoreDefaults">Default</button>
@@ -156,7 +162,6 @@ async function save(config) {
           </button>
         </div>
       </div>
-      <p v-if="timing.armed" class="hint">Stop the run to change the radio.</p>
     </div>
   </section>
 </template>
@@ -180,7 +185,7 @@ async function save(config) {
 #frequency-error { display: block; margin-top: 0.35rem; font-size: 0.75rem; }
 .unit { color: var(--text-secondary); font-size: 0.8rem; }
 .config-status { min-width: 0; text-align: right; color: var(--text-secondary); font-size: 0.8rem; }
-.radio-actions { flex-wrap: nowrap; }
+.radio-actions { flex-wrap: wrap; }
 .send { flex-shrink: 0; }
 .hint { margin-top: 0.5rem; font-size: 0.8rem; color: var(--text-secondary); }
 .ok { color: var(--accent-success); }

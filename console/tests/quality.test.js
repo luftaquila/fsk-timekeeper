@@ -43,7 +43,7 @@ describe("wirelessQuality", () => {
     t[0] = healthy("0", { received_at: NOW - 12001 });
     assert.match(gate("sprint", SPRINT, t).reasons[0].reason, /No recent status report from the master/);
     const r = gate("sprint", SPRINT, { ...ALL(), 0: healthy("0", { provisioned: 0, clock_source: "rc" }) }).reasons;
-    assert.deepEqual(r.map((x) => x.reason.split(" ").slice(-3).join(" ")), ["(HFXO) is not confirmed.", "has no radio key."].map((s) => s.split(" ").slice(-3).join(" ")));
+    assert.deepEqual(r.map((x) => x.reason), ["Master HFXO Not Confirmed", "The master has no radio key."]);
   });
 
   it("requires every role of the mode to be mapped", () => {
@@ -65,7 +65,7 @@ describe("wirelessQuality", () => {
     });
     assert.deepEqual(
       bad.reasons.map((r) => `${r.node_id}:${r.reason.split(" ").slice(-2).join(" ")}`),
-      ["A:not healthy.", "A:radio key.", "A:not confirmed.", "A:not valid.", "A:not valid.", "B:not valid."],
+      ["A:Link: STALE", "A:radio key.", "A:Not Confirmed", "A:not valid.", "A:(101 ppm)", "B:not valid."],
     );
   });
 
@@ -79,7 +79,7 @@ describe("wirelessQuality", () => {
 describe("pipelineHealth", () => {
   it("refuses a nearly full host queue and an event that keeps coming back", () => {
     assert.equal(pipelineHealth({ master: { queue_depth: 12 }, connected: true, now: NOW }).ok, true);
-    assert.match(pipelineHealth({ master: { queue_depth: 13 }, connected: true, now: NOW }).reason, /nearly full \(13\/16\)/);
+    assert.match(pipelineHealth({ master: { queue_depth: 13 }, connected: true, now: NOW }).reason, /Nearly Full \(13\/16\)/);
     const head = { hseq: 7, firstSeenAt: NOW - 5001, lastSeenAt: NOW - 100 };
     assert.match(pipelineHealth({ master: null, head, connected: true, now: NOW }).reason, /#7/);
     assert.equal(pipelineHealth({ head: { ...head, lastSeenAt: NOW - 3000 }, connected: true, now: NOW }).ok, true); // acked long ago

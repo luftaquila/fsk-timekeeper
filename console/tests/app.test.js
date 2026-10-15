@@ -78,6 +78,7 @@ describe("app under jsdom", () => {
       await router.push(path);
       await flushPromises();
       assert.match(wrapper.text(), needle, path);
+      assert.equal(wrapper.findAll("[title]").length, 0);
     }
 
     // connect the simulator and check the settings tables fill in
@@ -194,9 +195,9 @@ describe("app under jsdom", () => {
     // Apply errors still report the stored target, but must never look like success.
     const write = fake.write;
     for (const [code, message] of [
-      ["cfgapply", /Settings stored, but radio startup failed/],
-      ["cfgpending", /Application is pending until board initialization succeeds/],
-      ["cfgfail", /Settings could not be stored/],
+      ["cfgapply", /Saved, Radio Start Failed/],
+      ["cfgpending", /Saved, Apply Pending/],
+      ["cfgfail", /Save Failed/],
     ]) {
       const spy = vi.spyOn(fake, "write").mockImplementation(async (line) => {
         if (!line.startsWith("R ")) return write(line);
@@ -270,15 +271,28 @@ describe("app under jsdom", () => {
     await waitFor(() => timing.run.verification === "verified");
     await waitFor(() => timing.run.durationNs != null, 4000);
     await flushPromises();
-    assert.match(wrapper.text(), /official/);
+    assert.match(wrapper.text(), /Verified/);
     assert.match(wrapper.text(), /GPS|nominal 16 MHz/);
     assert.match(wrapper.find(".result-time").text(), /^00:00\.8\d\d$/);
     assert.ok(wrapper.find(".traffic-light.red").exists(), "red light after completion");
 
     await router.push("/history");
     await flushPromises();
-    await waitFor(() => wrapper.text().includes("verified"));
+    await waitFor(() => wrapper.text().includes("Verified"));
     assert.match(wrapper.text(), /Start → Finish/);
+
+    // A saved fault must remain readable without hovering over a status chip.
+    const { useHistoryStore } = await import("../src/stores/history");
+    const history = useHistoryStore(pinia);
+    const saved = history.rows[0];
+    const priorFault = saved.fault;
+    saved.fault = { reasons: [{ role: "finish", reason: `Sensor ${b} lost captures.`, lo: saved.boundaryTick, hi: null }] };
+    await flushPromises();
+    assert.match(wrapper.find(".fault-row").text(), /Finish/);
+    assert.match(wrapper.find(".fault-row").text(), /Capture Loss/);
+    assert.match(wrapper.find(".fault-row .fault-window").text(), /end not known yet/);
+    assert.equal(wrapper.findAll("[title]").length, 0);
+    saved.fault = priorFault;
 
     // switch to laps: the closed run is cleared and the laps layout renders
     await router.push("/");

@@ -35,10 +35,11 @@ function send() {
 <template>
   <div class="card">
     <div class="card-header console-header" :class="{ 'is-open': open }" @click="open = !open">
-      <h3><span class="heading-icon" aria-hidden="true">🖥️</span><span>Serial Console</span> <span class="muted">{{ device.stats.lines }} lines · {{ device.stats.events }} events · {{ device.stats.acks }} acks · {{ device.stats.duplicates }} dup</span></h3>
+      <h3><span class="heading-icon" aria-hidden="true">🖥️</span><span>Serial Console</span> <span class="muted">{{ device.stats.lines }} lines</span></h3>
       <span class="disclosure" :class="{ 'is-open': open }" aria-hidden="true">›</span>
     </div>
     <div v-if="open" class="card-body">
+      <p class="muted console-stats">Events: {{ device.stats.events }} · ACKs: {{ device.stats.acks }} · Duplicates: {{ device.stats.duplicates }}</p>
       <label class="opt"><input type="checkbox" v-model="hideHeartbeat" /> Hide Heartbeat (H) Lines</label>
       <div ref="box" class="log mono">
         <div v-for="(l, i) in lines" :key="i" class="line" :class="l.dir">
@@ -55,6 +56,7 @@ function send() {
 </template>
 
 <style scoped>
+.console-stats { margin-bottom: 0.75rem; }
 .console-header {
   display: flex;
   align-items: center;

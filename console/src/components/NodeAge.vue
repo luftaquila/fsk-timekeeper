@@ -20,7 +20,7 @@ onUnmounted(() => clearInterval(timer));
 </script>
 
 <template>
-  <span class="node-age badge mono" :class="tone" :title="label" :aria-label="`${label}: ${age}`">{{ age }}</span>
+  <span class="node-age badge mono" :class="tone" :aria-label="`${label}: ${age}`">{{ age }}</span>
 </template>
 
 <style scoped>

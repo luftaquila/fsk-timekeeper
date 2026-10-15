@@ -36,15 +36,15 @@ async function enter() {
     </div>
     <div class="section-content">
       <ol class="help">
-        <li>Enter bootloader (button below), or double-tap <code>RST</code> on a new board.</li>
+        <li>Enter bootloader, or double-tap <code>RST</code> on a new board.</li>
         <li>Run <code>flash.bat</code> (Windows) or <code>./flash.sh</code> (Linux / macOS) from the release zip.</li>
       </ol>
 
       <div class="section-actions">
         <button class="btn btn-sm" :class="confirming ? 'btn-danger' : 'btn-warning'" :disabled="!device.connected || busy || timing.armed" @click="enter">
-          {{ busy ? "Resetting…" : confirming ? "Click again to confirm" : "Enter Bootloader" }}
+          {{ busy ? "Resetting…" : confirming ? "Confirm" : "Enter Bootloader" }}
         </button>
-        <span v-if="timing.armed" class="muted">Stop the running measurement first.</span>
+
       </div>
     </div>
   </section>

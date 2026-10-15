@@ -23,10 +23,10 @@ export function telemetryLinkState(telemetry, now = Date.now()) {
 // master: D 0 telemetry. head: { hseq, firstSeenAt, lastSeenAt } of the latest E line.
 export function pipelineHealth({ master, head, connected, now = Date.now() }) {
   if (master && Number.isInteger(master.queue_depth) && master.queue_depth > MASTER_QUEUE_CAPACITY * QUEUE_HEALTH_RATIO) {
-    return { ok: false, reason: `The master's host queue is nearly full (${master.queue_depth}/${MASTER_QUEUE_CAPACITY}).` };
+    return { ok: false, reason: `Master Queue Nearly Full (${master.queue_depth}/${MASTER_QUEUE_CAPACITY})` };
   }
   if (connected && head && now - head.firstSeenAt > HEAD_STUCK_MS && now - head.lastSeenAt <= STILL_ARRIVING_MS) {
-    return { ok: false, reason: `The master keeps re-sending event #${head.hseq}; the console is not acknowledging it.` };
+    return { ok: false, reason: `Event #${head.hseq} Keeps Being Retransmitted` };
   }
   return { ok: true, reason: null };
 }
@@ -34,9 +34,9 @@ export function pipelineHealth({ master, head, connected, now = Date.now() }) {
 // mappings: enabled rows whose role the mode requires [{ node_id, role }]
 // telemetry: { [node_id]: normalized telemetry } (node "0" = master)
 // masterFresh: the USB link is up and the master has spoken recently
-export function wirelessQuality({ mode, mappings, telemetry, masterFresh, contract = { ok: true }, pipeline = { ok: true }, now = Date.now() }) {
+export function wirelessQuality({ mode, mappings, telemetry, masterFresh, connected = false, contract = { ok: true }, pipeline = { ok: true }, now = Date.now() }) {
   const reasons = [];
-  if (!masterFresh) reasons.push({ node_id: "0", reason: "The master is not connected." });
+  if (!masterFresh) reasons.push({ node_id: "0", reason: connected ? "No Recent Data From Master" : "The master is not connected." });
   else if (!contract.ok) reasons.push({ node_id: "0", reason: contract.reason });
   if (!pipeline.ok) reasons.push({ node_id: "0", reason: pipeline.reason });
 
@@ -44,8 +44,8 @@ export function wirelessQuality({ mode, mappings, telemetry, masterFresh, contra
   if (!master || !telemetryFresh(master, now)) {
     reasons.push({ node_id: "0", reason: "No recent status report from the master." });
   } else {
-    if (master.link_state !== "online") reasons.push({ node_id: "0", reason: "The master is not in a healthy state." });
-    if (master.clock_source !== "xtal") reasons.push({ node_id: "0", reason: "The master crystal oscillator (HFXO) is not confirmed." });
+    if (master.link_state !== "online") reasons.push({ node_id: "0", reason: `Master Link: ${master.link_state === "degraded" ? "STALE" : "LOST"}` });
+    if (master.clock_source !== "xtal") reasons.push({ node_id: "0", reason: "Master HFXO Not Confirmed" });
     if (master.provisioned !== 1) reasons.push({ node_id: "0", reason: "The master has no radio key." });
   }
 
@@ -60,12 +60,14 @@ export function wirelessQuality({ mode, mappings, telemetry, masterFresh, contra
       reasons.push({ node_id: node, role: mapping.role, reason: `No recent status report from sensor ${node}.` });
       continue;
     }
-    if (t.link_state !== "online") reasons.push({ node_id: node, role: mapping.role, reason: `Sensor ${node} link is not healthy.` });
+    if (t.link_state !== "online") reasons.push({ node_id: node, role: mapping.role, reason: `Sensor ${node} Link: ${t.link_state === "degraded" ? "STALE" : "LOST"}` });
     if (t.provisioned !== 1) reasons.push({ node_id: node, role: mapping.role, reason: `Sensor ${node} has no radio key.` });
-    if (t.clock_source !== "xtal") reasons.push({ node_id: node, role: mapping.role, reason: `Sensor ${node} crystal oscillator (HFXO) is not confirmed.` });
+    if (t.clock_source !== "xtal") reasons.push({ node_id: node, role: mapping.role, reason: `Sensor ${node}: HFXO Not Confirmed` });
     if (t.sync_valid !== 1) reasons.push({ node_id: node, role: mapping.role, reason: `Sensor ${node} clock sync is not valid.` });
-    if (t.skew_valid !== 1 || !Number.isFinite(t.skew_ppm) || Math.abs(t.skew_ppm) > WIRELESS_MAX_SKEW_PPM) {
+    if (t.skew_valid !== 1 || !Number.isFinite(t.skew_ppm)) {
       reasons.push({ node_id: node, role: mapping.role, reason: `Sensor ${node} clock skew is not valid.` });
+    } else if (Math.abs(t.skew_ppm) > WIRELESS_MAX_SKEW_PPM) {
+      reasons.push({ node_id: node, role: mapping.role, reason: `Sensor ${node}: Clock Drift Out of Range (${t.skew_ppm} ppm)` });
     }
   }
   return { ok: reasons.length === 0, reasons, mappings };

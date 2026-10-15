@@ -11,8 +11,8 @@ const versions = computed(() => {
   const id = device.identity;
   return [
     { label: "Firmware", value: id?.fw ?? "…" },
-    { label: "USB", title: "USB Protocol", value: id?.usbProto != null ? `v${id.usbProto}` : "—", mismatch: id && id.usbProto !== USB_PROTO_VERSION },
-    { label: "Radio", title: "Radio Protocol", value: id?.radioProto != null ? `v${id.radioProto}` : "—", mismatch: id && id.radioProto !== RADIO_PROTO_VERSION },
+    { label: "USB", value: id?.usbProto != null ? `v${id.usbProto}` : "—", mismatch: id && id.usbProto !== USB_PROTO_VERSION },
+    { label: "Radio", value: id?.radioProto != null ? `v${id.radioProto}` : "—", mismatch: id && id.radioProto !== RADIO_PROTO_VERSION },
   ];
 });
 const deviceId = computed(() => {
@@ -37,14 +37,14 @@ function disconnect() {
       <button v-else class="btn btn-ghost btn-sm conn-btn disconnect-btn" @click="disconnect">Disconnect</button>
     </div>
     <div class="card-body">
-      <p v-if="!device.supported" class="hint">Web Serial is not available in this browser. Use Chrome or Edge on a desktop.</p>
-      <p v-else-if="!device.connected" class="hint">Connect the master over USB to view its status and configure your boards.</p>
+      <p v-if="!device.supported" class="hint">Web Serial is not supported by this browser.</p>
+      <p v-else-if="!device.connected" class="hint">Connect the master over USB</p>
 
       <div v-if="device.connected" class="device-heading">
-        <h4 class="mono" :title="device.identity?.devid">{{ deviceId }}</h4>
+        <h4 class="mono">{{ deviceId }}</h4>
         <NodeAge node-id="0" />
         <div class="device-versions" aria-label="Firmware and Protocol Versions">
-          <span v-for="version in versions" :key="version.label" class="version-item" :title="version.title">
+          <span v-for="version in versions" :key="version.label" class="version-item">
             <span>{{ version.label }}</span>
             <span class="mono version-value" :class="{ mismatch: version.mismatch }">{{ version.value }}</span>
           </span>

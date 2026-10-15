@@ -23,6 +23,7 @@ onMounted(async () => {
   eventLog.protect(minSeq);
   device.durable = durable;
   device.durableError = error?.message || null;
+  if (error) await deviceLog.addEntry({ kind: "console", code: "storage_failure", at: Date.now(), text: error.message || String(error) });
   device.requestPersistence();
   await history.init();
   await device.loadLog();
@@ -51,21 +52,21 @@ onMounted(async () => {
     </header>
 
     <div v-if="!device.durable" class="banner" role="alert">
-      Browser storage unavailable{{ device.durableError ? ` (${device.durableError})` : "" }} — events and results stay in memory and are lost on reload.
+      <div><strong>Browser storage unavailable</strong><p>Records will be lost on reload</p></div>
     </div>
-    <div v-else-if="device.storageWarning" class="banner warn" role="alert">The browser did not grant persistent storage — it may clear stored evidence and results under storage pressure.</div>
+    <div v-else-if="device.storageWarning" class="banner warn" role="alert">Browser storage is not protected from automatic cleanup</div>
     <div v-for="alarm in device.alarms" :key="alarm.key" class="banner" role="alert">
-      {{ alarm.text }}
+      <span>{{ alarm.text }}</span>
       <button class="banner-close" type="button" aria-label="Dismiss" @click="device.dismissAlarm(alarm.key)">×</button>
     </div>
-    <div v-if="device.connected && device.identity && !device.contract.ok" class="banner" role="alert">{{ device.contract.reason }}</div>
+    <div v-if="device.connected && device.identity && !device.contract.ok" class="banner" role="alert"><div><strong>{{ device.contract.reason }}</strong><p v-if="device.contract.action">{{ device.contract.action }}</p></div></div>
     <div v-if="device.connected && device.unprovisioned" class="banner warn" role="alert">
-      Master has no radio key (<code>X noprov</code>) — provision every board in Settings first.
+      <div><strong>Master has no radio key</strong><p>Set a radio key in Device Settings</p></div>
     </div>
     <div v-if="device.quarantine" class="banner warn" role="alert">
-      {{ device.quarantine.count }} invalid event{{ device.quarantine.count === 1 ? "" : "s" }} quarantined (latest: {{ device.quarantine.reason }}) — affected runs stay unconfirmed. See the device log.
+      <div><strong>{{ device.quarantine.count }} invalid event{{ device.quarantine.count === 1 ? "" : "s" }} quarantined</strong><p>{{ device.quarantine.reason }}</p></div>
     </div>
-    <div v-if="device.verDrop" class="banner warn" role="alert">An outdated sensor is transmitting (ver_drop {{ device.verDrop.count }}) — update every board.</div>
+    <div v-if="device.verDrop" class="banner warn" role="alert"><div><strong>Sensor Radio Protocol Mismatch</strong><p>Use matching firmware on all boards</p></div></div>
 
     <QualityAlert />
 
@@ -97,6 +98,9 @@ onMounted(async () => {
   align-items: center;
   gap: 0.75rem;
 }
+.banner > div, .banner > span { min-width: 0; overflow-wrap: anywhere; }
+.banner p { margin: 0.25rem 0 0; }
+.banner-close { flex-shrink: 0; }
 .banner.warn {
   background: rgba(245, 158, 11, 0.12);
   border-color: rgba(245, 158, 11, 0.5);

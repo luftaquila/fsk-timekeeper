@@ -8,6 +8,7 @@ import { getAll, put, remove, clear } from "../lib/idb";
 import { MODE_LABEL } from "../lib/constants";
 import { toCsv, downloadBlob, timestampSlug, formatDuration } from "../lib/format";
 import { isOldFormatRow, resultNs, lapsNs, calibrationMethod } from "../lib/results";
+import { formatFaultReason } from "../lib/fault-text";
 import { useDeviceStore } from "./device";
 
 // Run fields copied into its history row.
@@ -215,7 +216,9 @@ export const useHistoryStore = defineStore("history", () => {
   }
 
   async function exportJson(mode = null, { withEvidence = false } = {}) {
-    const results = filtered(mode);
+    const results = filtered(mode).map((row) => ({ ...row,
+      fault: row.fault ? { ...row.fault, reasons: row.fault.reasons?.map((reason) => ({ ...reason, reason: formatFaultReason(reason.reason) })) } : row.fault,
+    }));
     const out = { exported_at: new Date().toISOString(), results };
     if (withEvidence) {
       out.evidence = {};

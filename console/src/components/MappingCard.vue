@@ -44,7 +44,7 @@ function updateMapping(node, changes) {
         <span>ms</span>
       </label>
     </div>
-    <div v-if="!nodes.length" class="card-body empty-state">No sensors yet — connect the master and wait for sync.</div>
+    <div v-if="!nodes.length" class="card-body empty-state">{{ device.connected ? "No Sensors Detected" : "Connect the master to detect sensors" }}</div>
     <div v-else class="sensor-list">
       <article v-for="node in nodes" :key="node" class="sensor" :aria-label="`Sensor ${node}`">
         <div class="sensor-heading">

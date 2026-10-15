@@ -21,12 +21,12 @@ describe("device log presentation and export", () => {
     const record = logRecord({ kind: "radio", code: "radio_history", historySnapshot: {
       faults: [0, 2, 0, 0, 0, 0], recovery: { count: 1, failures: 0, reason: 2, result: 2 },
     } });
-    assert.equal(record.line, "Since boot: SPI timeouts: 2; resets 1, failed 0. Last: no beacon >10 s → RX restarted. Event time unknown.");
+    assert.equal(record.line, "Since Boot\nSPI timeouts: 2\nResets: 1\nFailed: 0\nLast Reason: no master beacon for 10 s\nLast Result: receiver restarted\nEvent Time: Unknown");
   });
   it("preserves saturation and failed recovery", () => {
     assert.equal(logRecord({ kind: "radio", code: "radio_recovery", radioSnapshot: {
       count: 65535, failures: 65535, reason: 3, result: 3,
-    } }).line, "Since boot: resets 65535+, failed 65535+. Last: SPI timeout → failed.");
+    } }).line, "Since Boot\nResets: 65535+\nFailed: 65535+\nLast Reason: SPI timeout\nLast Result: failed");
   });
   it("omits raw USB payloads from exported display records", () => {
     const e = { kind: "console", code: "event.unreadable", text: "E malformed payload" };
@@ -34,4 +34,11 @@ describe("device log presentation and export", () => {
     assert.ok(!JSON.stringify(logRecord(e)).includes("malformed payload"));
     assert.equal(logRecord({ kind: "X", code: "spi_timeout", text: "X spi_timeout 7" }).line, "Count: 7 since boot.");
   });
+  it("formats legacy recovery logs and keeps details absent from the current schema", () => {
+    const text = "Sensor 0250FEB2: radio reinitializations: 1, failed: 0; latest reason: no master beacon for 10 s; latest result: receiver restarted. Reported at this time; event times are unavailable.";
+    assert.equal(logRecord({ kind: "radio", code: "radio_history", text }).line,
+      "Since Boot\nResets: 1\nFailed: 0\nLast Reason: no master beacon for 10 s\nLast Result: receiver restarted\nEvent Time: Unknown");
+    assert.equal(logRecord({ kind: "radio", code: "radio_history", text: "unknown future detail" }).line, "Since Boot\nunknown future detail");
+  });
+
 });

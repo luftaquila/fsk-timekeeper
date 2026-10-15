@@ -33,7 +33,6 @@ function clockDrift(r) {
     if (!p) return { value: "NO REPORT", tone: "warn" };
     if (p.valid === 1) return {
       parts: [metric(fmtPpm(p.ppb).replace(/ ppm$/, ""), "ppm")],
-      title: "Clock Drift Measured Against GPS PPS",
     };
     if (!p.fix) return { value: "NO GPS", tone: "warn" };
     return { value: "NOT READY", tone: "warn" };
@@ -56,11 +55,11 @@ const errors = computed(() => {
   const r = report.value;
   const items = errorNames(r?.err_flags).map((label) => ({ label, tone: "badge-danger" }));
   if (props.nodeId === "0") {
-    if (device.identity && !device.contract.ok) items.push({ label: device.contract.reason, tone: "badge-danger" });
+    if (device.identity && !device.contract.ok) items.push({ label: device.contract.label || device.contract.reason, tone: "badge-danger" });
     if (r?.tx_drop > 0) items.push({ label: `USB TX drops: ${r.tx_drop}`, tone: "badge-danger" });
     if (device.dropped.count) items.push({
       label: `${device.dropped.count} dropped ${device.dropped.count === 1 ? "line" : "lines"}`,
-      tone: "badge-warning", title: JSON.stringify(device.dropped.reasons),
+      tone: "badge-warning",
     });
   }
   return items;
@@ -125,7 +124,7 @@ const fields = computed(() => {
     <dl v-if="report || hasErrors || fields.length" class="diagnostic-grid">
       <div v-for="field in fields" :key="field.label">
         <dt>{{ field.label }}</dt>
-        <dd :class="[field.tone, { mono: field.mono, 'signal-value': field.gauge, 'timing-value': field.label === 'Timing' }]" :title="field.title">
+        <dd :class="[field.tone, { mono: field.mono, 'signal-value': field.gauge, 'timing-value': field.label === 'Timing' }]">
           <span v-if="field.gauge" class="signal-gauge" :role="field.gauge.value == null ? undefined : 'meter'"
             :aria-label="field.label" :aria-valuemin="field.gauge.min" :aria-valuemax="field.gauge.max"
             :aria-valuenow="field.gauge.value ?? undefined" :aria-valuetext="field.value">
@@ -147,7 +146,7 @@ const fields = computed(() => {
       <div v-if="hasErrors" class="diagnostic-errors">
         <dt>Errors</dt>
         <dd class="error-chips">
-          <span v-for="error in errors" :key="error.label" class="badge" :class="error.tone" :title="error.title">{{ error.label }}</span>
+          <span v-for="error in errors" :key="error.label" class="badge" :class="error.tone">{{ error.label }}</span>
         </dd>
       </div>
     </dl>

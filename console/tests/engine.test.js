@@ -136,14 +136,14 @@ describe("createRun", () => {
     assert.throws(() => start(log, "sprint", SPRINT), (e) => e instanceof EngineError && e.code === "checkpoint" && e.node === "A");
     log.checkpoint("A", -100);
     log.checkpoint("B", -100);
-    assert.throws(() => start(log, "sprint", SPRINT, { now: NOW + 13000 }), /has not confirmed/);
-    assert.throws(() => start(log, "sprint", SPRINT, { boot: 101 }), /has not confirmed/);
+    assert.throws(() => start(log, "sprint", SPRINT, { now: NOW + 13000 }), /Capture Confirmation Missing/);
+    assert.throws(() => start(log, "sprint", SPRINT, { boot: 101 }), /Capture Confirmation Missing/);
     const unhealthy = makeLog();
     unhealthy.checkpoint("A", -100, { flags: 6 });
-    assert.throws(() => start(unhealthy, "laps", LAPS), /has not confirmed/);
+    assert.throws(() => start(unhealthy, "laps", LAPS), /Capture Confirmation Missing/);
     const future = makeLog();
     future.checkpoint("A", 100);
-    assert.throws(() => start(future, "laps", LAPS), /has not confirmed/);
+    assert.throws(() => start(future, "laps", LAPS), /Capture Confirmation Missing/);
   });
 });
 
@@ -247,7 +247,7 @@ describe("dependency intervals and holes", () => {
     const r = ev(run, log);
     assert.equal(r.run.verification, "invalid");
     assert.equal(r.run.fault.reasons[0].node_id, "A");
-    assert.match(r.run.fault.reasons[0].reason, /lost captures/);
+    assert.match(r.run.fault.reasons[0].reason, /Capture Loss/);
     assert.equal(r.run.fault.reasons[0].lo, String(BigInt(tick(-100)) - 1n)); // the hole itself; its window starts before START
   });
 
@@ -304,7 +304,7 @@ describe("dependency intervals and holes", () => {
     wide.capture("A", 2000);
     r = ev(run2, wide);
     assert.equal(r.run.verification, "invalid");
-    assert.match(r.run.fault.reasons[0].reason, /unknown time/);
+    assert.match(r.run.fault.reasons[0].reason, /Time Unknown/);
     assert.equal(r.run.fault.reasons[0].lo, tick(1000));
     assert.equal(r.run.fault.reasons[0].hi, tick(2000));
   });
@@ -387,7 +387,7 @@ describe("dependency intervals and holes", () => {
     before.capture("B", 4000);
     const r = ev(run2, before);
     assert.equal(r.run.verification, "invalid");
-    assert.match(r.run.fault.reasons[0].reason, /rebooted/);
+    assert.match(r.run.fault.reasons[0].reason, /Reboot During Run|rebooted/);
   });
 
   it("a master timebase end keeps what was already decided", () => {
@@ -416,7 +416,7 @@ describe("dependency intervals and holes", () => {
     assert.equal(r.run.verification, "invalid");
     assert.deepEqual(r.run.crossingTicks, [tick(1000), tick(6000), tick(11000)]);
     assert.equal(r.run.totalValid, false);
-    assert.match(r.run.fault.reasons[0].reason, /rebooted/);
+    assert.match(r.run.fault.reasons[0].reason, /Reboot During Run|rebooted/);
   });
 
   it("capture times out of order are a fault of that sensor", () => {
@@ -426,7 +426,7 @@ describe("dependency intervals and holes", () => {
     log.capture("A", 1000);
     const r = ev(run, log);
     assert.equal(r.run.verification, "invalid");
-    assert.match(r.run.fault.reasons[0].reason, /out of order/);
+    assert.match(r.run.fault.reasons[0].reason, /Out of Order/);
   });
 
   it("an unhealthy capture is an edge of unknown time", () => {
@@ -437,7 +437,7 @@ describe("dependency intervals and holes", () => {
     log.capture("A", 6000);
     const r = ev(run, log);
     assert.equal(r.run.verification, "invalid");
-    assert.match(r.run.fault.reasons[0].reason, /valid clock/);
+    assert.match(r.run.fault.reasons[0].reason, /Invalid Capture Clock/);
   });
 
   it("a missing record stalls the sensor; a quarantined event in its place is a hole", () => {
@@ -458,7 +458,7 @@ describe("dependency intervals and holes", () => {
     q.capture("A", 5000);
     r = ev(run2, q);
     assert.equal(r.run.verification, "invalid");
-    assert.match(r.run.fault.reasons[0].reason, /quarantined/);
+    assert.match(r.run.fault.reasons[0].reason, /Quarantined/);
   });
 
   it("rows from another master session are ignored", () => {

@@ -6,6 +6,8 @@ import { MODES, MODE_LABEL } from "../lib/constants";
 import { formatDuration, fmtDateTime, fmtPpm } from "../lib/format";
 import { resultNs, lapsNs, calibrationMethod, calibrationLabel, isOldFormatRow } from "../lib/results";
 
+import FaultReasons from "../components/FaultReasons.vue";
+
 const history = useHistoryStore();
 const notyf = useNotification();
 const filter = ref("");
@@ -78,19 +80,22 @@ async function clearAll() {
             </tr>
           </thead>
           <tbody>
-            <tr v-for="r in rows" :key="r.id">
-              <td class="mono nowrap">{{ fmtDateTime(r.createdAt) }}</td>
-              <td class="mono nowrap" :title="calibration(r)">{{ r.startedUtc ? r.startedUtc.slice(11, 19) + "Z" : "—" }}</td>
-              <td>{{ MODE_LABEL[r.mode] || r.mode }}</td>
-              <td>{{ r.note || "—" }}</td>
-              <td class="mono nowrap strong" :title="calibration(r)">{{ result(r) }}</td>
-              <td class="mono laps">{{ laps(r) || "—" }}</td>
-              <td>
-                <span class="badge" :class="badgeClass(r)" :title="r.fault?.reasons?.map((x) => x.reason).join('\n') || ''">{{ history.status(r) }}</span>
-                <span v-if="r.durable === false" class="badge badge-danger" title="Not stored durably">memory</span>
-              </td>
-              <td class="actions"><button class="btn btn-ghost btn-sm" @click="remove(r)">Delete</button></td>
-            </tr>
+            <template v-for="r in rows" :key="r.id">
+              <tr>
+                <td class="mono nowrap">{{ fmtDateTime(r.createdAt) }}</td>
+                <td class="mono nowrap">{{ r.startedUtc ? r.startedUtc.slice(11, 19) + "Z" : "—" }}</td>
+                <td>{{ MODE_LABEL[r.mode] || r.mode }}</td>
+                <td>{{ r.note || "—" }}</td>
+                <td class="mono nowrap strong">{{ result(r) }}<small class="calibration">{{ calibration(r) }}</small></td>
+                <td class="mono laps">{{ laps(r) || "—" }}</td>
+                <td>
+                  <span class="badge" :class="badgeClass(r)">{{ ({ verified: "Verified", invalid: "Invalid", pending: "Pending" })[history.status(r)] || history.status(r) }}</span>
+                  <span v-if="r.durable === false" class="badge badge-danger">Not Saved</span>
+                </td>
+                <td class="actions"><button class="btn btn-ghost btn-sm" @click="remove(r)">Delete</button></td>
+              </tr>
+              <tr v-if="r.fault?.reasons?.length" class="fault-row"><td colspan="8"><FaultReasons :reasons="r.fault.reasons" :boundary-tick="r.boundaryTick" /></td></tr>
+            </template>
           </tbody>
         </table>
       </div>
@@ -99,6 +104,9 @@ async function clearAll() {
 </template>
 
 <style scoped>
+.calibration { display: block; font-size: 0.75rem; font-weight: 400; color: var(--text-secondary); }
+.fault-row td { white-space: normal; max-width: 0; color: var(--accent-danger); }
+.fault-row :deep(.fault-reasons) { max-width: calc(100vw - 6rem); }
 .history {
   display: flex;
   flex-direction: column;

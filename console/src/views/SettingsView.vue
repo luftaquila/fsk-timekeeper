@@ -8,6 +8,9 @@ import SerialConsole from "../components/SerialConsole.vue";
 import DeviceLogCard from "../components/DeviceLogCard.vue";
 import SimulatorCard from "../components/SimulatorCard.vue";
 
+import { useTimingStore } from "../stores/timing";
+const timing = useTimingStore();
+
 const isDev = import.meta.env.DEV;
 </script>
 
@@ -21,6 +24,7 @@ const isDev = import.meta.env.DEV;
         <span class="disclosure" aria-hidden="true">›</span>
       </summary>
       <p class="settings-notice">All masters and sensors must use the same radio settings, key, and firmware.</p>
+      <p v-if="timing.armed" class="settings-notice">Stop the run to change device settings</p>
       <div class="settings-sections">
         <RadioCard />
         <ProvisionCard />
@@ -81,8 +85,8 @@ const isDev = import.meta.env.DEV;
   gap: 0.5rem;
   margin-top: 1rem;
 }
-.settings-sections :deep(.radio-actions) { flex-wrap: nowrap; }
-.settings-sections :deep(.action-result) { min-width: 0; font-size: 0.8rem; font-weight: 600; }
+
+.settings-sections :deep(.action-result) { min-width: 0; overflow-wrap: anywhere; font-size: 0.8rem; font-weight: 600; }
 .settings-sections :deep(.apply-group) {
   display: flex;
   align-items: center;

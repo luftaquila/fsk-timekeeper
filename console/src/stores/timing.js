@@ -155,6 +155,7 @@ export const useTimingStore = defineStore("timing", () => {
       mappings: settings.mappingsFor(mode),
       telemetry: device.telemetry,
       masterFresh: device.masterFresh(now),
+      connected: device.connected,
       contract: device.contract,
       pipeline: device.pipelineHealth(now),
       now,
@@ -235,7 +236,7 @@ export const useTimingStore = defineStore("timing", () => {
     if (!current?.armed) return false;
     const device = useDeviceStore();
     if (!device.connected) {
-      notyf.error("The master is not connected. Reconnect to stop, or Clear to discard the run.");
+      notyf.error("The master is not connected\nReconnect to stop");
       return false;
     }
     let stopTick = null;
@@ -248,7 +249,7 @@ export const useTimingStore = defineStore("timing", () => {
     const latest = run.value;
     if (!latest || latest.runId !== current.runId || !latest.armed) return false;
     if (stopTick == null) {
-      notyf.error("The master did not answer the clock request. Try Stop again, or Clear to discard the run.");
+      notyf.error("Could not confirm the stop time\nTry Stop again");
       return false;
     }
     applyEvaluation(evaluateRun(stopRun(latest, stopTick), eventLog.since(latest.cursor)));
@@ -339,7 +340,6 @@ export const useTimingStore = defineStore("timing", () => {
       before.finishTick !== next.finishTick ||
       (before.crossingTicks || []).length !== next.crossingTicks.length;
     if (changed) useHistoryStore().upsert(next, { throughSeq: eventLog.getLastSeq() });
-    if (next.verification === "invalid" && next.fault && (!before || !before.fault)) notyf.error(next.fault.reasons?.[0]?.reason || "Measurement fault");
   }
 
   function evaluateOpen(current = run.value) {
@@ -360,7 +360,6 @@ export const useTimingStore = defineStore("timing", () => {
     const current = run.value;
     if (!shouldInvalidateOnMasterBoot(current, masterBootId)) return;
     evaluateOpen(endMasterSession(current, MASTER_REBOOTED));
-    if (run.value?.verification === "invalid") notyf.error(MASTER_REBOOTED);
   }
 
   function onMasterVersion({ usbProto, radioProto }) {

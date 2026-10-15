@@ -107,6 +107,8 @@ async function clearAll() {
   white-space: nowrap;
 }
 .text {
+  white-space: pre-line;
+  min-width: 12rem;
   overflow-wrap: anywhere;
   color: var(--text-secondary);
 }

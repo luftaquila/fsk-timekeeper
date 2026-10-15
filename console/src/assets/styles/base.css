@@ -481,3 +481,6 @@ textarea {
     scroll-behavior: auto !important;
   }
 }
+
+/* Long device errors remain readable without expanding a narrow notification. */
+.notyf__message { min-width: 0; overflow-wrap: anywhere; white-space: pre-line; }

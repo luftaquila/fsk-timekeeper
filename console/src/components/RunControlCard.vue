@@ -27,16 +27,18 @@ const canStart = computed(() => device.connected && !timing.armed && !timing.sta
       </div>
       <button class="btn btn-ghost btn-block mt-1" :disabled="!timing.run || timing.armed" @click="timing.reset()">Clear</button>
       <p v-if="!device.connected" class="note bad">Master not connected.</p>
-      <p v-else-if="missing.length" class="note bad">Unmapped role: {{ missing.map((r) => ROLE_LABEL[r] || r).join(", ") }} — see Settings.</p>
-      <p v-else-if="!quality.ok" class="note warn" :title="quality.reasons.map((r) => r.reason).join('\n')">
-        Not ready: {{ quality.reasons[0].reason }}<span v-if="quality.reasons.length > 1"> (+{{ quality.reasons.length - 1 }})</span>
-      </p>
+      <p v-else-if="missing.length" class="note bad">Unmapped Role: {{ missing.map((r) => ROLE_LABEL[r] || r).join(", ") }}</p>
+      <ul v-else-if="!quality.ok" class="note warn readiness-reasons">
+        <li v-for="(reason, i) in quality.reasons" :key="i">{{ reason.reason }}</li>
+      </ul>
       <p v-else class="note ok">Ready.</p>
     </div>
   </div>
 </template>
 
 <style scoped>
+.readiness-reasons { padding-left: 1.1rem; }
+.note { overflow-wrap: anywhere; }
 .note {
   margin-top: 0.75rem;
   font-size: 0.8rem;

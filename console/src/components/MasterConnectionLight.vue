@@ -9,7 +9,7 @@ const state = computed(() => {
   if (!device.connected) return { tone: "bad", label: "Disconnected" };
   return device.masterFresh(now.value)
     ? { tone: "ok", label: "Connected" }
-    : { tone: "warn", label: "Connected — no data" };
+    : { tone: "warn", label: "Connected, No Data" };
 });
 let timer;
 onMounted(() => { timer = setInterval(() => (now.value = Date.now()), 1000); });
@@ -17,7 +17,7 @@ onUnmounted(() => clearInterval(timer));
 </script>
 
 <template>
-  <span class="connection-light" :class="state.tone" role="img" :aria-label="state.label" :title="state.label"></span>
+  <span class="connection-light" :class="state.tone" role="img" :aria-label="state.label"></span>
 </template>
 
 <style scoped>

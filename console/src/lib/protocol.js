@@ -260,18 +260,18 @@ export function parseLine(line) {
   }
 }
 
-export const CONTRACT_SENSOR_ROLE = "This board booted as a sensor — reset it while it is connected to the PC.";
-export const CONTRACT_VERSION = "Firmware and console versions do not match — update both.";
+export const CONTRACT_SENSOR_ROLE = "Board Is Not a Master";
+export const CONTRACT_VERSION = "Firmware and Console Protocols Do Not Match";
 
 // The master may be used for measurement only after an I line of this exact contract.
 export function contractOf(identity) {
-  if (!identity) return { ok: false, reason: "Waiting for the master identity (?ID)." };
+  if (!identity) return { ok: false, reason: "Waiting for Master Identification" };
   if (identity.product !== USB_PRODUCT) return { ok: false, reason: `Unexpected device: ${identity.product}.` };
   if (identity.usbProto !== USB_PROTO_VERSION || identity.radioProto !== RADIO_PROTO_VERSION || identity.ticksPerMs !== Number(MASTER_TICKS_PER_MS)) {
-    return { ok: false, reason: CONTRACT_VERSION };
+    return { ok: false, reason: CONTRACT_VERSION, label: "Protocol Mismatch", action: "Update the firmware and console" };
   }
-  if (identity.role === "S") return { ok: false, reason: CONTRACT_SENSOR_ROLE };
-  if (identity.role !== "M") return { ok: false, reason: CONTRACT_VERSION };
+  if (identity.role === "S") return { ok: false, reason: CONTRACT_SENSOR_ROLE, action: "Reset the board with USB connected" };
+  if (identity.role !== "M") return { ok: false, reason: CONTRACT_VERSION, label: "Protocol Mismatch", action: "Update the firmware and console" };
   return { ok: true, reason: null };
 }
 

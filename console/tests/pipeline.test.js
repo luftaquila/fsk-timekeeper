@@ -413,7 +413,8 @@ describe("pipeline with the fake master", () => {
     await waitFor(() => timing.run.verification === "invalid");
     assert.equal(timing.run.closed, true);
     assert.equal(timing.fault.reasons[0].node_id, b);
-    assert.ok(toasts.error.some((m) => /lost captures/.test(m)));
+    assert.match(timing.fault.reasons[0].reason, /Capture Loss/);
+    assert.ok(!toasts.error.some((m) => /Capture Loss/.test(m)));
     await device.disconnect();
   });
 
@@ -466,7 +467,7 @@ describe("pipeline with the fake master", () => {
     const realReadClock = device.readClock;
     device.readClock = () => Promise.reject(new Error("no reply"));
     assert.equal(await timing.stop(), false);
-    assert.match(toasts.error.at(-1), /did not answer/);
+    assert.match(toasts.error.at(-1), /Could not confirm the stop time/);
     assert.equal(timing.run.armed, true);
     assert.equal(timing.run.stopTick, null);
     device.readClock = realReadClock;
@@ -560,7 +561,7 @@ describe("pipeline with the fake master", () => {
     assert.equal(listed.length, 1);
     fake.crossing(a, { at: t0 + 2000n * 16000n }); // beyond the debounce window of the first crossing
     await waitFor(() => timing.run.verification === "invalid");
-    assert.match(timing.fault.reasons[0].reason, /quarantined/);
+    assert.match(timing.fault.reasons[0].reason, /Quarantined/);
     await device.disconnect();
   });
 
@@ -588,7 +589,7 @@ describe("pipeline with the fake master", () => {
     fake.crossing(a);
     await waitFor(() => device.head != null && Date.now() - device.head.firstSeenAt > 5200, 8000);
     assert.equal(timing.qualityFor("laps").ok, false);
-    assert.match(timing.qualityFor("laps").reasons[0].reason, /keeps re-sending/);
+    assert.match(timing.qualityFor("laps").reasons[0].reason, /Keeps Being Retransmitted/);
     assert.equal(await timing.start("laps"), false);
     fake.setCorrupt(false);
     await waitFor(() => fake.queueLength === 0);
@@ -603,20 +604,20 @@ describe("pipeline with the fake master", () => {
     settings.setMapping(a, { role: "start" });
     fake.setRole("S");
     await waitFor(() => !device.contract.ok);
-    assert.match(device.contract.reason, /booted as a sensor/);
+    assert.match(device.contract.reason, /Board Is Not a Master/);
     const acks = device.stats.acks;
     fake.crossing(a);
     await sleep(400);
     assert.equal(device.stats.acks, acks);
     assert.ok(fake.queueLength >= 1);
     assert.equal(await timing.start("laps"), false);
-    assert.match(toasts.error.at(-1), /booted as a sensor/);
+    assert.match(toasts.error.at(-1), /Board Is Not a Master/);
     fake.setRole("M");
     await waitFor(() => fake.queueLength === 0);
     assert.ok(device.stats.acks > acks);
     fake.setProto({ usb: 1 });
     await waitFor(() => !device.contract.ok);
-    assert.match(device.contract.reason, /versions do not match/);
+    assert.match(device.contract.reason, /Protocols Do Not Match/);
     await device.disconnect();
   });
 
@@ -635,7 +636,8 @@ describe("pipeline with the fake master", () => {
     assert.equal(await timing.start("laps"), true, toasts.error.join(" | "));
     eventLog.reportWriteFailure(new Error("disk full"));
     assert.equal(device.durable, false);
-    assert.ok(device.alarms.some((x) => x.key === "storage"));
+    assert.ok(!device.alarms.some((x) => x.key === "storage"));
+    assert.equal(device.durableError, "disk full");
     assert.equal(timing.run.durable, false);
     await waitFor(() => history.rows[0].durable === false);
     fake.crossing(a);

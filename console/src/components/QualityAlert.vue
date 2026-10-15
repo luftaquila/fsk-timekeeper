@@ -1,8 +1,10 @@
 <script setup>
 import { computed, ref } from "vue";
 import { useTimingStore } from "../stores/timing";
-import { MODE_LABEL, ROLE_LABEL } from "../lib/constants";
-import { faultWindow } from "../lib/fault-text";
+import { MODE_LABEL } from "../lib/constants";
+import FaultReasons from "./FaultReasons.vue";
+import { useRoute } from "vue-router";
+const route = useRoute();
 
 const timing = useTimingStore();
 const dismissed = ref(null);
@@ -11,14 +13,8 @@ const fault = computed(() => (timing.fault?.fault_id && timing.fault.fault_id !=
 
 function title(f) {
   const label = MODE_LABEL[f.mode] || f.mode;
-  if (f.kind === "protocol") return `${label}: run closed by a protocol change`;
-  return f.kind === "measurement" ? `${label}: run invalidated by a measurement fault` : `${label}: run invalidated`;
-}
-
-function reasonText(reason) {
-  const role = reason?.role ? `${ROLE_LABEL[reason.role] || reason.role}: ` : "";
-  const span = faultWindow(reason, timing.run?.boundaryTick);
-  return `${role}${reason?.reason || "Unknown cause."}${span ? ` (${span})` : ""}`;
+  if (f.kind === "protocol") return `${label}: Run Closed: Protocol Changed`;
+  return `${label}: Invalid Result`;
 }
 
 function occurredAt(value) {
@@ -28,15 +24,14 @@ function occurredAt(value) {
 </script>
 
 <template>
-  <section v-if="fault" class="quality-alerts" aria-live="assertive">
+  <section v-if="fault && route.name !== 'timing'" class="quality-alerts" aria-live="assertive">
     <article class="quality-alert" role="alert">
       <div class="quality-alert-icon" aria-hidden="true">⚠️</div>
       <div class="quality-alert-content">
         <strong>{{ title(fault) }}</strong>
         <time v-if="occurredAt(fault.occurred_at)" :datetime="fault.occurred_at">{{ occurredAt(fault.occurred_at) }}</time>
-        <ul>
-          <li v-for="(reason, index) in fault.reasons || []" :key="index">{{ reasonText(reason) }}</li>
-        </ul>
+        <FaultReasons v-if="route.name !== 'history'" :reasons="fault.reasons || []" :boundary-tick="timing.run?.boundaryTick" />
+        <router-link class="result-link" to="/">View Result</router-link>
       </div>
       <button class="quality-alert-dismiss" type="button" aria-label="Dismiss" @click="dismissed = fault.fault_id">Dismiss</button>
     </article>
@@ -71,7 +66,9 @@ function occurredAt(value) {
 .quality-alert-content {
   flex: 1;
   min-width: 0;
+  overflow-wrap: anywhere;
 }
+.result-link { display: inline-block; margin-top: 0.5rem; color: var(--accent-primary); }
 .quality-alert-content strong {
   color: var(--accent-danger);
 }
