@@ -90,6 +90,14 @@ export function createFakeTransport({ onLine, onDisconnect }) {
     return sensors.get(node);
   }
 
+  function removeSensor(id) {
+    if (!sensors.delete(id.toUpperCase())) return false;
+    // Stop future uplinks and checkpoints. Records already accepted by the
+    // master remain in its ACK queue, just as when a real sensor disappears.
+    emit(heartbeat());
+    return true;
+  }
+
   function push(s, record, immediate = false) {
     s.records.push({ ...record, due: Date.now() + (immediate ? 0 : delay()) });
   }
@@ -404,6 +412,7 @@ export function createFakeTransport({ onLine, onDisconnect }) {
     // scenario helpers
     sensors,
     addSensor,
+    removeSensor,
     crossing,
     checkpoint,
     loss,

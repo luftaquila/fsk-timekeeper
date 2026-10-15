@@ -14,6 +14,7 @@ import * as eventLog from "../lib/eventLog";
 import * as ppsLog from "../lib/ppsLog";
 import * as deviceLog from "../lib/deviceLog";
 import { useTimingStore } from "./timing";
+import { useSettingsStore } from "./settings";
 
 const CONSOLE_LIMIT = 300;
 const LOG_VIEW_LIMIT = 500;
@@ -552,6 +553,14 @@ export const useDeviceStore = defineStore("device", () => {
   }
 
   function finishDisconnect() {
+    if (transport?.kind === "fake") {
+      const settings = useSettingsStore();
+      for (const node of transport.sensors.keys()) {
+        delete telemetry[node];
+        settings.removeMapping(node);
+      }
+      delete telemetry[NODE_MASTER];
+    }
     connected.value = false;
     connecting.value = false;
     dfuInProgress.value = false;

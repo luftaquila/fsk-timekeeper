@@ -85,6 +85,31 @@ async function mapSprint(device, settings) {
 }
 
 describe("pipeline with the fake master", () => {
+  it("removes fake sensor telemetry and mappings on disconnect without removing other sensors", async () => {
+    const { device, settings } = await boot();
+    const otherNode = "ABCDEF01";
+    device.telemetry[otherNode] = { node_id: otherNode };
+    settings.setMapping(otherNode, { role: "finish", note: "Physical Sensor" });
+    for (const disconnect of [() => device.disconnect(), () => device.enterBootloader()]) {
+      const fake = await connectFake(device);
+      const addedNode = "12345678";
+      fake.addSensor(addedNode);
+      const fakeNodes = [...fake.sensors.keys()];
+      for (const node of fakeNodes) settings.setMapping(node, { role: "start", note: "Simulator" });
+      await fake.write("?STATUS");
+      await waitFor(() => device.telemetry[addedNode]);
+      await disconnect();
+      // Pending simulator replies must not bring deleted sensors back.
+      await sleep(100);
+      assert.equal(device.connected, false);
+      assert.equal(device.fakeTransport(), null);
+      assert.deepEqual(Object.keys(device.telemetry), [otherNode]);
+      assert.deepEqual(settings.mappingList, [{ node_id: otherNode, role: "finish", note: "Physical Sensor" }]);
+      const saved = JSON.parse(localStorage.getItem("tk.settings.v2"));
+      for (const node of fakeNodes) assert.equal(saved.mapping[node], undefined);
+    }
+  });
+
   it("manual classification works offline, survives reload and does not recreate a deleted record", async () => {
     let { timing, history } = await boot();
     assert.deepEqual(await eventLog.rowsBetween(0, 0), []);
