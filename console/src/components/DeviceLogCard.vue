@@ -8,7 +8,6 @@ import { logRecord } from "../lib/deviceLogFormat";
 const device = useDeviceStore();
 const notyf = useNotification();
 const open = ref(false);
-const confirmClear = ref(false);
 
 const rows = computed(() => device.logEntries.map((e) => ({ ...logRecord(e), id: e.id })));
 
@@ -18,12 +17,7 @@ async function exportJson() {
 }
 
 async function clearAll() {
-  if (!confirmClear.value) {
-    confirmClear.value = true;
-    setTimeout(() => (confirmClear.value = false), 4000);
-    return;
-  }
-  confirmClear.value = false;
+  if (!window.confirm("Delete all device log entries?")) return;
   await device.clearLog();
   notyf.success("Device log cleared");
 }
@@ -38,7 +32,7 @@ async function clearAll() {
     <div v-if="open" class="card-body">
       <div class="toolbar">
         <button class="btn btn-ghost btn-sm" :disabled="!device.logEntries.length" @click="exportJson">Export JSON</button>
-        <button class="btn btn-sm" :class="confirmClear ? 'btn-danger' : 'btn-ghost'" :disabled="!device.logEntries.length" @click="clearAll">{{ confirmClear ? "Confirm Clear" : "Clear" }}</button>
+        <button class="btn btn-ghost btn-sm" :disabled="!device.logEntries.length" @click="clearAll">Clear All</button>
       </div>
       <div v-if="!device.logEntries.length" class="empty-state">No entries.</div>
       <div v-else class="table-scroll">

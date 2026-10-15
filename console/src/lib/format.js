@@ -13,6 +13,14 @@ export function formatDuration(ns, divisor = 1n) {
   return `${pad(ms / 60000n, 2)}:${pad((ms % 60000n) / 1000n, 2)}.${pad(ms % 1000n, 3)}`;
 }
 
+// Signed difference in total seconds, rounded to milliseconds half up.
+export function formatDelta(ns) {
+  if (ns == null) return "—";
+  const n = BigInt(ns);
+  const ms = ((n < 0n ? -n : n) + 500_000n) / 1_000_000n;
+  return `${n < 0n ? "−" : n > 0n ? "+" : ""}${ms / 1000n}.${pad(ms % 1000n, 3)}`;
+}
+
 // ppb -> "±x.xx ppm"
 export function fmtPpm(ppb) {
   const ppm = ppb / 1000;
@@ -31,19 +39,8 @@ export function fmtAgeMs(a) {
 
 export function fmtDateTime(ms) {
   const d = new Date(ms);
-  return Number.isNaN(d.getTime()) ? "" : d.toLocaleString();
-}
-
-// RFC 4180 field escaping.
-export function csvField(value) {
-  const s = value == null ? "" : String(value);
-  return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-}
-
-export function toCsv(headers, rows) {
-  const lines = [headers.map(csvField).join(",")];
-  for (const row of rows) lines.push(row.map(csvField).join(","));
-  return lines.join("\r\n") + "\r\n";
+  if (Number.isNaN(d.getTime())) return "";
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1, 2)}-${pad(d.getDate(), 2)} ${d.toLocaleTimeString()}`;
 }
 
 export function downloadBlob(blob, filename) {

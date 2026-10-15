@@ -211,29 +211,29 @@ describe("reference cases (D = 300 ms)", () => {
     );
   });
 
-  it("D: Stop with a start and no finish becomes DNF", () => {
+  it("Stop with a start but no finish preserves the crossing without DNF", () => {
     const log = sprintLog();
-    const run = stopRun(start(log, "sprint", SPRINT), tick(5000));
+    const run = start(log, "sprint", SPRINT);
     log.capture("A", 10);
-    let r = ev(run, log);
-    assert.equal(r.run.verification, "pending");
-    log.checkpoint("A", 6000);
-    log.checkpoint("B", 6000);
-    r = ev(run, log);
-    assert.equal(r.run.verification, "dnf");
-    assert.equal(r.run.dnfReason, "DNF");
-    assert.equal(r.run.closed, true);
-    assert.equal(r.run.finishTick, null);
+    const stopped = stopRun(ev(run, log).run);
+    assert.equal(stopped.verification, "pending");
+    assert.equal(stopped.dnfReason, null);
+    assert.equal(stopped.startTick, tick(10));
+    assert.equal(stopped.finishTick, null);
+    assert.equal(stopped.closed, true);
+    assert.equal(stopped.armed, false);
   });
 
-  it("DNS: Stop with no start crossing at all", () => {
+  it("Stop without a start closes collection without DNS", () => {
     const log = sprintLog();
-    const run = stopRun(start(log, "sprint", SPRINT), tick(5000));
+    const run = start(log, "sprint", SPRINT);
     log.capture("B", 1000); // a finish without a start is ignored
-    log.checkpoint("A", 6000);
-    const r = ev(run, log);
-    assert.equal(r.run.verification, "dnf");
-    assert.equal(r.run.dnfReason, "DNS");
+    const stopped = stopRun(ev(run, log).run);
+    assert.equal(stopped.verification, "pending");
+    assert.equal(stopped.dnfReason, null);
+    assert.equal(stopped.closed, true);
+    assert.equal(stopped.startTick, null);
+    assert.equal(stopped.finishTick, null);
   });
 });
 
@@ -514,45 +514,27 @@ describe("laps", () => {
     assert.equal(r.run.armed, false);
   });
 
-  it("Stop fences at the stop tick and closes once the sensor is certain through it", () => {
+  it("Stop preserves confirmed laps without waiting for another checkpoint", () => {
     const log = lapsLog();
     const run = start(log, "laps", LAPS);
     for (const ms of [1000, 11000, 21000]) log.capture("A", ms);
-    const stopped = stopRun(run, tick(25000));
-    assert.equal(stopped.armed, false);
-    let r = ev(stopped, log);
-    assert.equal(r.run.verification, "pending");
-    assert.equal(r.run.closed, false);
-    log.capture("A", 24000); // before Stop, delivered after: counts
-    log.capture("A", 26000); // after Stop: ignored
-    log.checkpoint("A", 27000);
-    r = ev(stopped, log);
-    assert.deepEqual(r.run.crossingTicks, [1000, 11000, 21000, 24000].map(tick));
-    assert.equal(r.run.verification, "verified");
-    assert.equal(r.run.closed, true);
+    const current = ev(run, log).run;
+    const stopped = stopRun(current);
+    assert.deepEqual(stopped, { ...current, armed: false, closed: true });
+    assert.equal(stopped.verification, "verified");
+    assert.deepEqual(stopped.crossingTicks, [1000, 11000, 21000].map(tick));
   });
 
-  it("a known-time loss just after Stop leaves the stopped run official", () => {
+  it("Stop preserves an existing loss and the laps confirmed before it", () => {
     const log = lapsLog();
-    const run = stopRun(start(log, "laps", LAPS), tick(21500));
-    for (const ms of [1000, 11000, 21000]) log.capture("A", ms);
-    log.loss("A", 22000);
-    log.checkpoint("A", 23000);
-    const r = ev(run, log);
-    assert.equal(r.run.verification, "verified");
-    assert.equal(r.run.fault, null);
-  });
-
-  it("a loss of unknown time just before Stop invalidates it; the laps before stay confirmed", () => {
-    const log = lapsLog();
-    const run = stopRun(start(log, "laps", LAPS), tick(21500));
+    const run = start(log, "laps", LAPS);
     for (const ms of [1000, 11000, 21000]) log.capture("A", ms);
     log.loss("A", 0, { unknown: true });
     log.checkpoint("A", 23000);
-    const r = ev(run, log);
-    assert.equal(r.run.verification, "invalid");
-    assert.equal(r.run.totalValid, false);
-    assert.deepEqual(r.run.crossingTicks, [1000, 11000, 21000].map(tick));
+    const stopped = stopRun(ev(run, log).run);
+    assert.equal(stopped.verification, "invalid");
+    assert.equal(stopped.totalValid, false);
+    assert.deepEqual(stopped.crossingTicks, [1000, 11000, 21000].map(tick));
   });
 
   it("a significant hole before the target keeps only the laps before it", () => {
@@ -569,19 +551,17 @@ describe("laps", () => {
     assert.deepEqual(r.run.crossingTicks, [1000, 6000, 11000].map(tick));
   });
 
-  it("Stop with one crossing is DNF, with none DNS", () => {
-    const one = lapsLog();
-    const run = stopRun(start(one, "laps", LAPS), tick(5000));
-    one.capture("A", 1000);
-    one.checkpoint("A", 6000);
-    let r = ev(run, one);
-    assert.equal(r.run.verification, "dnf");
-    assert.equal(r.run.dnfReason, "DNF");
-    const none = lapsLog();
-    const run2 = stopRun(start(none, "laps", LAPS), tick(5000));
-    none.checkpoint("A", 6000);
-    r = ev(run2, none);
-    assert.equal(r.run.dnfReason, "DNS");
+  it("Stop with zero or one lap crossing assigns neither DNS nor DNF", () => {
+    for (const crossings of [[], [1000]]) {
+      const log = lapsLog();
+      const run = start(log, "laps", LAPS);
+      for (const ms of crossings) log.capture("A", ms);
+      const stopped = stopRun(ev(run, log).run);
+      assert.equal(stopped.verification, "pending");
+      assert.equal(stopped.dnfReason, null);
+      assert.equal(stopped.closed, true);
+      assert.deepEqual(stopped.crossingTicks, crossings.map(tick));
+    }
   });
 });
 

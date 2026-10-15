@@ -4,6 +4,7 @@
 //  - sprint: first start crossing opens the interval, the first finish crossing after it closes it.
 //  - laps:   start-role crossings only; every crossing after the first ends a lap.
 export const MODES = ["sprint", "laps"];
+export const RESULT_CLASSIFICATIONS = ["DNS", "DNF", "DSQ"];
 
 export const MODE_LABEL = {
   sprint: "Start → Finish",

@@ -3,8 +3,7 @@ import { ref, computed } from "vue";
 import { useTimingStore } from "../stores/timing";
 import { useSettingsStore } from "../stores/settings";
 import { MODE_LABEL } from "../lib/constants";
-import { formatDuration } from "../lib/format";
-import { calibrationLabel } from "../lib/results";
+import { formatDuration, formatDelta } from "../lib/format";
 import FaultReasons from "../components/FaultReasons.vue";
 import RunControlCard from "../components/RunControlCard.vue";
 import RunSetupCard from "../components/RunSetupCard.vue";
@@ -32,16 +31,29 @@ const target = computed(() => timing.run?.lapTarget ?? settings.state.lapTarget)
 const status = computed(() => {
   const v = verification.value;
   if (!timing.run) return null;
-  if (v === "verified") return { cls: "badge-success", text: timing.run.closed ? "Verified" : "Verified So Far" };
+  if (timing.run.classification) return {
+    cls: timing.run.classification === "DSQ" ? "badge-danger" : "badge-warning",
+    text: timing.run.classification,
+  };
+  if (v === "verified") return null;
   if (v === "invalid") return { cls: "badge-danger", text: "Invalid" };
   if (v === "dnf") return { cls: "badge-default", text: timing.run.dnfReason || "DNF" };
+  if (timing.run.closed) return { cls: "badge-default", text: "Stopped" };
   return { cls: "badge-warning", text: "Pending" };
 });
 
 function delta(ns) {
   if (best.value == null || ns == null) return "";
   const d = ns - best.value;
-  return d === 0n ? "best" : `+${formatDuration(d)}`;
+  return d === 0n ? "BEST" : formatDelta(d);
+}
+function beforeDifference(index) {
+  const current = laps.value[index]?.ns;
+  const previous = laps.value[index - 1]?.ns;
+  return current == null || previous == null ? null : current - previous;
+}
+function deltaBefore(index) {
+  return formatDelta(beforeDifference(index));
 }
 </script>
 
@@ -57,27 +69,25 @@ function delta(ns) {
 
       <div v-if="mode === 'sprint'" class="sensors">
         <div class="card">
-          <div class="card-header"><h3>🟢 Start Sensor</h3></div>
+          <div class="card-header"><h3>🟢 Start</h3></div>
           <div class="card-body">
             <div v-if="!startList.length" class="empty-state">No crossing yet</div>
             <ul v-else class="rec-list">
               <li v-for="c in startList" :key="c.key" :class="{ confirmed: c.confirmed }">
                 <span class="mono">{{ formatDuration(c.ns) }}</span>
                 <span class="who mono">{{ c.node_id }}</span>
-                <span class="chk" role="img" :aria-label="c.confirmed ? 'Confirmed' : 'Awaiting confirmation'">{{ c.confirmed ? "✓" : "…" }}</span>
               </li>
             </ul>
           </div>
         </div>
         <div class="card">
-          <div class="card-header"><h3>🏁 Finish Sensor</h3></div>
+          <div class="card-header"><h3>🏁 Finish</h3></div>
           <div class="card-body">
             <div v-if="!finishList.length" class="empty-state">No crossing yet</div>
             <ul v-else class="rec-list">
               <li v-for="c in finishList" :key="c.key" :class="{ confirmed: c.confirmed }">
                 <span class="mono">{{ c.ns != null ? `+${formatDuration(c.ns)}` : "—" }}</span>
                 <span class="who mono">{{ c.node_id }}</span>
-                <span class="chk" role="img" :aria-label="c.confirmed ? 'Confirmed' : 'Awaiting confirmation'">{{ c.confirmed ? "✓" : "…" }}</span>
               </li>
             </ul>
           </div>
@@ -115,20 +125,26 @@ function delta(ns) {
             <div v-if="!laps.length" class="empty-state">{{ startList.length ? "Waiting for First Lap" : "No crossing yet" }}</div>
             <div v-else class="table-scroll">
               <table class="lap-table">
+                <colgroup>
+                  <col class="lap-column" />
+                  <col class="time-column" />
+                  <col class="delta-column" />
+                  <col class="delta-column" />
+                </colgroup>
                 <thead>
                   <tr>
                     <th>Lap</th>
                     <th>Time</th>
+                    <th>Δ Before</th>
                     <th>Δ Best</th>
-                    <th></th>
                   </tr>
                 </thead>
                 <tbody>
                   <tr v-for="(lap, i) in [...laps].reverse()" :key="laps.length - i" :class="{ confirmed: lap.confirmed, best: lap.ns != null && lap.ns === best }">
                     <td class="idx">{{ laps.length - i }}</td>
                     <td class="mono">{{ formatDuration(lap.ns) }}</td>
+                    <td class="mono d" :class="{ slower: beforeDifference(laps.length - i - 1) > 0n }">{{ deltaBefore(laps.length - i - 1) }}</td>
                     <td class="mono d">{{ delta(lap.ns) }}</td>
-                    <td class="chk">{{ lap.confirmed ? "✓" : "…" }}</td>
                   </tr>
                 </tbody>
               </table>
@@ -141,9 +157,8 @@ function delta(ns) {
         <div class="card-header"><h3>🏆 Result</h3></div>
         <div class="card-body result-body">
           <div class="result-time mono">{{ formatDuration(timing.resultNs) }}</div>
-          <div class="result-meta">
+          <div v-if="status || timing.run?.durable === false" class="result-meta">
             <span v-if="status" class="badge" :class="status.cls">{{ status.text }}</span>
-            <span v-if="timing.run && timing.calibrationMethod" class="badge" :class="timing.calibrationMethod === 'nominal' ? 'badge-default' : 'badge-primary'">{{ calibrationLabel(timing.calibrationMethod) }}</span>
             <span v-if="timing.run && timing.run.durable === false" class="lbl bad">Not Saved</span>
           </div>
           <FaultReasons v-if="timing.run?.fault?.reasons?.length" class="fault-list" :reasons="timing.run.fault.reasons" :boundary-tick="timing.run.boundaryTick" />
@@ -180,58 +195,60 @@ function delta(ns) {
 }
 .who {
   margin-left: auto;
-  font-size: 0.75rem;
-  color: var(--text-tertiary);
-}
-.chk {
-  width: 1.2rem;
-  text-align: center;
-  color: var(--accent-success);
+  font-size: 1.05rem;
+  color: var(--text-secondary);
 }
 .stats {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(10.5rem, 1fr));
   gap: 1rem;
 }
 .stat {
-  padding: 0.9rem 1rem;
+  padding: 0;
 }
 .stat .k {
-  font-size: 0.75rem;
-  color: var(--text-tertiary);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  padding: 0.65rem 1rem;
+  background: var(--bg-hover);
+  border-bottom: 1px solid var(--border-color);
 }
 .stat .v {
-  font-size: 1.4rem;
+  padding: 0.8rem 1rem;
+  font-size: 1.5rem;
   font-weight: 700;
 }
 .stat.total {
   border-color: rgba(59, 130, 246, 0.5);
 }
 .of {
-  font-size: 0.9rem;
-  color: var(--text-tertiary);
+  font-size: 1rem;
+  color: var(--text-secondary);
   margin-left: 0.3rem;
 }
 .sub {
-  font-size: 0.8rem;
+  font-size: 1rem;
   font-weight: 400;
-  color: var(--text-tertiary);
+  color: var(--text-secondary);
 }
 .lap-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 1rem;
+  font-size: 1.125rem;
 }
+.lap-column { width: 12%; }
+.time-column { width: 28%; }
+.delta-column { width: 30%; }
 .lap-table th {
   text-align: left;
-  font-size: 0.75rem;
-  color: var(--text-tertiary);
-  padding: 0.3rem 0.6rem;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  padding: 0.6rem 0.75rem;
 }
 .lap-table td {
-  padding: 0.4rem 0.6rem;
+  padding: 0.6rem 0.75rem;
   border-bottom: 1px solid var(--border-color);
   color: var(--text-secondary);
 }
@@ -245,16 +262,21 @@ function delta(ns) {
   color: var(--accent-success);
   font-weight: 700;
 }
+.lap-table tr td.d.slower {
+  color: var(--accent-danger);
+  font-weight: 600;
+}
 .idx {
-  color: var(--text-tertiary);
-  width: 4rem;
+  color: var(--text-secondary);
+}
+.lap-table th:first-child {
+  text-align: left;
+}
+.lap-table td.idx {
+  text-align: left;
 }
 .d {
-  color: var(--text-tertiary);
-}
-.lap-table .chk {
-  text-align: right;
-  width: auto;
+  color: var(--text-secondary);
 }
 .result-body {
   display: flex;

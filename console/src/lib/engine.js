@@ -7,9 +7,10 @@
  *   nodes: { [node_id]: { boot, seq, role, cpSeq } },   // START checkpoint per mapped sensor
  *   cursor: number,                                    // evidence = event-log rows with seq > cursor
  *   lapTarget: number|null, debounceMs: number,        // frozen at START
- *   stopTick: string|null,                             // Stop fence (master `T` answer)
+ *   stopTick: string|null,                             // legacy Stop fence; new runs leave this null
  *   armed, closed,
  *   verification: "pending" | "verified" | "invalid" | "dnf", dnfReason: "DNF" | "DNS" | null,
+ *   classification: "DNS" | "DNF" | "DSQ" | null,    // explicit operator decision
  *   startTick, finishTick: string|null,                // sprint result S1, F1
  *   crossingTicks: string[], totalValid: boolean,       // laps: confirmed crossings C0..Ck
  *   calibration: null | frozen descriptor (calibration.js), durationNs: string|null,
@@ -25,7 +26,7 @@ import { sensorStream, masterTimebaseEnd } from "./sensor-stream";
 import { roleStream } from "./role-stream";
 import { FLAG_HEALTHY, FLAG_TIME_UNKNOWN, RADIO_PROTO_VERSION, USB_PROTO_VERSION } from "./protocol";
 import { MASTER_TICKS_PER_MS } from "./event-timing";
-import { WIRELESS_STATUS_MAX_AGE_MS, DEFAULT_DEBOUNCE_MS } from "./constants";
+import { WIRELESS_STATUS_MAX_AGE_MS, DEFAULT_DEBOUNCE_MS, RESULT_CLASSIFICATIONS, MODES } from "./constants";
 
 export const RUN_SCHEMA = 3;
 export const MASTER_TIMEBASE_ENDED = "The master timebase ended during the run.";
@@ -94,6 +95,7 @@ export function createRun({
     armed: true,
     closed: false,
     verification: "pending",
+    classification: null,
     dnfReason: null,
     startTick: null,
     finishTick: null,
@@ -108,6 +110,23 @@ export function createRun({
     startedAt: now,
     historyId: null,
     durable,
+  };
+}
+
+// An explicit operator decision can exist without a device or a measured interval.
+export function createClassifiedRun({ mode, note = "", classification, cursor = 0, now = Date.now(), durable = true }) {
+  if (!MODES.includes(mode) || !RESULT_CLASSIFICATIONS.includes(classification)) {
+    throw new EngineError("classification", "Invalid classification");
+  }
+  return {
+    schema: RUN_SCHEMA, radioProto: RADIO_PROTO_VERSION, usbProto: USB_PROTO_VERSION,
+    runId: uuid(), mode, note, classification,
+    boundaryTick: null, masterBootId: null, nodes: {}, cursor,
+    lapTarget: null, debounceMs: DEFAULT_DEBOUNCE_MS, stopTick: null,
+    armed: false, closed: true, verification: "pending", dnfReason: null,
+    startTick: null, finishTick: null, crossingTicks: [], totalValid: true,
+    calibration: null, durationNs: null, fault: null, masterSessionEnded: null,
+    gpsAtStart: null, startedUtc: null, startedAt: now, historyId: null, durable,
   };
 }
 
@@ -139,10 +158,10 @@ export function invalidateRun(run, reasons, { kind = "quality", now = Date.now()
   };
 }
 
-// STOP. Disarms at the master's stop tick: crossings up to it still count when they arrive
-// late, later ones are ignored; the run closes once the needed roles are certain through it.
-export function stopRun(run, stopTick) {
-  return { ...run, armed: false, stopTick: String(stopTick) };
+// STOP closes collection and further verification, preserving the current result.
+// DNS/DNF are operator classifications, never inferred from stopping collection.
+export function stopRun(run) {
+  return { ...run, armed: false, closed: true };
 }
 
 // The master's timebase is gone (reboot, version change): every sensor is uncertain beyond
@@ -170,15 +189,13 @@ function reasonOf(cut) {
 export function evaluateRun(run, rows, { now = Date.now() } = {}) {
   const boundary = BigInt(run.boundaryTick);
   const debounceTicks = BigInt(run.debounceMs) * MASTER_TICKS_PER_MS;
-  const stop = run.stopTick != null ? BigInt(run.stopTick) : null;
   const timebaseEnd = masterTimebaseEnd(run, rows);
   const sessionEnd = run.masterSessionEnded?.reason || (timebaseEnd != null ? MASTER_TIMEBASE_ENDED : null);
   const streams = Object.keys(run.nodes).map((node) => sensorStream(run, node, rows, { sessionEnd }));
   const members = (role) => streams.filter((stream) => stream.role === role);
-  const within = (list) => (stop == null ? list : list.filter((c) => c.tick <= stop));
 
   const startRole = roleStream(members("start"), { after: boundary - 1n, debounceTicks });
-  const starts = within(startRole.accepted);
+  const starts = startRole.accepted;
   const display = [];
   const push = (list, role, certain) => {
     for (const c of list) display.push({ node_id: c.node_id, role, tick: String(c.tick), confirmed: c.tick <= certain });
@@ -186,7 +203,6 @@ export function evaluateRun(run, rows, { now = Date.now() } = {}) {
   push(starts, "start", startRole.certain);
 
   let state = "pending";
-  let dnfReason = null;
   let faultCuts = null;
   let startTick = null;
   let finishTick = null;
@@ -209,16 +225,10 @@ export function evaluateRun(run, rows, { now = Date.now() } = {}) {
     if (target && confirmed.length >= target + 1) {
       state = "verified";
       crossingTicks = confirmed.slice(0, target + 1);
-    } else if (cutBelow(startRole, stop)) {
-      invalid(cutsBelow(startRole, stop));
+    } else if (cutBelow(startRole, null)) {
+      invalid(cutsBelow(startRole, null));
       totalValid = false;
-    } else if (stop != null && startRole.certain >= stop) {
-      if (confirmed.length >= 2) state = "verified";
-      else {
-        state = "dnf";
-        dnfReason = confirmed.length === 1 ? "DNF" : "DNS";
-      }
-    } else if (stop == null && confirmed.length >= 2 && !startRole.cuts.length) {
+    } else if (confirmed.length >= 2 && !startRole.cuts.length) {
       state = "verified"; // so far: the run stays open until its target or Stop
     }
   } else {
@@ -227,16 +237,13 @@ export function evaluateRun(run, rows, { now = Date.now() } = {}) {
     if (s1 != null) {
       if (s1 <= startRole.certain) s1Final = true;
       else if (cutBelow(startRole, s1)) invalid(cutsBelow(startRole, s1));
-    } else if (cutBelow(startRole, stop)) {
-      invalid(cutsBelow(startRole, stop));
-    } else if (stop != null && startRole.certain >= stop) {
-      state = "dnf";
-      dnfReason = "DNS";
+    } else if (cutBelow(startRole, null)) {
+      invalid(cutsBelow(startRole, null));
     }
     // Finish edges at or before the first start are dropped before debouncing (no warning).
     if (s1 != null) {
       const finishRole = roleStream(members("finish"), { after: s1, debounceTicks });
-      const finishes = within(finishRole.accepted);
+      const finishes = finishRole.accepted;
       push(finishes, "finish", finishRole.certain);
       finishCertain = finishRole.certain;
       if (s1Final) {
@@ -247,20 +254,17 @@ export function evaluateRun(run, rows, { now = Date.now() } = {}) {
             state = "verified";
             finishTick = String(f1);
           } else if (cutBelow(finishRole, f1)) invalid(cutsBelow(finishRole, f1));
-        } else if (cutBelow(finishRole, stop)) {
-          invalid(cutsBelow(finishRole, stop));
-        } else if (stop != null && finishRole.certain >= stop) {
-          state = "dnf";
-          dnfReason = "DNF";
+        } else if (cutBelow(finishRole, null)) {
+          invalid(cutsBelow(finishRole, null));
         }
         if (state !== "verified") finishTick = null;
       }
     }
-    if (state !== "verified") startTick = state === "dnf" && dnfReason === "DNF" ? String(s1) : null;
+    if (state === "invalid") startTick = null;
   }
 
-  const decided = state === "invalid" || state === "dnf" || (state === "verified" && (run.mode === "sprint" || (run.lapTarget && crossingTicks.length === run.lapTarget + 1) || stop != null));
-  let next = { ...run, verification: state, dnfReason, startTick, finishTick, crossingTicks, totalValid };
+  const decided = state === "invalid" || (state === "verified" && (run.mode === "sprint" || (run.lapTarget && crossingTicks.length === run.lapTarget + 1)));
+  let next = { ...run, verification: state, dnfReason: null, startTick, finishTick, crossingTicks, totalValid };
   if (decided) next = { ...next, armed: false, closed: true };
   if (state === "invalid") next.fault = run.fault || makeFault(run, (faultCuts || []).map(reasonOf), "measurement", now);
   else if (decided) next.fault = null;

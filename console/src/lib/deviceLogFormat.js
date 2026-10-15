@@ -1,3 +1,4 @@
+import { fmtDateTime } from "./format";
 import { RADIO_RECOVERY_REASONS, RADIO_RECOVERY_RESULTS, RADIO_HISTORY_LABELS } from "./protocol";
 
 const TYPES = { X: "Error", boot: "Boot", console: "Console", radio: "Radio" };
@@ -63,13 +64,6 @@ function logLine(e, code) {
   return e.text ?? "";
 }
 
-function logTime(ms) {
-  const date = new Date(ms);
-  if (Number.isNaN(date.getTime())) return "";
-  const pad = (n) => String(n).padStart(2, "0");
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${date.toLocaleTimeString()}`;
-}
-
 function boardId(id) {
   if (!/^[0-9a-f]{16}$/i.test(id ?? "")) return id || "—";
   const low = id.slice(8).toUpperCase();
@@ -80,6 +74,6 @@ function boardId(id) {
 // One representation for both the table and JSON export, including older entries.
 export function logRecord(entry) {
   const code = logCode(entry.code);
-  return { time: logTime(entry.at), type: TYPES[entry.kind] ?? entry.kind, code,
+  return { time: fmtDateTime(entry.at), type: TYPES[entry.kind] ?? entry.kind, code,
     board: boardId(entry.devid), line: logLine(entry, code) };
 }

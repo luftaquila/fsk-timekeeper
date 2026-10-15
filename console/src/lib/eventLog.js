@@ -276,6 +276,7 @@ export async function pruneStore() {
 }
 
 export async function rowsBetween(fromSeqExclusive, toSeqInclusive) {
+  if (toSeqInclusive <= fromSeqExclusive) return [];
   if (db) return getAll(db, STORE_EVENTS, IDBKeyRange.bound(fromSeqExclusive, toSeqInclusive, true, false));
   return rows.filter((r) => r.seq > fromSeqExclusive && r.seq <= toSeqInclusive);
 }

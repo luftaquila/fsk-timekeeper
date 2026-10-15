@@ -36,6 +36,7 @@ const { useTimingStore } = await import("../src/stores/timing.js");
 const { useHistoryStore } = await import("../src/stores/history.js");
 const { resultNs } = await import("../src/lib/results.js");
 const { encodeRun } = await import("../src/lib/run-codec.js");
+const { getAll, put } = await import("../src/lib/idb.js");
 
 fakeDefaults.slotDelayMin = 10;
 fakeDefaults.slotDelayMax = 30;
@@ -84,6 +85,62 @@ async function mapSprint(device, settings) {
 }
 
 describe("pipeline with the fake master", () => {
+  it("manual classification works offline, survives reload and does not recreate a deleted record", async () => {
+    let { timing, history } = await boot();
+    assert.deepEqual(await eventLog.rowsBetween(0, 0), []);
+    assert.deepEqual(await eventLog.rowsBetween(2, 1), []);
+    assert.equal(await timing.classify("DNS", "sprint", "Car 7"), true);
+    const row = history.rows[0];
+    assert.deepEqual(await eventLog.rowsBetween(row.cursorSeq, row.throughSeq), []);
+    const id = timing.run.runId;
+    assert.equal(history.rows.length, 1);
+    assert.equal(history.rows[0].note, "Car 7");
+    assert.equal(resultNs(history.rows[0]), null);
+    assert.equal(timing.armed, false);
+    ({ timing, history } = await boot({ keepStorage: true }));
+    assert.equal(timing.run.classification, "DNS");
+    assert.equal(history.status(history.rows[0]), "DNS");
+    await timing.classify("DNF");
+    await timing.classify("DSQ");
+    assert.equal(history.rows.length, 1);
+    assert.equal(history.rows[0].runId, id);
+    assert.equal(history.status(history.rows[0]), "DSQ");
+    await timing.classify(null);
+    assert.equal(history.rows.length, 0);
+    assert.equal(timing.run.historyId, null);
+    ({ timing, history } = await boot({ keepStorage: true }));
+    assert.equal(timing.run.classification, null);
+    assert.equal(history.rows.length, 0);
+    assert.equal(await timing.classify("DNS"), true);
+    assert.equal(history.rows[0].runId, id);
+    assert.equal(history.status(history.rows[0]), "DNS");
+    await history.removeRow(history.rows[0].id);
+    ({ timing, history } = await boot({ keepStorage: true }));
+    assert.equal(history.rows.length, 0);
+    timing.reset();
+  });
+
+  it("classifying an active attempt closes it and ignores subsequent crossings", async () => {
+    const { device, settings, timing, history } = await boot();
+    const { fake, a, b } = await mapSprint(device, settings);
+    assert.equal(await timing.start("sprint"), true);
+    fake.crossing(a);
+    await waitFor(() => timing.live.crossings.length === 1);
+    assert.equal(await timing.classify("DNF"), true);
+    const id = timing.run.runId;
+    fake.crossing(b, { offsetMs: 800 });
+    await sleep(100);
+    assert.equal(timing.armed, false);
+    assert.equal(timing.run.finishTick, null);
+    assert.equal(history.rows.find((r) => r.runId === id).classification, "DNF");
+    assert.equal(resultNs(history.rows.find((r) => r.runId === id)), null);
+    await timing.classify(null);
+    assert.equal(timing.armed, false, "clearing a decision must not resume measurement");
+    assert.equal(history.rows.length, 0);
+    await device.disconnect();
+    timing.reset();
+  });
+
   it("persists checkpoint history even when a transient cleared before telemetry, and deduplicates replay/reload", async () => {
     const { device } = await boot();
     const identity = "I FSK-WL 5 1.0.0 0123456789ABCDEF M 14 922900 7 250.00 16000 0 12 1";
@@ -257,7 +314,7 @@ describe("pipeline with the fake master", () => {
     assert.equal(timing.lightColor, "green");
     assert.equal(await timing.start("sprint", "again"), false);
     assert.match(toasts.error.at(-1), /already running/);
-    assert.equal(history.rows[0].verification, "pending");
+    assert.equal(history.rows.length, 0);
 
     fake.crossing(a);
     fake.crossing(b, { offsetMs: 1000 });
@@ -273,8 +330,10 @@ describe("pipeline with the fake master", () => {
     assert.equal(history.rows[0].verification, "verified");
     assert.equal(history.rows[0].durationNs, timing.run.durationNs);
     assert.equal(history.rows[0].note, "car 7");
-    const csv = history.csvText();
-    assert.match(csv, new RegExp(`,${timing.run.durationNs},${timing.run.startTick},${timing.run.finishTick},`));
+    const exported = history.exportData().History[0];
+    assert.equal(exported.Result, timing.live.clockDisplay);
+    assert.equal(exported.Status, "Verified");
+    assert.deepEqual(Object.keys(exported), ["Date", "Mode", "Note", "Result", "Status"]);
 
     await waitFor(() => fake.queueLength === 0);
     assert.equal(device.stats.acks + device.stats.duplicates >= device.stats.events - device.dropped.count, true);
@@ -374,15 +433,21 @@ describe("pipeline with the fake master", () => {
     assert.deepEqual(again.timing.lapRows.map((l) => ms(l.ns)), [1000, 2000]);
   });
 
-  it("laps without a target runs until Stop, then closes once the sensor confirms through the stop tick", { timeout: 20000 }, async () => {
-    const { device, settings, timing } = await boot();
+  it("laps without a target closes on Stop and preserves verified results", { timeout: 20000 }, async () => {
+    const { device, settings, timing, history } = await boot();
     const fake = await connectFake(device, { periodicCheckpoints: false });
     const [a] = [...fake.sensors.keys()];
     settings.setMapping(a, { role: "start" });
     settings.setLapTarget("");
     assert.equal(await timing.start("laps", "en"), true, toasts.error.join(" | "));
+    assert.equal(history.rows.length, 0);
     const t0 = BigInt(fake.crossing(a));
-    for (const offset of [400, 800, 1200]) fake.crossing(a, { at: t0 + BigInt(offset) * 16000n });
+    await waitFor(() => timing.run.crossingTicks.length === 1);
+    assert.equal(history.rows.length, 0);
+    fake.crossing(a, { at: t0 + 400n * 16000n });
+    await waitFor(() => history.rows.length === 1);
+    const recordId = history.rows[0].id;
+    for (const offset of [800, 1200]) fake.crossing(a, { at: t0 + BigInt(offset) * 16000n });
     await waitFor(() => timing.run.crossingTicks.length === 4);
     assert.equal(timing.run.verification, "verified"); // so far
     assert.equal(timing.run.closed, false);
@@ -391,12 +456,21 @@ describe("pipeline with the fake master", () => {
     const cpBefore = fake.cpRequests;
     assert.equal(await timing.stop(), true);
     assert.equal(timing.run.armed, false);
-    assert.equal(timing.run.verification, "pending");
-    await waitFor(() => fake.cpRequests > cpBefore);
-    await waitFor(() => timing.run.closed, 6000);
+    assert.equal(timing.run.closed, true);
+    assert.equal(fake.cpRequests, cpBefore);
     assert.equal(timing.run.verification, "verified");
+    fake.crossing(a);
+    await waitFor(() => fake.queueLength === 0);
+    assert.equal(timing.run.crossingTicks.length, 4, "late captures cannot change a stopped run");
     await waitFor(() => timing.run.durationNs != null, 4000);
     assert.equal(ms(timing.run.durationNs), 1200);
+    await waitFor(() => history.rows[0].durationNs != null);
+    assert.equal(history.rows.length, 1);
+    assert.equal(history.rows[0].id, recordId);
+    assert.equal(ms(resultNs(history.rows[0])), 1200);
+    const saved = await getAll(eventLog.getDb(), eventLog.STORE_RESULTS);
+    assert.equal(saved.length, 1);
+    assert.equal(saved[0].crossingTicks.length, 4);
     timing.reset();
     assert.equal(timing.run, null);
     assert.equal(timing.lightColor, "grey");
@@ -418,27 +492,37 @@ describe("pipeline with the fake master", () => {
     await device.disconnect();
   });
 
-  it("Stop without a finish is DNF; without a start DNS", { timeout: 20000 }, async () => {
+  it("incomplete Start/Stop creates no result in storage or export, including after reload", { timeout: 20000 }, async () => {
     const { device, settings, timing, history } = await boot();
-    const { fake, a } = await mapSprint(device, settings);
-    assert.equal(await timing.start("sprint", "dnf"), true, toasts.error.join(" | "));
-    fake.crossing(a);
+    const { fake, a, b } = await mapSprint(device, settings);
+    assert.equal(await timing.start("sprint", "start only"), true, toasts.error.join(" | "));
+    assert.equal(history.rows.length, 0);
+    const startTick = fake.crossing(a);
     await waitFor(() => timing.live.crossings.length === 1);
-    await sleep(100);
     assert.equal(await timing.stop(), true);
-    await waitFor(() => timing.run.closed, 6000);
-    assert.equal(timing.run.verification, "dnf");
-    assert.equal(timing.run.dnfReason, "DNF");
-    await waitFor(() => history.rows[0].verification === "dnf");
-    assert.equal(history.status(history.rows[0]), "DNF");
+    assert.equal(timing.run.closed, true);
+    assert.equal(timing.run.dnfReason, null);
+    assert.equal(timing.run.startTick, String(startTick));
+    fake.crossing(b);
+    await waitFor(() => fake.queueLength === 0);
+    assert.equal(timing.run.finishTick, null);
+    assert.equal(timing.resultNs, null);
+    assert.equal(history.rows.length, 0);
     timing.reset();
-
-    assert.equal(await timing.start("sprint", "dns"), true, toasts.error.join(" | "));
-    await sleep(100);
-    assert.equal(await timing.stop(), true);
-    await waitFor(() => timing.run.closed, 6000);
-    assert.equal(timing.run.dnfReason, "DNS");
+    for (const mode of ["sprint", "laps"]) {
+      assert.equal(await timing.start(mode, "no crossings"), true, toasts.error.join(" | "));
+      assert.equal(await timing.stop(), true);
+      assert.equal(timing.run.closed, true);
+      assert.equal(timing.run.dnfReason, null);
+      assert.equal(history.rows.length, 0);
+    }
     await device.disconnect();
+    const again = await boot({ keepStorage: true });
+    assert.equal(again.timing.run.closed, true);
+    assert.equal(again.timing.resultNs, null);
+    assert.equal(again.history.rows.length, 0);
+    assert.equal(again.history.exportData().History.length, 0);
+    assert.deepEqual(await getAll(eventLog.getDb(), eventLog.STORE_RESULTS), []);
   });
 
   it("refuses to start without a master or with missing roles", { timeout: 20000 }, async () => {
@@ -455,7 +539,7 @@ describe("pipeline with the fake master", () => {
     await device.disconnect();
   });
 
-  it("Stop needs the master's own clock answer: refused when `T` fails or the master is gone", { timeout: 20000 }, async () => {
+  it("Stop closes collection even if the master clock is unavailable or disconnected", { timeout: 20000 }, async () => {
     const { device, settings, timing } = await boot();
     const fake = await connectFake(device);
     const [a] = [...fake.sensors.keys()];
@@ -464,25 +548,23 @@ describe("pipeline with the fake master", () => {
     const t0 = BigInt(fake.crossing(a));
     fake.crossing(a, { at: t0 + 400n * 16000n });
     await waitFor(() => timing.run.crossingTicks.length === 2);
-    const realReadClock = device.readClock;
-    device.readClock = () => Promise.reject(new Error("no reply"));
-    assert.equal(await timing.stop(), false);
-    assert.match(toasts.error.at(-1), /Could not confirm the stop time/);
-    assert.equal(timing.run.armed, true);
-    assert.equal(timing.run.stopTick, null);
-    device.readClock = realReadClock;
-    await sleep(450);
-    assert.equal(await timing.stop(), true, toasts.error.join(" | "));
-    assert.ok(BigInt(timing.run.stopTick) > t0 + 400n * 16000n);
+    const readClock = vi.spyOn(device, "readClock").mockRejectedValue(new Error("no reply"));
+    assert.equal(await timing.stop(), true);
+    assert.equal(readClock.mock.calls.length, 0);
+    assert.equal(timing.run.closed, true);
+    assert.equal(timing.run.verification, "verified");
+    assert.equal(ms(timing.resultNs), 400);
+    readClock.mockRestore();
     timing.reset();
 
     assert.equal(await timing.start("laps", "offline"), true, toasts.error.join(" | "));
     fake.crossing(a);
     await waitFor(() => timing.live.crossings.length === 1);
     await device.disconnect();
-    assert.equal(await timing.stop(), false);
-    assert.match(toasts.error.at(-1), /not connected/);
-    assert.equal(timing.run.armed, true);
+    assert.equal(await timing.stop(), true);
+    assert.equal(timing.run.armed, false);
+    assert.equal(timing.run.closed, true);
+    assert.equal(timing.run.dnfReason, null);
   });
 
   it("converts through the PPS timeline (+500 ppm → 1999 ms) and stamps the run with UTC", { timeout: 20000 }, async () => {
@@ -639,16 +721,45 @@ describe("pipeline with the fake master", () => {
     assert.ok(!device.alarms.some((x) => x.key === "storage"));
     assert.equal(device.durableError, "disk full");
     assert.equal(timing.run.durable, false);
-    await waitFor(() => history.rows[0].durable === false);
-    fake.crossing(a);
+    assert.equal(history.rows.length, 0);
+    const t0 = BigInt(fake.crossing(a));
     await waitFor(() => timing.run.crossingTicks.length === 1); // acks keep flowing from memory
+    assert.equal(history.rows.length, 0);
+    fake.crossing(a, { at: t0 + 1000n * 16000n });
+    await waitFor(() => history.rows[0]?.durable === false);
     timing.reset();
     assert.equal(await timing.start("laps"), true, toasts.error.join(" | "));
     assert.equal(timing.run.durable, false); // started after the failure
     await device.disconnect();
   });
 
-  it("closes a stored run of another protocol version and keeps its history row", { timeout: 20000 }, async () => {
+  it("removes old empty result rows while preserving the active run and real results", { timeout: 20000 }, async () => {
+    const { device, settings, timing } = await boot();
+    await mapSprint(device, settings);
+    assert.equal(await timing.start("sprint", "legacy empty"), true);
+    const active = JSON.parse(encodeRun(timing.run));
+    const placeholder = { ...active, createdAt: Date.now(), updatedAt: Date.now() };
+    const oldId = await put(eventLog.getDb(), eventLog.STORE_RESULTS, placeholder);
+    await put(eventLog.getDb(), eventLog.STORE_RESULTS, { ...placeholder, runId: "stopped-empty", closed: true });
+    const startTick = String(BigInt(active.boundaryTick) + 16000n);
+    const finishTick = String(BigInt(startTick) + 16000000n);
+    await put(eventLog.getDb(), eventLog.STORE_RESULTS, { ...placeholder, runId: "real-result", verification: "verified", startTick, finishTick, closed: true });
+    await put(eventLog.getDb(), eventLog.STORE_RESULTS, { ...placeholder, runId: "legacy-dnf", verification: "dnf", dnfReason: "DNF", closed: true });
+    localStorage.setItem("tk.run.v3", encodeRun({ ...active, historyId: oldId }));
+    await device.disconnect();
+    const again = await boot({ keepStorage: true });
+    assert.deepEqual(again.history.rows.map((r) => r.runId).sort(), ["legacy-dnf", "real-result"]);
+    assert.equal(again.timing.run.runId, active.runId);
+    assert.equal(again.timing.run.armed, true);
+    assert.equal(again.timing.run.historyId, null);
+    assert.equal((await getAll(eventLog.getDb(), eventLog.STORE_RESULTS)).length, 2);
+    // The restored run can still create its first result after the obsolete row was removed.
+    await again.history.upsert({ ...again.timing.run, verification: "verified", startTick, finishTick, closed: true });
+    assert.equal(again.history.rows.length, 3);
+    assert.ok(again.history.rows.some((r) => r.runId === active.runId));
+  });
+
+  it("closes an unmeasured stored run of another protocol version without creating a result", { timeout: 20000 }, async () => {
     const first = await boot();
     const fake = await connectFake(first.device);
     const [a] = [...fake.sensors.keys()];
@@ -661,6 +772,6 @@ describe("pipeline with the fake master", () => {
     assert.equal(again.timing.run.closed, true);
     assert.equal(again.timing.run.verification, "invalid");
     assert.match(again.timing.run.fault.reasons[0].reason, /protocol change/);
-    assert.equal(again.history.rows[0].verification, "invalid");
+    assert.equal(again.history.rows.length, 0);
   });
 });

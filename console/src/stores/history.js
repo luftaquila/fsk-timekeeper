@@ -1,20 +1,24 @@
-/* Results history (IndexedDB `results`, memory fallback) + CSV/JSON export.
+/* Results history (IndexedDB `results`, memory fallback) + Excel/JSON export.
  * Rows keep raw ticks, the frozen calibration and exact ns; rows from before schema 3
  * (`result`/`laps` in ms) are shown as stored. */
+import writeExcelFile from "write-excel-file/universal";
 import { defineStore } from "pinia";
 import { ref, toRaw } from "vue";
 import * as eventLog from "../lib/eventLog";
 import { getAll, put, remove, clear } from "../lib/idb";
-import { MODE_LABEL } from "../lib/constants";
-import { toCsv, downloadBlob, timestampSlug, formatDuration } from "../lib/format";
-import { isOldFormatRow, resultNs, lapsNs, calibrationMethod } from "../lib/results";
-import { formatFaultReason } from "../lib/fault-text";
+import { ROLE_LABEL, RESULT_CLASSIFICATIONS } from "../lib/constants";
+import { downloadBlob, timestampSlug, formatDuration } from "../lib/format";
+import { isOldFormatRow, resultNs, resultTicks, lapsNs } from "../lib/results";
+import { historyRecord, lapSummary, lapDelta, statusValue } from "../lib/historyPresentation";
+import { faultWindow, formatFaultReason } from "../lib/fault-text";
 import { useDeviceStore } from "./device";
 
 // Run fields copied into its history row.
 const RUN_FIELDS = [
   "mode",
   "verification",
+  "classification",
+  "closed",
   "dnfReason",
   "startTick",
   "finishTick",
@@ -41,6 +45,7 @@ export const useHistoryStore = defineStore("history", () => {
   const rows = ref([]); // newest first
   const ready = ref(false);
   let memoryId = 0;
+  let pendingWrite = Promise.resolve();
 
   function db() {
     return eventLog.getDb();
@@ -50,7 +55,11 @@ export const useHistoryStore = defineStore("history", () => {
     try {
       if (db()) {
         const all = await getAll(db(), eventLog.STORE_RESULTS);
-        rows.value = all.sort((a, b) => b.createdAt - a.createdAt);
+        // Old versions created a result row on Start, before any measured result existed.
+        const empty = all.filter((row) => !isOldFormatRow(row) && row.verification === "pending" && !RESULT_CLASSIFICATIONS.includes(row.classification) && resultNs(row) == null);
+        for (const row of empty) await remove(db(), eventLog.STORE_RESULTS, row.id);
+        const emptyIds = new Set(empty.map((row) => row.id));
+        rows.value = all.filter((row) => !emptyIds.has(row.id)).sort((a, b) => b.createdAt - a.createdAt);
       }
     } catch {
       rows.value = [];
@@ -85,38 +94,75 @@ export const useHistoryStore = defineStore("history", () => {
     return out;
   }
 
-  // Called at START: creates the pending row.
-  async function open(run, { masterDevId = null } = {}) {
-    const row = {
+  // Runs and capture evidence are stored separately. Results begin only once a measured
+  // interval is verified or the operator assigns a classification; later updates use that same row.
+  function hasResult(run) {
+    return !isOldFormatRow(run) && run.verification === "verified" && resultNs(run) != null;
+  }
+
+  async function saveResult(run, { throughSeq = null } = {}) {
+    const existing = rows.value.find((r) => r.runId === run.runId);
+    const measured = hasResult(run);
+    if (!existing && ((!measured && !RESULT_CLASSIFICATIONS.includes(run.classification)) || run.historyId != null)) return null;
+    const row = existing ? { ...toRaw(existing) } : {
       runId: run.runId,
       note: run.note || "",
-      ...fieldsOf(run),
-      masterDevId,
+      masterDevId: run.masterDevId ?? null,
       cursorSeq: run.cursor,
       throughSeq: null,
       createdAt: run.startedAt || Date.now(),
-      updatedAt: Date.now(),
     };
+    if ((measured || !existing) && !isOldFormatRow(run)) {
+      Object.assign(row, fieldsOf(run));
+      row.note = run.note || row.note;
+      if (throughSeq != null) row.throughSeq = throughSeq;
+    } else {
+      // Stopping or a later fault cannot overwrite an already recorded result.
+      row.closed = run.closed || row.closed;
+      if (run.durable === false) row.durable = false;
+      const ticks = resultTicks(row);
+      if (run.calibration && ticks.length && ticks.every((tick) => run.calibration.points?.[tick])) {
+        row.calibration = plain(run.calibration);
+        row.durationNs = null;
+        const ns = resultNs(row);
+        row.durationNs = ns == null ? null : String(ns);
+      }
+    }
+    if (run.classification === null && RESULT_CLASSIFICATIONS.includes(existing?.classification)) {
+      return saveClassification(row, null);
+    }
+    if (RESULT_CLASSIFICATIONS.includes(run.classification)) row.classification = run.classification;
+    row.updatedAt = Date.now();
     return save(row);
   }
 
-  // Called whenever the engine changes a run.
-  async function upsert(run, { throughSeq = null } = {}) {
-    const existing = rows.value.find((r) => r.runId === run.runId);
-    if (!existing) return null;
-    // A copy of the raw object: a reactive proxy cannot be structured-cloned into IndexedDB.
-    const row = { ...toRaw(existing) };
-    if (isOldFormatRow(row)) {
-      // Rows of another run format keep their data; only the closing state changes.
-      row.verification = run.verification;
-      row.fault = run.fault ? { kind: run.fault.kind, reasons: plain(run.fault.reasons) } : row.fault ?? null;
-    } else {
-      Object.assign(row, fieldsOf(run));
-      row.note = run.note || row.note;
+  function upsert(run, options = {}) {
+    // Capture the state now and serialize writes: several laps or calibration can arrive
+    // while IndexedDB is still inserting the first result.
+    const snapshot = plain(run);
+    const write = pendingWrite.then(() => saveResult(snapshot, options));
+    pendingWrite = write.catch(() => {});
+    return write;
+  }
+
+  async function saveClassification(row, classification) {
+    if (classification === null && resultNs(row) == null && !lapsNs(row).length) {
+      if (db() && row.id > 0) await remove(db(), eventLog.STORE_RESULTS, row.id);
+      rows.value = rows.value.filter((r) => r.runId !== row.runId);
+      return null;
     }
-    if (throughSeq != null) row.throughSeq = throughSeq;
-    row.updatedAt = Date.now();
-    return save(row);
+    return save({ ...plain(row), classification, closed: true, updatedAt: Date.now() });
+  }
+
+  function classify(runId, classification) {
+    if (classification !== null && !RESULT_CLASSIFICATIONS.includes(classification)) return Promise.reject(new Error("Invalid classification"));
+    const write = pendingWrite.then(() => {
+      const row = rows.value.find((r) => r.runId === runId);
+      if (!row) throw new Error("Record not found");
+      return saveClassification(row, classification);
+    });
+    pendingWrite = write.catch(() => {});
+    return write;
   }
 
   async function removeRow(id) {
@@ -151,86 +197,68 @@ export const useHistoryStore = defineStore("history", () => {
     return device.ppsBootId === row.masterBootId ? device.ppsEdges : [];
   }
 
-  function status(row) {
-    return row.verification === "dnf" ? row.dnfReason || "DNF" : row.verification;
+  const status = statusValue;
+
+  // A single display-only snapshot feeds both file formats. Raw storage fields never leave here.
+  function exportData(mode = null) {
+    return { History: filtered(mode).map((row) => {
+      const edges = edgesFor(row);
+      const record = historyRecord(row, edges);
+      const stats = lapSummary(row, edges);
+      if (stats) {
+        record["Lap Summary"] = { Laps: stats.laps.length,
+          Best: `${formatDuration(stats.best)} (#${stats.bestIndex + 1})`,
+          Average: formatDuration(stats.total, BigInt(stats.laps.length)), Total: formatDuration(stats.total) };
+        record["Lap Times"] = stats.laps.map((ns, i) => ({ Lap: i + 1,
+          Time: formatDuration(ns), "Δ Before": lapDelta(i > 0 ? ns - stats.laps[i - 1] : null),
+          "Δ Best": ns === stats.best ? "BEST" : lapDelta(ns - stats.best) }));
+      }
+      if (row.fault?.reasons?.length) {
+        record.Errors = row.fault.reasons.map((reason) => [
+          reason.role ? ROLE_LABEL[reason.role] || reason.role : "",
+          formatFaultReason(reason.reason), faultWindow(reason, row.boundaryTick),
+        ].filter(Boolean).join("\n"));
+      }
+      return record;
+    }) };
   }
 
-  function csvRow(r) {
-    const old = isOldFormatRow(r);
-    const edges = edgesFor(r);
-    const result = resultNs(r, edges);
-    const laps = r.mode === "laps" ? lapsNs(r, edges) : [];
-    return [
-      r.id,
-      new Date(r.createdAt).toISOString(),
-      r.startedUtc ?? "",
-      MODE_LABEL[r.mode] || r.mode,
-      r.note,
-      r.verification,
-      r.verification === "dnf" ? r.dnfReason || "" : "",
-      result != null ? formatDuration(result) : "",
-      !old && result != null ? String(result) : "",
-      r.startTick ?? "",
-      r.finishTick ?? "",
-      (r.crossingTicks || []).join(" "),
-      laps.map((ns) => formatDuration(ns)).join(" "),
-      old ? "" : laps.map(String).join(" "),
-      r.lapTarget ?? "",
-      r.debounceMs ?? "",
-      old ? (r.ppb != null ? `ppb ${r.ppb}` : "") : calibrationMethod(r, edges) ?? "",
-      r.masterBootId ?? "",
-      r.boundaryTick ?? "",
-      r.durable === false ? "no" : "yes",
-    ];
-  }
-
-  function csvText(mode = null) {
-    const headers = [
-      "id",
-      "date",
-      "started_utc",
-      "mode",
-      "note",
-      "status",
-      "dnf_reason",
-      "result",
-      "duration_ns",
-      "start_tick",
-      "finish_tick",
-      "crossing_ticks",
-      "laps",
-      "lap_ns",
-      "lap_target",
-      "debounce_ms",
-      "calibration",
-      "master_boot_id",
-      "boundary_tick",
-      "durable",
-    ];
-    return toCsv(headers, filtered(mode).map(csvRow));
-  }
-
-  function exportCsv(mode = null) {
-    const blob = new Blob([csvText(mode)], { type: "text/csv;charset=utf-8" });
-    downloadBlob(blob, `fsk-timekeeper-${mode || "all"}-${timestampSlug()}.csv`);
-  }
-
-  async function exportJson(mode = null, { withEvidence = false } = {}) {
-    const results = filtered(mode).map((row) => ({ ...row,
-      fault: row.fault ? { ...row.fault, reasons: row.fault.reasons?.map((reason) => ({ ...reason, reason: formatFaultReason(reason.reason) })) } : row.fault,
-    }));
-    const out = { exported_at: new Date().toISOString(), results };
-    if (withEvidence) {
-      out.evidence = {};
-      for (const r of results) {
-        if (r.cursorSeq == null) continue;
-        const to = r.throughSeq ?? eventLog.getLastSeq();
-        out.evidence[r.runId] = await eventLog.rowsBetween(r.cursorSeq, to);
+  async function exportExcel(mode = null) {
+    const headers = ["Date", "Mode", "Note", "Result", "Status"];
+    const widths = [28, 26, 40, 20, 24];
+    const data = [];
+    const addTable = (columns, records, primary = false) => {
+      data.push(columns.map((value) => ({ value, fontWeight: "bold", height: 24,
+        backgroundColor: primary ? "#334155" : "#E9EDF2", textColor: primary ? "#FFFFFF" : "#1F2937" })));
+      for (const record of records) {
+        const values = columns.map((header) => record[header]);
+        const lines = Math.max(...values.map((value, i) => String(value).split("\n")
+          .reduce((sum, line) => sum + Math.max(1, Math.ceil(line.length / (widths[i] - 2))), 0)));
+        data.push(values.map((value) => ({ value, wrap: true, height: Math.max(24, lines * 16 + 8), alignVertical: "center" })));
+      }
+    };
+    for (const record of exportData(mode).History) {
+      if (data.length) data.push([]);
+      addTable(headers, [record], true);
+      if (record["Lap Summary"]) addTable(Object.keys(record["Lap Summary"]), [record["Lap Summary"]]);
+      if (record["Lap Times"]) addTable(["Lap", "Time", "Δ Before", "Δ Best"], record["Lap Times"]);
+      if (record.Errors) {
+        data.push([{ value: "Errors", fontWeight: "bold", backgroundColor: "#E9EDF2", columnSpan: 5 }, null, null, null, null]);
+        for (const error of record.Errors) data.push([{ value: error, columnSpan: 5, wrap: true,
+          height: Math.max(24, error.split("\n").reduce((sum, line) => sum + Math.max(1, Math.ceil(line.length / 130)), 0) * 16 + 8) }, null, null, null, null]);
       }
     }
-    const blob = new Blob([JSON.stringify(out, null, 2)], { type: "application/json" });
+    if (!data.length) addTable(headers, [], true);
+    const blob = await writeExcelFile(data, {
+      sheet: "History", columns: widths.map((width) => ({ width })),
+    }).toBlob();
+    downloadBlob(blob, `fsk-timekeeper-${mode || "all"}-${timestampSlug()}.xlsx`);
+  }
+
+  async function exportJson(mode = null) {
+    const blob = new Blob([JSON.stringify(exportData(mode), null, 2)], { type: "application/json" });
     downloadBlob(blob, `fsk-timekeeper-${mode || "all"}-${timestampSlug()}.json`);
   }
 
-  return { rows, ready, init, open, upsert, removeRow, clearAll, filtered, status, edgesFor, csvText, exportCsv, exportJson };
+  return { rows, ready, init, upsert, classify, removeRow, clearAll, filtered, status, edgesFor, exportData, exportExcel, exportJson };
 });

@@ -22,7 +22,6 @@ const timing = useTimingStore();
           <span class="traffic-light" :class="timing.lightColor"></span>
           <span class="clock">{{ timing.live.clockDisplay }}</span>
         </div>
-        <span v-if="timing.armed" class="badge badge-warning">Measuring</span>
       </div>
     </div>
   </div>

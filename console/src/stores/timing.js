@@ -7,17 +7,16 @@ import { useSettingsStore } from "./settings";
 import { useHistoryStore } from "./history";
 import * as eventLog from "../lib/eventLog";
 import * as ppsLog from "../lib/ppsLog";
-import { createRun, evaluateRun, stopRun, endMasterSession, shouldInvalidateOnMasterBoot, runTouchedBy, EngineError, MASTER_REBOOTED } from "../lib/engine";
+import { createRun, createClassifiedRun, evaluateRun, stopRun, endMasterSession, shouldInvalidateOnMasterBoot, runTouchedBy, EngineError, MASTER_REBOOTED } from "../lib/engine";
 import { wirelessQuality, missingRoles as missingRolesOf } from "../lib/quality";
 import { encodeRun, decodeRun } from "../lib/run-codec";
-import { MODES, CALIBRATION_WAIT_MS } from "../lib/constants";
+import { MODES, CALIBRATION_WAIT_MS, RESULT_CLASSIFICATIONS } from "../lib/constants";
 import { buildTimeline, freezeCalibration, utcMsAt, durationNs } from "../lib/calibration";
 import { resultTicks, resultNs as resultNsOf, lapsNs as lapsNsOf, spanNs, calibrationMethod as calibrationMethodOf } from "../lib/results";
 import { formatDuration } from "../lib/format";
 
 const KEY_RUN = "tk.run.v3";
 const KEY_RUN_OLD = "tk.run.v2";
-const CP_RETRY_MS = 2000; // re-ask for checkpoints while a stopped run waits (a sensor may miss the beacons)
 export const VERSION_CHANGED = "The master reports another protocol version.";
 
 function makeLive() {
@@ -35,10 +34,9 @@ export const useTimingStore = defineStore("timing", () => {
   const run = ref(null);
   const live = reactive(makeLive());
   const starting = ref(false);
-  let cpTimer = null; // checkpoint requests for a stopped run awaiting confirmation
+  const classifying = ref(false);
   let freezeTimer = null;
   let freezeWait = null; // { runId, lastTick } while a decided result waits for its next PPS edge
-  let pendingHistorySync = false; // a restored run closed by a protocol change
 
   const armed = computed(() => !!run.value?.armed);
   const fault = computed(() => run.value?.fault ?? null);
@@ -93,8 +91,9 @@ export const useTimingStore = defineStore("timing", () => {
         if (decoded) localStorage.removeItem(KEY_RUN_OLD);
       }
       if (decoded && MODES.includes(decoded.run.mode)) {
-        run.value = decoded.run;
-        pendingHistorySync = decoded.protocolChanged;
+        // Older versions kept stopped runs open while awaiting sensor checkpoints.
+        const stopped = !decoded.run.closed && decoded.run.stopTick != null;
+        run.value = stopped ? stopRun(decoded.run) : decoded.run;
         persist();
       }
     } catch {
@@ -107,6 +106,13 @@ export const useTimingStore = defineStore("timing", () => {
     run.value = next;
     persist();
     eventLog.protect(openCursor());
+  }
+
+  async function syncHistory(current, options = {}) {
+    const id = await useHistoryStore().upsert(current, options);
+    if (id != null && run.value?.runId === current.runId && run.value.historyId !== id) {
+      setRun({ ...run.value, historyId: id });
+    }
   }
 
   function stopClock() {
@@ -130,23 +136,6 @@ export const useTimingStore = defineStore("timing", () => {
     Object.assign(live, makeLive());
   }
 
-  function stopCheckpointRequests() {
-    if (cpTimer) clearInterval(cpTimer);
-    cpTimer = null;
-  }
-  // A stopped run closes when the needed roles are certain through the stop tick; ask the
-  // master for checkpoints now and every CP_RETRY_MS until it does (Stop makes no radio event).
-  function requestCheckpointsUntilClosed(runId) {
-    stopCheckpointRequests();
-    const ask = () => {
-      const current = run.value;
-      if (!current || current.runId !== runId || current.closed || current.stopTick == null) return stopCheckpointRequests();
-      useDeviceStore().requestCheckpoint();
-    };
-    ask();
-    cpTimer = setInterval(ask, CP_RETRY_MS);
-  }
-
   function qualityFor(mode, now = Date.now()) {
     const device = useDeviceStore();
     const settings = useSettingsStore();
@@ -168,10 +157,9 @@ export const useTimingStore = defineStore("timing", () => {
 
   // START: quality -> fresh master clock -> quality again -> run from checkpoints -> catch up.
   async function start(mode, note = "") {
-    if (starting.value) return false;
+    if (starting.value || classifying.value) return false;
     const device = useDeviceStore();
     const settings = useSettingsStore();
-    const history = useHistoryStore();
     if (!MODES.includes(mode)) {
       notyf.error("Invalid mode.");
       return false;
@@ -210,13 +198,11 @@ export const useTimingStore = defineStore("timing", () => {
         startedUtc: utcMs != null ? new Date(utcMs).toISOString() : null,
         durable: device.durable,
       });
-      stopCheckpointRequests();
       cancelFreeze();
       resetLive();
       settings.rememberNote(note);
+      next.masterDevId = device.identity?.devid || null;
       setRun(next);
-      next.historyId = await history.open(next, { masterDevId: device.identity?.devid || null });
-      if (run.value?.runId === next.runId) setRun({ ...run.value, historyId: next.historyId });
       // Edges captured during the clock read belong to this run.
       onEventRows(eventLog.since(next.cursor));
       return true;
@@ -228,37 +214,38 @@ export const useTimingStore = defineStore("timing", () => {
     }
   }
 
-  // STOP: fence at the master's current tick. Only the master's own answer (`T`) can be the
-  // fence: it is captured after the press, so nothing that crossed before Stop falls outside
-  // it. A PC-side estimate lags the master by the delivery delay, so without `T` Stop is refused.
+  // Like the FSK service, Stop closes the current snapshot without assigning DNS/DNF.
   async function stop() {
     const current = run.value;
     if (!current?.armed) return false;
-    const device = useDeviceStore();
-    if (!device.connected) {
-      notyf.error("The master is not connected\nReconnect to stop");
-      return false;
-    }
-    let stopTick = null;
-    try {
-      const clock = await device.readClock();
-      if (clock.master_boot_id === current.masterBootId) stopTick = BigInt(clock.master_tick);
-    } catch {
-      /* refused below */
-    }
-    const latest = run.value;
-    if (!latest || latest.runId !== current.runId || !latest.armed) return false;
-    if (stopTick == null) {
-      notyf.error("Could not confirm the stop time\nTry Stop again");
-      return false;
-    }
-    applyEvaluation(evaluateRun(stopRun(latest, stopTick), eventLog.since(latest.cursor)));
-    if (run.value && !run.value.closed) requestCheckpointsUntilClosed(latest.runId);
+    applyEvaluation({ run: stopRun(current), crossings: live.crossings, laps: live.laps });
     return true;
   }
 
+  async function classify(classification, mode = useSettingsStore().state.mode, note = "") {
+    if (starting.value || classifying.value || (classification !== null && !RESULT_CLASSIFICATIONS.includes(classification))) return false;
+    if (classification === null && !run.value?.classification) return true;
+    classifying.value = true;
+    try {
+      const current = run.value || createClassifiedRun({ mode, note, classification,
+        cursor: eventLog.getLastSeq(), durable: useDeviceStore().durable });
+      const next = { ...current, classification, armed: false, closed: true };
+      await applyEvaluation({ run: next, crossings: live.crossings, laps: live.laps });
+      // Clearing an untimed classification removes its row; this attempt can be classified again.
+      if (classification === null && run.value?.runId === next.runId &&
+          !useHistoryStore().rows.some((row) => row.runId === next.runId)) {
+        setRun({ ...run.value, historyId: null });
+      }
+      return true;
+    } catch (error) {
+      notyf.error(error.message || "Could not save classification");
+      return false;
+    } finally {
+      classifying.value = false;
+    }
+  }
+
   function reset() {
-    stopCheckpointRequests();
     cancelFreeze();
     resetLive();
     setRun(null);
@@ -290,7 +277,7 @@ export const useTimingStore = defineStore("timing", () => {
     }
     setRun({ ...current, calibration, durationNs: ns == null ? null : String(ns) });
     showResultOnClock();
-    useHistoryStore().upsert(run.value, { throughSeq: eventLog.getLastSeq() });
+    syncHistory(run.value, { throughSeq: eventLog.getLastSeq() });
   }
 
   // A decided result waits for a qualified PPS edge after its last tick, at most CALIBRATION_WAIT_MS.
@@ -328,18 +315,19 @@ export const useTimingStore = defineStore("timing", () => {
       stopClock();
       showResultOnClock();
     }
-    if (next.closed) stopCheckpointRequests();
-    if (next.closed && !(before?.closed && before.runId === next.runId)) scheduleFreeze();
     const changed =
       !before ||
       before.runId !== next.runId ||
       before.verification !== next.verification ||
+      before.classification !== next.classification ||
       before.closed !== next.closed ||
       before.armed !== next.armed ||
       before.startTick !== next.startTick ||
       before.finishTick !== next.finishTick ||
       (before.crossingTicks || []).length !== next.crossingTicks.length;
-    if (changed) useHistoryStore().upsert(next, { throughSeq: eventLog.getLastSeq() });
+    const saved = changed ? syncHistory(next, { throughSeq: eventLog.getLastSeq() }) : Promise.resolve();
+    if (next.closed && !(before?.closed && before.runId === next.runId)) scheduleFreeze();
+    return saved;
   }
 
   function evaluateOpen(current = run.value) {
@@ -374,20 +362,23 @@ export const useTimingStore = defineStore("timing", () => {
     const current = run.value;
     if (!current || current.durable === false) return;
     setRun({ ...current, durable: false });
-    useHistoryStore().upsert(run.value, {});
+    syncHistory(run.value, {});
   }
 
   // After the event log is loaded: rebuild the live view of a restored run.
   async function reevaluate() {
-    const current = run.value;
+    let current = run.value;
     resetLive();
     if (!current) return;
     const device = useDeviceStore();
     if (current.masterBootId != null && !device.connected) await device.useEdgesOf(current.masterBootId);
-    if (pendingHistorySync) {
-      pendingHistorySync = false;
-      await useHistoryStore().upsert(current, {});
+    // A pre-fix Start placeholder may have been removed during history migration.
+    if (current.historyId != null && current.verification === "pending" && !RESULT_CLASSIFICATIONS.includes(current.classification) && resultNsOf(current) == null &&
+        !useHistoryStore().rows.some((row) => row.runId === current.runId)) {
+      current = { ...current, historyId: null };
+      setRun(current);
     }
+    await syncHistory(current, {});
     if (current.closed) {
       if (current.mode === "sprint") {
         live.crossings = [
@@ -408,14 +399,13 @@ export const useTimingStore = defineStore("timing", () => {
     stopClock();
     live.startedAt = null;
     showResultOnClock();
-    const restored = run.value;
-    if (restored && !restored.closed && restored.stopTick != null) requestCheckpointsUntilClosed(restored.runId);
   }
 
   return {
     run,
     live,
     starting,
+    classifying,
     armed,
     fault,
     lightColor,
@@ -428,6 +418,7 @@ export const useTimingStore = defineStore("timing", () => {
     reevaluate,
     start,
     stop,
+    classify,
     reset,
     onEventRows,
     onMasterBoot,

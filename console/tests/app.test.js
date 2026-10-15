@@ -247,7 +247,8 @@ describe("app under jsdom", () => {
     // run a sprint from the timing page's own buttons
     await router.push("/");
     await flushPromises();
-    await waitFor(() => wrapper.text().includes("Ready."));
+    await waitFor(() => timing.qualityFor("sprint").ok);
+    assert.doesNotMatch(wrapper.text(), /Ready\./);
     await wrapper.find("input.note").setValue("car 7");
     await flushPromises();
     assert.equal(wrapper.find(".run-note").text(), "car 7", "note shows in the timer card while typing");
@@ -265,14 +266,14 @@ describe("app under jsdom", () => {
     fake.crossing(b, { offsetMs: 800 });
     await waitFor(() => timing.live.crossings.length === 2);
     await flushPromises();
-    assert.match(wrapper.text(), /Start Sensor/);
+    assert.deepEqual(wrapper.findAll(".sensors h3").map((el) => el.text()), ["🟢 Start", "🏁 Finish"]);
     assert.match(wrapper.text(), /\+00:00\.8\d\d/);
     // Each role has one sensor: the two first crossings decide the sprint on arrival.
     await waitFor(() => timing.run.verification === "verified");
     await waitFor(() => timing.run.durationNs != null, 4000);
     await flushPromises();
-    assert.match(wrapper.text(), /Verified/);
-    assert.match(wrapper.text(), /GPS|nominal 16 MHz/);
+    assert.doesNotMatch(wrapper.find(".result-body").text(), /Verified|GPS|nominal 16 MHz/);
+    assert.equal(wrapper.findAll(".chk").length, 0);
     assert.match(wrapper.find(".result-time").text(), /^00:00\.8\d\d$/);
     assert.ok(wrapper.find(".traffic-light.red").exists(), "red light after completion");
 
@@ -294,6 +295,21 @@ describe("app under jsdom", () => {
     assert.equal(wrapper.findAll("[title]").length, 0);
     saved.fault = priorFault;
 
+    // Start/Stop without a crossing must not classify the attempt as DNS.
+    await router.push("/");
+    await flushPromises();
+    await wrapper.findAll("button").find((btn) => btn.text() === "Start").trigger("click");
+    await waitFor(() => timing.run?.armed === true);
+    await wrapper.findAll("button").find((btn) => btn.text() === "Stop").trigger("click");
+    await flushPromises();
+    assert.match(wrapper.text(), /Stopped/);
+    assert.doesNotMatch(wrapper.find(".result-body").text(), /DNS|DNF/);
+    assert.ok(wrapper.find(".traffic-light.red").exists());
+    await router.push("/history");
+    await flushPromises();
+    assert.equal(wrapper.find(".status-select").element.value, "verified");
+    assert.equal(history.rows.length, 1, "only the completed sprint is recorded");
+
     // switch to laps: the closed run is cleared and the laps layout renders
     await router.push("/");
     await flushPromises();
@@ -302,9 +318,140 @@ describe("app under jsdom", () => {
     assert.equal(timing.run, null);
     assert.match(wrapper.text(), /Lap Times/);
     assert.ok(wrapper.find("input.lap-target").exists(), "auto-stop input");
+    settings.setLapTarget(null);
+    assert.equal(await timing.start("laps"), true);
+    const t0 = BigInt(fake.crossing(a));
+    for (const offset of [2000n, 3500n, 6000n, 8500n]) {
+      fake.crossing(a, { at: t0 + offset * 16000n });
+    }
+    await waitFor(() => timing.lapRows.length === 4 && timing.lapRows.every((lap) => lap.confirmed));
+    await flushPromises();
+    assert.deepEqual(wrapper.findAll(".lap-table th").map((th) => th.text()), ["Lap", "Time", "Δ Before", "Δ Best"]);
+    const lapRows = wrapper.findAll(".lap-table tbody tr");
+    assert.deepEqual(lapRows.map((row) => row.findAll("td")[2].text()), ["0.000", "+1.000", "−0.500", "—"]);
+    assert.deepEqual(lapRows.map((row) => row.findAll("td")[2].classes().includes("slower")), [false, true, false, false]);
+    assert.equal(lapRows[2].findAll("td")[3].text(), "BEST");
+    assert.doesNotMatch(wrapper.find(".content").text(), /✓|Verified So Far|GPS|nominal 16 MHz/);
+    await timing.stop();
+    await waitFor(() => history.rows.some((r) => r.mode === "laps" && r.crossingTicks.length === 5));
+    await router.push("/history");
+    await flushPromises();
+    const resultLink = wrapper.find(".result-link");
+    assert.equal(resultLink.text(), "00:08.500");
+    assert.deepEqual(wrapper.findAll(".data-table th").map((th) => th.text()), ["Date", "Mode", "Note", "Result", "Status", ""]);
+    assert.doesNotMatch(wrapper.find(".data-table").text(), /00:02.000 \/ 00:01.500/);
+    assert.equal(wrapper.findAll("[title]").length, 0);
+    // jsdom does not implement the native dialog top layer.
+    const dialog = wrapper.find("dialog").element;
+    dialog.showModal = () => dialog.setAttribute("open", "");
+    dialog.close = () => {
+      dialog.removeAttribute("open");
+      dialog.dispatchEvent(new Event("close"));
+    };
+    await resultLink.trigger("click");
+    await flushPromises();
+    assert.ok(dialog.hasAttribute("open"));
+    assert.deepEqual(wrapper.findAll(".lap-stats dd").map((el) => el.text()), ["4", "00:01.500 (#2)", "00:02.125", "00:08.500"]);
+    assert.deepEqual(wrapper.findAll(".lap-list th").map((el) => el.text()), ["Lap", "Time", "Δ Before", "Δ Best"]);
+    const popupRows = wrapper.findAll(".lap-list tbody tr");
+    assert.deepEqual(popupRows.map((row) => row.findAll("td").map((td) => td.text())), [
+      ["1", "00:02.000", "—", "+0.500"],
+      ["2", "00:01.500", "−0.500", "BEST"],
+      ["3", "00:02.500", "+1.000", "+1.000"],
+      ["4", "00:02.500", "0.000", "+1.000"],
+    ]);
+    assert.deepEqual(popupRows.map((row) => row.findAll("td")[2].classes().includes("slower")), [false, false, true, false]);
+    const displayExport = history.exportData();
+    assert.deepEqual(displayExport.History.find((r) => r.Mode === "Laps")["Lap Times"].map((r) => [String(r.Lap), r.Time, r["Δ Before"], r["Δ Best"]]),
+      popupRows.map((row) => row.findAll("td").map((td) => td.text())));
+    assert.deepEqual(displayExport.History.map(({ Date, Mode, Note, Result, Status }) => ({ Date, Mode, Note, Result, Status })), wrapper.findAll(".data-table tbody > tr:not(.fault-row)").map((row) => {
+      const cells = row.findAll("td");
+      const select = row.find(".status-select").element;
+      const status = [select.selectedOptions[0].textContent,
+        ...(cells[4].findAll("span.badge").map((badge) => badge.text()))].join("\n");
+      return { Date: cells[0].text(), Mode: cells[1].text(), Note: cells[2].text(), Result: cells[3].text(), Status: status };
+    }));
+    assert.equal(wrapper.findAll(".lap-list .best").length, 1);
+    assert.doesNotMatch(wrapper.find("dialog").text(), /GPS|Verified|✓/);
+    await wrapper.find('[aria-label="Close lap details"]').trigger("click");
+    await flushPromises();
+    assert.ok(!dialog.hasAttribute("open"));
+    assert.equal(wrapper.find(".lap-list").exists(), false);
+
+    // Classification is editable on a measured row and preserves its times.
+    await wrapper.find(".status-select").setValue("DSQ");
+    await waitFor(() => timing.run.classification === "DSQ" && !timing.classifying);
+    await flushPromises();
+    assert.equal(wrapper.find(".status-select").element.value, "DSQ");
+    assert.equal(wrapper.find('.status-select option[value=""]').text(), "Clear");
+    assert.ok(wrapper.findAll("button").some((btn) => btn.text() === "Export Excel"));
+    assert.doesNotMatch(wrapper.text(), /Export CSV|Include Raw Evidence/);
+    assert.equal(wrapper.find('input[type="checkbox"]').exists(), false);
+    assert.equal(wrapper.find(".result-link").text(), "00:08.500");
+    await wrapper.find(".status-select").setValue("");
+    await waitFor(() => timing.run.classification === null && !timing.classifying);
+    await flushPromises();
+    assert.equal(wrapper.find(".status-select").element.value, "verified");
+    assert.equal(wrapper.find(".result-link").text(), "00:08.500");
 
     await device.disconnect();
+    await router.push("/");
     await flushPromises();
+    await wrapper.findAll("button").find((btn) => btn.text() === "Clear").trigger("click");
+    await wrapper.findAll("button").find((btn) => btn.text() === "DNS").trigger("click");
+    await waitFor(() => timing.run?.classification === "DNS" && !timing.classifying);
+    await flushPromises();
+    assert.equal(history.status(history.rows[0]), "DNS");
+    assert.match(wrapper.find(".result-body").text(), /DNS/);
+    const count = history.rows.length;
+    const classificationButton = (label) => wrapper.findAll("button").find((btn) => btn.text() === label);
+    for (const value of ["DNS", "DNF", "DSQ"]) {
+      if (value !== "DNS") {
+        await classificationButton(value).trigger("click");
+        await waitFor(() => timing.run.classification === value && !timing.classifying);
+        await flushPromises();
+      }
+      assert.equal(classificationButton(value).attributes("aria-pressed"), "true");
+      await classificationButton(value).trigger("click");
+      await waitFor(() => timing.run.classification === null && !timing.classifying);
+      await flushPromises();
+      assert.equal(classificationButton(value).attributes("aria-pressed"), "false");
+      assert.equal(history.rows.length, count - 1);
+      assert.doesNotMatch(wrapper.find(".result-body").text(), /DNS|DNF|DSQ/);
+    }
+    await router.push("/history");
+    await flushPromises();
+    const clearHistory = wrapper.findAll("button").find((btn) => btn.text() === "Clear All");
+    const recordCount = history.rows.length;
+    assert.ok(recordCount > 0);
+    vi.mocked(window.confirm).mockReturnValueOnce(false);
+    await clearHistory.trigger("click");
+    await flushPromises();
+    assert.equal(window.confirm.mock.calls.at(-1)[0], "Delete all history records?");
+    assert.equal(history.rows.length, recordCount);
+    assert.equal(clearHistory.text(), "Clear All");
+    vi.mocked(window.confirm).mockReturnValueOnce(true);
+    await clearHistory.trigger("click");
+    await flushPromises();
+    await waitFor(() => history.rows.length === 0);
+
+    await router.push("/settings");
+    await flushPromises();
+    await wrapper.find(".log-header").trigger("click");
+    await flushPromises();
+    const clearLog = wrapper.findAll("button").find((btn) => btn.text() === "Clear All");
+    const logCount = device.logEntries.length;
+    assert.ok(logCount > 0);
+    vi.mocked(window.confirm).mockReturnValueOnce(false);
+    await clearLog.trigger("click");
+    await flushPromises();
+    assert.equal(window.confirm.mock.calls.at(-1)[0], "Delete all device log entries?");
+    assert.equal(device.logEntries.length, logCount);
+    assert.equal(clearLog.text(), "Clear All");
+    vi.mocked(window.confirm).mockReturnValueOnce(true);
+    await clearLog.trigger("click");
+    await flushPromises();
+    await waitFor(() => device.logEntries.length === 0);
     wrapper.unmount();
 
     const real = errors.filter((e) => !/Not implemented: HTMLCanvasElement|navigation \(except hash changes\)/.test(e));
