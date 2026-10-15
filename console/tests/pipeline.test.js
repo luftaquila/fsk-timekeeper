@@ -86,6 +86,35 @@ async function mapSprint(device, settings) {
 }
 
 describe("pipeline with the fake master", () => {
+  it("invalidates retained reports across USB sessions until new telemetry arrives", async () => {
+    const { device } = await boot();
+    const identity = "I FSK-WL 5 1.0.0 0123456789ABCDEF M 14 922900 7 250.00 16000 0 12 1";
+    const report = "D 0250FEB2 OK 0 0 0 0 -60.00 8.00 0 300 4000 0 1 1 1 XTAL 100 0 0 0 0 0 0 0 0 8002 8001 0 0 0 0";
+    await device.handleLine(identity);
+    await device.handleLine(report);
+    assert.equal(Number.isFinite(device.telemetry["0250FEB2"].received_at), true);
+    await device.disconnect();
+    assert.equal(device.telemetry["0250FEB2"].received_at, null);
+    assert.equal(device.telemetry["0250FEB2"].link_state, "online");
+    await device.handleLine(identity);
+    assert.equal(device.telemetry["0250FEB2"].received_at, null);
+    await device.handleLine(report);
+    assert.equal(Number.isFinite(device.telemetry["0250FEB2"].received_at), true);
+  });
+  it("keeps removed sensors hidden through cached LOST reports and restores them on reception", async () => {
+    const { device, settings } = await boot();
+    await device.handleLine("I FSK-WL 5 1.0.0 0123456789ABCDEF M 14 922900 7 250.00 16000 0 12 1");
+    settings.setMapping("0250FEB2", { role: "start", note: "old gate" });
+    settings.removeSensor("0250FEB2");
+    const report = (state) => `D 0250FEB2 ${state} 0 0 0 0 -60.00 8.00 0 300 4000 0 1 1 1 XTAL 100 0 0 0 0 0 0 0 0 8002 8001 0 0 0 0`;
+    await device.handleLine(report("LOST"));
+    await device.handleLine(report("LOST"));
+    assert.deepEqual(settings.state.removedSensors, ["0250FEB2"]);
+    await device.handleLine(report("OK"));
+    assert.deepEqual(settings.state.removedSensors, []);
+    assert.equal(settings.mappingOf("0250FEB2"), null);
+    assert.equal(device.telemetry["0250FEB2"].link_state, "online");
+  });
   it("keeps the firmware update lock across disconnect and blocks measurement/configuration", async () => {
     const { device, timing } = await boot();
     device.updateInProgress = true;

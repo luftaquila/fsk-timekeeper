@@ -11,13 +11,8 @@ export function telemetryAgeMs(telemetry, now = Date.now()) {
   return Number.isFinite(at) ? Math.max(0, now - at) : Infinity;
 }
 
-function telemetryFresh(telemetry, now = Date.now()) {
+export function telemetryFresh(telemetry, now = Date.now()) {
   return telemetryAgeMs(telemetry, now) <= WIRELESS_STATUS_MAX_AGE_MS;
-}
-
-// Shared by the Link field and the age badge beside each node's heading.
-export function telemetryLinkState(telemetry, now = Date.now()) {
-  return telemetryFresh(telemetry, now) ? telemetry.link_state || "lost" : "none";
 }
 
 // master: D 0 telemetry. head: { hseq, firstSeenAt, lastSeenAt } of the latest E line.

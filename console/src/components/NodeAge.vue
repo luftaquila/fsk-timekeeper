@@ -1,14 +1,17 @@
 <script setup>
 import { computed, ref, onMounted, onUnmounted } from "vue";
 import { useDeviceStore } from "../stores/device";
-import { telemetryAgeMs, telemetryLinkState } from "../lib/quality";
+import { telemetryAgeMs, telemetryFresh } from "../lib/quality";
 import { fmtAgeMs } from "../lib/format";
 
 const props = defineProps({ nodeId: { type: String, required: true } });
 const device = useDeviceStore();
 const now = ref(Date.now());
 const label = computed(() => props.nodeId === "0" ? "Report Age" : "Last Heard");
-const tone = computed(() => telemetryLinkState(device.telemetry[props.nodeId], now.value) === "online" ? "badge-success" : "badge-warning");
+const tone = computed(() => {
+  const report = device.telemetry[props.nodeId];
+  return device.connected && telemetryFresh(report, now.value) && report.link_state === "online" ? "badge-success" : "badge-warning";
+});
 const age = computed(() => {
   const report = device.telemetry[props.nodeId];
   if (props.nodeId === "0") return fmtAgeMs(telemetryAgeMs(report, now.value));

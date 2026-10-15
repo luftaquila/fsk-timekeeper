@@ -1,15 +1,21 @@
 <script setup>
-import { computed } from "vue";
+import { computed, ref, onMounted, onUnmounted } from "vue";
 import { useDeviceStore } from "../stores/device";
 import { useSettingsStore } from "../stores/settings";
 import { useTimingStore } from "../stores/timing";
 import { ROLES, ROLE_LABEL } from "../lib/constants";
+import { telemetryFresh } from "../lib/quality";
 import NodeDiagnostics from "./NodeDiagnostics.vue";
 import NodeAge from "./NodeAge.vue";
 
 const device = useDeviceStore();
 const settings = useSettingsStore();
 const timing = useTimingStore();
+const now = ref(Date.now());
+let timer;
+onMounted(() => { timer = setInterval(() => (now.value = Date.now()), 1000); });
+onUnmounted(() => clearInterval(timer));
+const removalBlocked = computed(() => timing.armed || timing.starting || timing.classifying || device.updateInProgress);
 
 function digitsOnly(e) {
   e.target.value = e.target.value.replace(/\D/g, "");
@@ -24,8 +30,18 @@ function onDebounce(e) {
 const nodes = computed(() => {
   const s = new Set([...Object.keys(device.telemetry), ...settings.mappingList.map((m) => m.node_id)]);
   s.delete("0");
-  return [...s].sort();
+  return [...s].filter((node) => !settings.state.removedSensors.includes(node)).sort();
 });
+
+function missing(node, at = now.value) {
+  const report = device.telemetry[node];
+  return !device.connected || !telemetryFresh(report, at) || report.link_state === "lost";
+}
+
+function removeSensor(node) {
+  if (removalBlocked.value || !missing(node, Date.now())) return;
+  settings.removeSensor(node);
+}
 
 function updateMapping(node, changes) {
   const current = settings.mappingOf(node) ?? { role: "unused", note: "" };
@@ -48,7 +64,11 @@ function updateMapping(node, changes) {
     <div v-else class="sensor-list">
       <article v-for="node in nodes" :key="node" class="sensor" :aria-label="`Sensor ${node}`">
         <div class="sensor-heading">
-          <div class="sensor-title"><h4 class="device-id mono">{{ node }}</h4><NodeAge :node-id="node" /></div>
+          <div class="sensor-title">
+            <h4 class="device-id mono">{{ node }}</h4>
+            <NodeAge :node-id="node" />
+            <button v-if="missing(node)" class="btn btn-ghost btn-sm remove-sensor" type="button" :disabled="removalBlocked" @click="removeSensor(node)">Remove</button>
+          </div>
           <div class="mapping-controls">
             <label class="sensor-role">
               <span>Role</span>
@@ -86,8 +106,10 @@ function updateMapping(node, changes) {
 .sensor { padding: 1.25rem; min-width: 0; container: sensor-layout / inline-size; }
 .sensor + .sensor { border-top: 1px solid var(--border-color); }
 .sensor-heading { margin-bottom: 1rem; }
+.remove-sensor { color: var(--accent-danger); }
+.remove-sensor:hover:not(:disabled), .remove-sensor:focus-visible { color: white; background: var(--accent-danger); border-color: var(--accent-danger); }
 
-.sensor-title { display: flex; align-items: center; gap: 0.75rem; flex-shrink: 0; }
+.sensor-title { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem; flex-shrink: 0; max-width: 100%; }
 .mapping-controls {
   display: flex;
   flex: 1 1 18rem;

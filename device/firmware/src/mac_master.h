@@ -22,6 +22,7 @@ typedef struct {
     unsigned cp_left;
     uint32_t auth_drop;    /* AEAD failures (not attributable to a sensor) */
     uint32_t ver_drop;     /* packets of another radio protocol version */
+    uint32_t last_report_ms; /* full registry status refresh over USB */
     retry_t retry;
 } mac_master_t;
 
@@ -36,8 +37,8 @@ void mac_master_checkpoint(mac_master_t *m);
 /* A new master session after sec_init(). */
 void mac_master_session(mac_master_t *m);
 
-/* D line for every registered sensor (`?STATUS`), or only for those whose link
- * state changed (once per beacon). */
+/* D line for every registered sensor (`?STATUS`). With changed_only, report
+ * transitions immediately and refresh all entries every SENSOR_STATUS_PERIOD_MS. */
 void mac_master_report(mac_master_t *m, int changed_only);
 
 #endif /* MAC_MASTER_H */

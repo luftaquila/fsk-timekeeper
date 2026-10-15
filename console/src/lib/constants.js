@@ -20,7 +20,8 @@ export const REQUIRED_ROLES = Object.freeze({
   laps: ["start"],
 });
 
-// A D line older than this is no report (= the firmware's LINK_OK_MS).
+// Report freshness, independent of the firmware's radio link state.
+// The master refreshes registered sensors every 5 seconds, including LOST entries.
 export const WIRELESS_STATUS_MAX_AGE_MS = 12000;
 export const WIRELESS_MAX_SKEW_PPM = 100;
 

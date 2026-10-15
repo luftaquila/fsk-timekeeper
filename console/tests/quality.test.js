@@ -74,6 +74,15 @@ describe("wirelessQuality", () => {
     assert.equal(telemetryAgeMs({ received_at: NOW - 5 }, NOW), 5);
     assert.equal(telemetryAgeMs({ received_at: NOW + 5 }, NOW), 0);
   });
+
+  it("rejects fresh LOST reports and invalidated reports even if their last link was ONLINE", () => {
+    const lost = gate("sprint", SPRINT, { ...ALL(), A: healthy("A", { link_state: "lost", received_at: NOW }) });
+    assert.equal(lost.ok, false);
+    assert.deepEqual(lost.reasons.map((r) => r.reason), ["Sensor A link: LOST"]);
+    const previousSession = gate("sprint", SPRINT, { ...ALL(), A: healthy("A", { received_at: null }) });
+    assert.equal(previousSession.ok, false);
+    assert.deepEqual(previousSession.reasons.map((r) => r.reason), ["No recent status report from sensor A"]);
+  });
 });
 
 describe("pipelineHealth", () => {

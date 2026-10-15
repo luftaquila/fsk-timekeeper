@@ -98,6 +98,7 @@
  * (reported on D lines; the console uses only this state). */
 #define LINK_OK_MS    12000u
 #define LINK_STALE_MS 17000u
+#define SENSOR_STATUS_PERIOD_MS 5000u
 
 /* A capture may be stamped normally while its offset anchor is this fresh. At the
  * worst-case 80 ppm relative drift this contributes <= 0.56 ms. */

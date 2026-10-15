@@ -9,6 +9,7 @@ const OLD_KEYS = ["tk.settings.v1", "tk.runs.v1", "tk.fleetKey.v1"];
 function defaults() {
   return {
     mapping: {}, // NODE8HEX -> { role, note }; unused excludes a sensor from timing
+    removedSensors: [], // hide cached LOST reports until the sensor is heard again
     mode: "sprint",
     lapTarget: null,
     lastNote: "",
@@ -28,6 +29,9 @@ function load() {
     if (!raw) return base;
     const saved = JSON.parse(raw);
     if (saved && typeof saved === "object") {
+      if (Array.isArray(saved.removedSensors)) {
+        base.removedSensors = [...new Set(saved.removedSensors.filter((node) => typeof node === "string" && node !== "0" && validateNodeId(node)).map((node) => node.toUpperCase()))];
+      }
       if (saved.mapping && typeof saved.mapping === "object") {
         for (const [node, m] of Object.entries(saved.mapping)) {
           if (!validateNodeId(node) || !m || !ROLES.includes(m.role)) continue;
@@ -83,11 +87,24 @@ export const useSettingsStore = defineStore("settings", () => {
     const id = String(node).toUpperCase();
     if (!validateNodeId(id) || id === "0") throw new Error("Invalid node id.");
     if (!ROLES.includes(role)) throw new Error("Invalid role.");
+    restoreSensor(id);
     state.mapping[id] = { role, note: String(note ?? "") };
   }
 
   function removeMapping(node) {
     delete state.mapping[String(node).toUpperCase()];
+  }
+
+  function removeSensor(node) {
+    const id = String(node).toUpperCase();
+    if (!validateNodeId(id) || id === "0") return;
+    removeMapping(id);
+    if (!state.removedSensors.includes(id)) state.removedSensors.push(id);
+  }
+
+  function restoreSensor(node) {
+    const index = state.removedSensors.indexOf(String(node).toUpperCase());
+    if (index !== -1) state.removedSensors.splice(index, 1);
   }
 
   function setMode(mode) {
@@ -116,6 +133,8 @@ export const useSettingsStore = defineStore("settings", () => {
     mappingOf,
     setMapping,
     removeMapping,
+    removeSensor,
+    restoreSensor,
     setMode,
     setLapTarget,
     rememberNote,

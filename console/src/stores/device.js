@@ -255,6 +255,9 @@ export const useDeviceStore = defineStore("device", () => {
       return drop("tel.format", line);
     }
     telemetry[t.node_id] = t;
+    if (t.node_id !== NODE_MASTER && (t.link_state === "online" || t.link_state === "degraded")) {
+      useSettingsStore().restoreSensor(t.node_id);
+    }
     const radioLog = radioLogChain = radioLogChain.then(() => logRadioHealth(t, now));
     if (t.node_id !== NODE_MASTER) return radioLog;
     if (t.provisioned === 1) unprovisioned.value = false;
@@ -539,6 +542,8 @@ export const useDeviceStore = defineStore("device", () => {
   }
 
   function resetSession() {
+    // Keep last known values for inspection, but require reports from this session.
+    for (const report of Object.values(telemetry)) report.received_at = null;
     finishKeyRead("idle");
     identity.value = null;
     contract.value = contractOf(null);

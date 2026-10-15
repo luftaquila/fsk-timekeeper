@@ -12,6 +12,21 @@ beforeEach(() => {
 });
 
 describe("sensor participation by role", () => {
+  it("persists removal without restoring the old role or note when rediscovered", async () => {
+    const settings = useSettingsStore();
+    settings.setMapping("00000001", { role: "start", note: "old gate" });
+    settings.removeSensor("00000001");
+    settings.removeSensor("00000001");
+    settings.removeSensor("0");
+    await nextTick();
+    settings.$dispose(); setActivePinia(createPinia());
+    const restored = useSettingsStore();
+    assert.equal(restored.mappingOf("00000001"), null);
+    assert.deepEqual(restored.state.removedSensors, ["00000001"]);
+    restored.restoreSensor("00000001");
+    assert.deepEqual(restored.state.removedSensors, []);
+    assert.equal(restored.mappingOf("00000001"), null);
+  });
   it("migrates disabled sensors to unused without losing notes or active roles", () => {
     localStorage.setItem("tk.settings.v2", JSON.stringify({ mapping: {
       "00000001": { role: "start", note: "spare", enabled: false },

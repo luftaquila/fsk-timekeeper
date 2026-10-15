@@ -3,7 +3,7 @@ import { computed, ref, onMounted, onUnmounted } from "vue";
 import MetricValue from "./MetricValue.vue";
 import { useDeviceStore } from "../stores/device";
 import { fmtNum, fmtPpm, fmtAgeMs } from "../lib/format";
-import { telemetryLinkState } from "../lib/quality";
+import { telemetryFresh } from "../lib/quality";
 import { errorNames, ERROR_BITS, MASTER_QUEUE_CAPACITY } from "../lib/protocol";
 
 const props = defineProps({ nodeId: { type: String, required: true } });
@@ -18,11 +18,9 @@ onUnmounted(() => clearInterval(timer));
 
 const isMaster = (r) => r.node_id === "0";
 
-// The firmware decides the link state; an old report is no report.
-function linkState(r) {
-  return telemetryLinkState(r, now.value);
-}
-const stateLabel = { online: "ONLINE", degraded: "STALE", lost: "LOST", none: "NO REPORT" };
+// A missing report does not change the last firmware-reported radio state.
+const reportFresh = computed(() => device.connected && telemetryFresh(report.value, now.value));
+const stateLabel = { online: "ONLINE", degraded: "STALE", lost: "LOST" };
 
 const metric = (value, unit = "") => ({ value, unit });
 const temperature = (v) => metric(v == null ? "-" : (v / 10).toFixed(1), "°C");
@@ -95,7 +93,9 @@ const overview = computed(() => {
   if (!r) return [];
   const health = timingHealth(r);
   const common = [
-    { label: "Link", value: stateLabel[linkState(r)], tone: linkState(r) === "online" ? "good" : "warn" },
+    { label: "Link", value: reportFresh.value ? stateLabel[r.link_state] || "UNKNOWN" : "NO REPORT",
+      title: reportFresh.value ? undefined : `Last reported link: ${stateLabel[r.link_state] || "UNKNOWN"}`,
+      tone: reportFresh.value && r.link_state === "online" ? "good" : "warn" },
     { label: "Timing", value: health.label, parts: health.parts, tone: health.state },
   ];
   return isMaster(r) ? [...common,
@@ -134,7 +134,7 @@ const fields = computed(() => {
     <dl v-if="report || hasErrors || fields.length" class="diagnostic-grid">
       <div v-for="field in fields" :key="field.label">
         <dt>{{ field.label }}</dt>
-        <dd :class="[field.tone, { mono: field.mono, 'signal-value': field.gauge, 'timing-value': field.label === 'Timing' }]">
+        <dd :title="field.title" :class="[field.tone, { mono: field.mono, 'signal-value': field.gauge, 'timing-value': field.label === 'Timing' }]">
           <span v-if="field.gauge" class="signal-gauge" :role="field.gauge.value == null ? undefined : 'meter'"
             :aria-label="field.label" :aria-valuemin="field.gauge.min" :aria-valuemax="field.gauge.max"
             :aria-valuenow="field.gauge.value ?? undefined" :aria-valuetext="field.value">

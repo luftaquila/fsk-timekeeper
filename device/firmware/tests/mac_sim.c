@@ -401,12 +401,13 @@ static unsigned inbox_n;
 static int host_acks = 1;
 static uint32_t last_hseq;
 static unsigned d_lines;
+static char last_d[PU_LINE_MAX + 8];
 
 int usb_console_ready(void) { return 1; }
 uint32_t usb_console_epoch(void) { return 0; }
 int usb_write(const char *s)
 {
-    if (s[0] == 'D') { d_lines++; }
+    if (s[0] == 'D') { d_lines++; strcpy(last_d, s); }
     if (s[0] != 'E') { return 1; }
     assert(inbox_n < 64);
     strcpy(inbox[inbox_n++], s);
@@ -1154,10 +1155,58 @@ static void init_recovery(void)
     puts("PASS init_recovery");
 }
 
+static void status_reports(void)
+{
+    add_node(1, NODE_MASTER, 0, 0);
+    reg_entry_t *e = reg_claim(&mm.reg, 1, 0, NULL);
+    assert(e);
+    e->last_state = PU_STATE_OK;
+    reg_entry_t *other = reg_claim(&mm.reg, 2, 0, NULL);
+    assert(other);
+    other->last_state = PU_STATE_OK;
+    unsigned previous = d_lines;
+    /* Both sensors stop transmitting at t=0. Report ages keep increasing;
+     * transitions are immediate and LOST continues to be reported indefinitely. */
+    for (unsigned ms = 0; ms <= 40000; ms += 1000) {
+        cur->now_us = (uint64_t)ms * 1000u;
+        mac_master_report(&mm, 1);
+        int expected = (ms && ms % 5000 == 0) || ms == 13000 || ms == 18000;
+        assert(d_lines - previous == (expected ? 2u : 0u));
+        if (expected) {
+            unsigned id, age;
+            char state[16];
+            assert(sscanf(last_d, "D %x %15s %*s %*s %*s %u", &id, state, &age) == 3);
+            assert(id == 2 && age == ms);
+            assert(!strcmp(state, ms <= 12000 ? "OK" : ms <= 17000 ? "STALE" : "LOST"));
+        }
+        assert(e->heard_ms == 0 && other->heard_ms == 0);
+        previous = d_lines;
+    }
+    /* Explicit ?STATUS still returns all entries immediately. */
+    mac_master_report(&mm, 0);
+    assert(d_lines == previous + 2);
+
+    /* Periodic refresh also works across board_millis wrap. */
+    cur->now_us = (uint64_t)(UINT32_MAX - 2000u) * 1000u;
+    mac_master_init(&mm, &mq);
+    e = reg_claim(&mm.reg, 3, board_millis(), NULL);
+    assert(e);
+    e->last_state = PU_STATE_OK;
+    previous = d_lines;
+    cur->now_us += 4999u * 1000u;
+    mac_master_report(&mm, 1);
+    assert(d_lines == previous);
+    cur->now_us += 1000u;
+    mac_master_report(&mm, 1);
+    assert(d_lines == previous + 1);
+    puts("PASS status_reports");
+}
+
 int main(int argc, char **argv)
 {
     assert(argc == 2);
     if (!strcmp(argv[1], "steady")) { steady(); }
+    else if (!strcmp(argv[1], "status_reports")) { status_reports(); }
     else if (!strcmp(argv[1], "init_recovery")) { init_recovery(); }
     else if (!strcmp(argv[1], "latency")) { latency(1); }
     else if (!strcmp(argv[1], "latency_lbt_off")) { latency(0); }

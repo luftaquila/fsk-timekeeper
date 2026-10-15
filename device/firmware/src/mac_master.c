@@ -20,6 +20,7 @@ void mac_master_init(mac_master_t *m, mq_t *q)
     reg_init(&m->reg);
     m->q = q;
     m->next_beacon = capture_now64();
+    m->last_report_ms = board_millis();
     retry_init(&m->retry, board_millis(), RADIO_BOOT_RETRY_MS);
     radio_start_rx();
 }
@@ -67,6 +68,10 @@ static void emit_sensor(const reg_entry_t *e, uint32_t now_ms)
 void mac_master_report(mac_master_t *m, int changed_only)
 {
     uint32_t now = board_millis();
+    if ((uint32_t)(now - m->last_report_ms) >= SENSOR_STATUS_PERIOD_MS) {
+        changed_only = 0;
+    }
+    if (!changed_only) { m->last_report_ms = now; }
     for (unsigned i = 0; i < MAX_NODES; i++) {
         reg_entry_t *e = &m->reg.e[i];
         if (!e->used) { continue; }
