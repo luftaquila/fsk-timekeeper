@@ -73,8 +73,3 @@ export async function pruneEntries(now = Date.now()) {
     /* retention is best effort */
   }
 }
-
-export function _reset() {
-  memory = [];
-  memoryId = 0;
-}

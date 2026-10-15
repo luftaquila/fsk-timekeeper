@@ -93,7 +93,7 @@ async function clearAll() {
     </div>
 
     <div class="card">
-      <div v-if="!rows.length" class="empty-state">No runs recorded yet.</div>
+      <div v-if="!rows.length" class="empty-state">No runs recorded yet</div>
       <div v-else class="table-scroll">
         <table class="data-table">
           <thead>
@@ -177,7 +177,7 @@ async function clearAll() {
 .data-table th {
   background: var(--bg-hover);
   color: var(--text-primary);
-  font-size: 0.95rem;
+  font-size: 1rem;
   font-weight: 700;
 }
 .data-table td { color: var(--text-primary); }
@@ -185,7 +185,7 @@ async function clearAll() {
 .data-table .result-cell { font-size: 1.125rem; }
 .data-table .badge {
   padding: 0.3rem 0.65rem;
-  font-size: 0.9375rem;
+  font-size: 1rem;
   font-weight: 600;
   white-space: nowrap;
 }
@@ -205,7 +205,7 @@ async function clearAll() {
   color: color-mix(in srgb, var(--accent-secondary) 65%, var(--text-primary));
 }
 .note-cell { max-width: 24rem; overflow-wrap: anywhere; }
-.data-table .actions .btn { font-size: 0.9375rem; }
+.data-table .actions .btn { font-size: 1rem; }
 .data-table .actions .btn:hover {
   color: var(--accent-danger);
   border-color: var(--accent-danger);
@@ -228,7 +228,7 @@ async function clearAll() {
 .toolbar .form-select {
   height: 2.25rem;
   padding: 0 0.75rem;
-  font-size: 0.875rem;
+  font-size: 1rem;
   font-weight: 500;
   line-height: 1.25rem;
 }
@@ -241,7 +241,7 @@ async function clearAll() {
 }
 .muted {
   color: var(--text-tertiary);
-  font-size: 0.85rem;
+  font-size: 1rem;
 }
 .nowrap {
   white-space: nowrap;

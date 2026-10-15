@@ -12,12 +12,12 @@ import { wirelessQuality, missingRoles as missingRolesOf } from "../lib/quality"
 import { encodeRun, decodeRun } from "../lib/run-codec";
 import { MODES, CALIBRATION_WAIT_MS, RESULT_CLASSIFICATIONS } from "../lib/constants";
 import { buildTimeline, freezeCalibration, utcMsAt, durationNs } from "../lib/calibration";
-import { resultTicks, resultNs as resultNsOf, lapsNs as lapsNsOf, spanNs, calibrationMethod as calibrationMethodOf } from "../lib/results";
+import { resultTicks, resultNs as resultNsOf, lapsNs as lapsNsOf, spanNs } from "../lib/results";
 import { formatDuration } from "../lib/format";
 
 const KEY_RUN = "tk.run.v3";
 const KEY_RUN_OLD = "tk.run.v2";
-export const VERSION_CHANGED = "The master reports another protocol version.";
+const VERSION_CHANGED = "The master reports another protocol version.";
 
 function makeLive() {
   return {
@@ -57,7 +57,6 @@ export const useTimingStore = defineStore("timing", () => {
     if (r.closed && !live.laps.length) return lapsNsOf(r, timeline.value).map((ns) => ({ ns, confirmed: true }));
     return live.laps.map((lap) => ({ ns: spanNs(r, lap.startTick, lap.endTick, timeline.value), confirmed: lap.confirmed }));
   });
-  const calibrationMethod = computed(() => (run.value ? calibrationMethodOf(run.value, timeline.value) : null));
 
   // Crossing list of a role with the time since the first start crossing.
   function crossingRows(role) {
@@ -119,15 +118,22 @@ export const useTimingStore = defineStore("timing", () => {
     if (live.raf) cancelAnimationFrame(live.raf);
     live.raf = null;
   }
+  function updateClock() {
+    if (live.startedAt != null) live.clockDisplay = formatDuration(BigInt(Math.max(0, Math.floor(Date.now() - live.startedAt))) * 1_000_000n);
+  }
   function startClock() {
     stopClock();
     const tick = () => {
-      if (live.startedAt != null) live.clockDisplay = formatDuration(BigInt(Math.max(0, Math.floor(Date.now() - live.startedAt))) * 1_000_000n);
+      updateClock();
       live.raf = requestAnimationFrame(tick);
     };
     live.raf = requestAnimationFrame(tick);
   }
-  function showResultOnClock() {
+  function showStoppedClock() {
+    if (run.value?.stoppedClockDisplay != null) {
+      live.clockDisplay = run.value.stoppedClockDisplay;
+      return;
+    }
     const ns = resultNs.value;
     if (ns != null) live.clockDisplay = formatDuration(ns);
   }
@@ -218,7 +224,8 @@ export const useTimingStore = defineStore("timing", () => {
   async function stop() {
     const current = run.value;
     if (!current?.armed) return false;
-    applyEvaluation({ run: stopRun(current), crossings: live.crossings, laps: live.laps });
+    updateClock();
+    applyEvaluation({ run: { ...stopRun(current), stoppedClockDisplay: live.clockDisplay }, crossings: live.crossings, laps: live.laps });
     return true;
   }
 
@@ -276,14 +283,14 @@ export const useTimingStore = defineStore("timing", () => {
       else if (current.totalValid && ticks.length >= 2) ns = durationNs(calibration.points, ticks[0], ticks[ticks.length - 1]);
     }
     setRun({ ...current, calibration, durationNs: ns == null ? null : String(ns) });
-    showResultOnClock();
+    if (!current.armed) showStoppedClock();
     syncHistory(run.value, { throughSeq: eventLog.getLastSeq() });
   }
 
   // A decided result waits for a qualified PPS edge after its last tick, at most CALIBRATION_WAIT_MS.
   function scheduleFreeze() {
     const current = run.value;
-    if (!current?.closed || current.calibration) return;
+    if (!current || current.calibration || !(current.closed || (current.mode === "sprint" && current.verification === "verified"))) return;
     const ticks = resultTicks(current);
     if (!ticks.length) return;
     const lastTick = ticks.reduce((m, t) => (BigInt(t) > m ? BigInt(t) : m), 0n);
@@ -313,7 +320,7 @@ export const useTimingStore = defineStore("timing", () => {
     setRun(next);
     if (next.closed || !next.armed) {
       stopClock();
-      showResultOnClock();
+      showStoppedClock();
     }
     const changed =
       !before ||
@@ -326,7 +333,8 @@ export const useTimingStore = defineStore("timing", () => {
       before.finishTick !== next.finishTick ||
       (before.crossingTicks || []).length !== next.crossingTicks.length;
     const saved = changed ? syncHistory(next, { throughSeq: eventLog.getLastSeq() }) : Promise.resolve();
-    if (next.closed && !(before?.closed && before.runId === next.runId)) scheduleFreeze();
+    if ((next.closed && !(before?.closed && before.runId === next.runId)) ||
+        (next.mode === "sprint" && next.verification === "verified" && before?.verification !== "verified")) scheduleFreeze();
     return saved;
   }
 
@@ -390,15 +398,16 @@ export const useTimingStore = defineStore("timing", () => {
         live.crossings = c.map((tick) => ({ node_id: "", role: "start", tick, confirmed: true }));
         live.laps = c.slice(1).map((tick, i) => ({ startTick: c[i], endTick: tick, confirmed: true }));
       }
-      showResultOnClock();
+      showStoppedClock();
       scheduleFreeze();
       return;
     }
     // A restored run cannot show a live wall clock (the wall/tick anchor is gone).
     evaluateOpen(current);
+    scheduleFreeze();
     stopClock();
     live.startedAt = null;
-    showResultOnClock();
+    showStoppedClock();
   }
 
   return {
@@ -409,10 +418,8 @@ export const useTimingStore = defineStore("timing", () => {
     armed,
     fault,
     lightColor,
-    timeline,
     resultNs,
     lapRows,
-    calibrationMethod,
     crossingRows,
     restore,
     reevaluate,

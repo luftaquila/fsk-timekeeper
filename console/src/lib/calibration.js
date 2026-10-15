@@ -298,9 +298,3 @@ export function utcMsAt(edges, tickValue) {
   const ms = add(q(anchor.utc * 1000n), mul(sub(at, ref), q(1000n)));
   return Number(roundHalfUp(ms));
 }
-
-export const CALIBRATION_LABEL = {
-  gps: "GPS",
-  "gps-extrapolated": "GPS (extrapolated)",
-  nominal: "nominal 16 MHz",
-};

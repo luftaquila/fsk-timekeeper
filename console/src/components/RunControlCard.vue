@@ -33,26 +33,39 @@ const canStart = computed(() => device.connected && !timing.armed && !timing.sta
           @click="timing.classify(timing.run?.classification === value ? null : value, settings.state.mode, note)">{{ value }}</button>
       </div>
       <button class="btn btn-ghost btn-block mt-1" :disabled="!timing.run || timing.armed || timing.classifying" @click="timing.reset()">Clear</button>
-      <p v-if="!device.connected" class="note bad">Master not connected.</p>
-      <p v-else-if="missing.length" class="note bad">Unmapped Role: {{ missing.map((r) => ROLE_LABEL[r] || r).join(", ") }}</p>
-      <ul v-else-if="!quality.ok" class="note warn readiness-reasons">
-        <li v-for="(reason, i) in quality.reasons" :key="i">{{ reason.reason }}</li>
-      </ul>
+      <div class="readiness-status" role="status" aria-live="polite" aria-atomic="true">
+        <div v-if="!device.connected || missing.length || !quality.ok"
+          class="readiness-notice" :class="{ 'is-warning': device.connected && !missing.length }">
+          <p v-if="!device.connected" class="readiness-message">Master not connected</p>
+          <p v-else-if="missing.length" class="readiness-message">Unmapped role: {{ missing.map((r) => ROLE_LABEL[r] || r).join(", ") }}</p>
+          <ul v-else class="readiness-reasons">
+            <li v-for="(reason, i) in quality.reasons" :key="i">{{ reason.reason }}</li>
+          </ul>
+        </div>
+      </div>
     </div>
   </div>
 </template>
 
 <style scoped>
-.readiness-reasons { padding-left: 1.1rem; }
-.note { overflow-wrap: anywhere; }
-.note {
-  margin-top: 0.75rem;
-  font-size: 0.8rem;
+.readiness-notice {
+  margin-top: 1rem;
+  padding-top: 0.875rem;
+  border-top: 1px solid var(--border-color);
+  color: var(--accent-danger);
+  font-size: 1rem;
+  font-weight: 500;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
 }
-.note.warn {
+.readiness-notice.is-warning {
   color: var(--accent-warning);
 }
-.note.bad {
-  color: var(--accent-danger);
+.readiness-reasons {
+  list-style: none;
+  min-width: 0;
+}
+.readiness-reasons li + li {
+  margin-top: 0.625rem;
 }
 </style>

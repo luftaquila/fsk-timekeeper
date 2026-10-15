@@ -26,15 +26,15 @@ async function clearAll() {
 <template>
   <div class="card">
     <div class="card-header log-header" :class="{ 'is-open': open }" @click="open = !open">
-      <h3><span class="heading-icon" aria-hidden="true">📋</span><span>Device Log</span> <span class="muted">{{ device.logEntries.length }} entries</span></h3>
-      <span class="disclosure" :class="{ 'is-open': open }" aria-hidden="true">›</span>
+      <h3><span class="heading-icon" aria-hidden="true">📋</span><span>Device Log</span> <span class="count-chip" :aria-label="`${device.logEntries.length} entries`">{{ device.logEntries.length }}</span></h3>
+      <svg class="disclosure" :class="{ 'is-open': open }" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6" /></svg>
     </div>
     <div v-if="open" class="card-body">
       <div class="toolbar">
         <button class="btn btn-ghost btn-sm" :disabled="!device.logEntries.length" @click="exportJson">Export JSON</button>
         <button class="btn btn-ghost btn-sm" :disabled="!device.logEntries.length" @click="clearAll">Clear All</button>
       </div>
-      <div v-if="!device.logEntries.length" class="empty-state">No entries.</div>
+      <div v-if="!device.logEntries.length" class="empty-state">No entries</div>
       <div v-else class="table-scroll">
         <table class="log-table">
           <thead>
@@ -70,11 +70,7 @@ async function clearAll() {
   cursor: pointer;
   user-select: none;
 }
-.muted {
-  color: var(--text-tertiary);
-  font-weight: 400;
-  font-size: 0.8rem;
-}
+
 .log-header:not(.is-open) { border-bottom: 0; }
 .toolbar {
   display: flex;
@@ -84,7 +80,7 @@ async function clearAll() {
 .log-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 0.8rem;
+  font-size: 1rem;
 }
 .log-table th,
 .log-table td {
@@ -94,7 +90,7 @@ async function clearAll() {
   vertical-align: top;
 }
 .log-table th {
-  color: var(--text-tertiary);
+  color: var(--text-secondary);
   font-weight: 600;
 }
 .nowrap {

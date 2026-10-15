@@ -4,7 +4,7 @@ import { DEFAULT_DEBOUNCE_MS } from "./constants";
 import { RUN_SCHEMA, invalidateRun } from "./engine";
 import { RADIO_PROTO_VERSION, USB_PROTO_VERSION } from "./protocol";
 
-export const PROTOCOL_CHANGE_REASON = "Closed by a protocol change.";
+const PROTOCOL_CHANGE_REASON = "Closed by a protocol change.";
 
 export function encodeRun(run) {
   return JSON.stringify(run, (_key, value) => (typeof value === "bigint" ? String(value) : value));

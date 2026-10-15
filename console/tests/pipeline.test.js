@@ -35,6 +35,7 @@ const { useSettingsStore } = await import("../src/stores/settings.js");
 const { useTimingStore } = await import("../src/stores/timing.js");
 const { useHistoryStore } = await import("../src/stores/history.js");
 const { resultNs } = await import("../src/lib/results.js");
+const { formatDuration } = await import("../src/lib/format.js");
 const { encodeRun } = await import("../src/lib/run-codec.js");
 const { getAll, put } = await import("../src/lib/idb.js");
 
@@ -344,8 +345,8 @@ describe("pipeline with the fake master", () => {
     fake.crossing(a);
     fake.crossing(b, { offsetMs: 1000 });
     await waitFor(() => timing.run.verification === "verified");
-    assert.equal(timing.run.closed, true);
-    assert.equal(timing.lightColor, "red");
+    assert.equal(timing.run.closed, false);
+    assert.equal(timing.lightColor, "green");
     assert.ok(timing.live.crossings.every((c) => c.confirmed));
     await waitFor(() => timing.run.durationNs != null, 4000);
     assert.equal(timing.run.calibration.method, "gps");
@@ -355,8 +356,12 @@ describe("pipeline with the fake master", () => {
     assert.equal(history.rows[0].verification, "verified");
     assert.equal(history.rows[0].durationNs, timing.run.durationNs);
     assert.equal(history.rows[0].note, "car 7");
+    assert.equal(timing.armed, true);
+    await timing.stop();
+    assert.equal(timing.run.closed, true);
+    assert.equal(timing.lightColor, "red");
     const exported = history.exportData().History[0];
-    assert.equal(exported.Result, timing.live.clockDisplay);
+    assert.equal(exported.Result, formatDuration(timing.resultNs));
     assert.equal(exported.Status, "Verified");
     assert.deepEqual(Object.keys(exported), ["Date", "Mode", "Note", "Result", "Status"]);
 
@@ -372,7 +377,35 @@ describe("pipeline with the fake master", () => {
     assert.equal(again.history.rows[0].durationNs, timing.run.durationNs);
     assert.equal(again.timing.run.closed, true);
     assert.equal(again.timing.resultNs, BigInt(timing.run.durationNs));
+    assert.equal(again.timing.live.clockDisplay, timing.live.clockDisplay);
     assert.equal(again.settings.state.lastNote, "car 7");
+  });
+
+  it("keeps the manual Stop clock through delayed result calibration and reload", { timeout: 10000 }, async () => {
+    const { device, settings, timing, history } = await boot();
+    const { fake, a, b } = await mapSprint(device, settings);
+    fake.setGps({ valid: false, fix: 0 });
+    assert.equal(await timing.start("sprint"), true);
+    const startTick = BigInt(fake.crossing(a));
+    fake.crossing(b, { at: startTick + 400n * 16000n });
+    await waitFor(() => timing.run.verification === "verified");
+    assert.equal(timing.run.calibration, null);
+
+    const now = Date.now();
+    timing.live.startedAt = now - 12345;
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
+    try { await timing.stop(); } finally { nowSpy.mockRestore(); }
+    assert.equal(timing.live.clockDisplay, "00:12.345");
+    await waitFor(() => timing.run.durationNs != null, 4000);
+    await waitFor(() => history.rows[0]?.durationNs != null);
+    assert.equal(ms(timing.run.durationNs), 400);
+    assert.equal(timing.live.clockDisplay, "00:12.345");
+    assert.equal(history.exportData().History[0].Result, "00:00.400");
+
+    await device.disconnect();
+    const again = await boot({ keepStorage: true });
+    assert.equal(again.timing.live.clockDisplay, "00:12.345");
+    assert.equal(again.timing.resultNs, 400_000_000n);
   });
 
   it("ignores a finish before the first start (case F) and bundles a burst into one line", { timeout: 20000 }, async () => {
@@ -696,7 +729,7 @@ describe("pipeline with the fake master", () => {
     fake.crossing(a);
     await waitFor(() => device.head != null && Date.now() - device.head.firstSeenAt > 5200, 8000);
     assert.equal(timing.qualityFor("laps").ok, false);
-    assert.match(timing.qualityFor("laps").reasons[0].reason, /Keeps Being Retransmitted/);
+    assert.match(timing.qualityFor("laps").reasons[0].reason, /keeps being retransmitted/);
     assert.equal(await timing.start("laps"), false);
     fake.setCorrupt(false);
     await waitFor(() => fake.queueLength === 0);
@@ -711,20 +744,20 @@ describe("pipeline with the fake master", () => {
     settings.setMapping(a, { role: "start" });
     fake.setRole("S");
     await waitFor(() => !device.contract.ok);
-    assert.match(device.contract.reason, /Board Is Not a Master/);
+    assert.match(device.contract.reason, /Board is not a master/);
     const acks = device.stats.acks;
     fake.crossing(a);
     await sleep(400);
     assert.equal(device.stats.acks, acks);
     assert.ok(fake.queueLength >= 1);
     assert.equal(await timing.start("laps"), false);
-    assert.match(toasts.error.at(-1), /Board Is Not a Master/);
+    assert.match(toasts.error.at(-1), /Board is not a master/);
     fake.setRole("M");
     await waitFor(() => fake.queueLength === 0);
     assert.ok(device.stats.acks > acks);
     fake.setProto({ usb: 1 });
     await waitFor(() => !device.contract.ok);
-    assert.match(device.contract.reason, /Protocols Do Not Match/);
+    assert.match(device.contract.reason, /protocols do not match/);
     await device.disconnect();
   });
 

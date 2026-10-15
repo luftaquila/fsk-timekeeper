@@ -43,7 +43,6 @@ function plain(value) {
 
 export const useHistoryStore = defineStore("history", () => {
   const rows = ref([]); // newest first
-  const ready = ref(false);
   let memoryId = 0;
   let pendingWrite = Promise.resolve();
 
@@ -64,7 +63,6 @@ export const useHistoryStore = defineStore("history", () => {
     } catch {
       rows.value = [];
     }
-    ready.value = true;
   }
 
   async function save(row) {
@@ -260,5 +258,5 @@ export const useHistoryStore = defineStore("history", () => {
     downloadBlob(blob, `fsk-timekeeper-${mode || "all"}-${timestampSlug()}.json`);
   }
 
-  return { rows, ready, init, upsert, classify, removeRow, clearAll, filtered, status, edgesFor, exportData, exportExcel, exportJson };
+  return { rows, init, upsert, classify, removeRow, clearAll, filtered, status, edgesFor, exportData, exportExcel, exportJson };
 });

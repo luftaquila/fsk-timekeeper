@@ -41,7 +41,6 @@ export const useDeviceStore = defineStore("device", () => {
   const ppsEdges = ref([]); // qualified PPS edges of ppsBootId, sorted by tick
   const ppsBootId = ref(null);
   const unprovisioned = ref(false);
-  const lastError = ref(null);
   const dropped = reactive({ count: 0, reasons: {} });
   const stats = reactive({ lines: 0, events: 0, duplicates: 0, acks: 0, quarantined: 0, gated: 0 });
   const consoleLines = ref([]);
@@ -68,7 +67,7 @@ export const useDeviceStore = defineStore("device", () => {
 
   const clock = createWirelessClock({
     send: ({ request_id }) => {
-      if (!transport?.connected) throw new Error("The master is not connected.");
+      if (!transport?.connected) throw new Error("Master not connected");
       transmitLine(`T ${request_id}`);
     },
   });
@@ -230,7 +229,7 @@ export const useDeviceStore = defineStore("device", () => {
         if (msg.cmd === provisionPending?.cmd) resolveProvision("ok");
         break;
       case "X":
-        onErrorLine(msg, now);
+        onErrorLine(msg);
         break;
       default:
         await drop("unknown_line", raw);
@@ -359,12 +358,11 @@ export const useDeviceStore = defineStore("device", () => {
     useTimingStore().onPpsEdge(edge);
   }
 
-  function onErrorLine(msg, now) {
+  function onErrorLine(msg) {
     if (msg.reason === "badcmd" && keyReadState.value === "loading") {
       finishKeyRead("unsupported");
       return;
     }
-    lastError.value = { reason: msg.reason, at: now };
     if (msg.reason === "noprov") {
       if (!unprovisioned.value) log({ kind: "X", code: msg.reason, text: msg.text });
       unprovisioned.value = true;
@@ -444,7 +442,7 @@ export const useDeviceStore = defineStore("device", () => {
 
   // One provisioning command to the connected board (any role); resolves "ok", one of fails, or "timeout".
   function provision(cmd, line, shown, fails) {
-    if (!transport?.connected) return Promise.reject(new Error("The master is not connected."));
+    if (!transport?.connected) return Promise.reject(new Error("Master not connected"));
     if (keyReadState.value === "loading") return Promise.reject(new Error("Wait for the board settings to load."));
     if (provisionPending) return Promise.reject(new Error("A settings update is already in progress"));
     return new Promise((resolve) => {
@@ -495,12 +493,6 @@ export const useDeviceStore = defineStore("device", () => {
 
   function readClock() {
     return clock.read();
-  }
-
-  // Ask the master to have every synced sensor checkpoint now (the next beacons carry the request).
-  function requestCheckpoint() {
-    if (!transport?.connected) return Promise.resolve(false);
-    return transmitLine("CP");
   }
 
   // Latest GPS report for the START snapshot (reference only), or null when stale.
@@ -618,7 +610,7 @@ export const useDeviceStore = defineStore("device", () => {
   }
 
   async function enterBootloader() {
-    if (!transport) throw new Error("The master is not connected.");
+    if (!transport) throw new Error("Master not connected");
     if (useTimingStore().armed) throw new Error("Stop the running measurement first.");
     dfuInProgress.value = true;
     const t = transport;
@@ -651,7 +643,6 @@ export const useDeviceStore = defineStore("device", () => {
     ppsEdges,
     ppsBootId,
     unprovisioned,
-    lastError,
     dropped,
     stats,
     consoleLines,
@@ -671,7 +662,6 @@ export const useDeviceStore = defineStore("device", () => {
     disconnect,
     transmitLine,
     readClock,
-    requestCheckpoint,
     gpsReport,
     useEdgesOf,
     provisionKey,
@@ -685,6 +675,5 @@ export const useDeviceStore = defineStore("device", () => {
     clearLog,
     exportLog,
     dismissAlarm,
-    syncDurability,
   };
 });

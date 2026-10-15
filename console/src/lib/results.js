@@ -1,7 +1,7 @@
 /* Result durations of a run or history row, from its raw ticks and calibration.
  * The frozen calibration wins; before it exists the PPS edges at hand give a provisional value.
  * Rows of run schema < 3 kept only rounded ms (`result`, `laps`); they are read as is. */
-import { calibrationPoints, durationNs, pointsMethod, CALIBRATION_LABEL } from "./calibration";
+import { calibrationPoints, durationNs } from "./calibration";
 
 export function isOldFormatRow(row) {
   return !!row && row.schema == null;
@@ -46,16 +46,4 @@ export function lapsNs(run, source = null) {
   const out = [];
   for (let i = 1; i < c.length; i++) out.push(durationNs(points, c[i - 1], c[i]));
   return out;
-}
-
-// "gps" | "gps-extrapolated" | "nominal" | null (old-format rows / nothing to convert).
-export function calibrationMethod(run, source = null) {
-  if (!run || isOldFormatRow(run)) return null;
-  if (run.calibration?.method) return run.calibration.method;
-  const ticks = resultTicks(run);
-  return ticks.length ? pointsMethod(calibrationPoints(source, ticks)) : null;
-}
-
-export function calibrationLabel(method) {
-  return method ? CALIBRATION_LABEL[method] || method : "";
 }

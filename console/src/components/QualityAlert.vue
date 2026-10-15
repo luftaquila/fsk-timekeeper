@@ -76,14 +76,11 @@ function occurredAt(value) {
   display: block;
   margin-top: 0.15rem;
   color: var(--text-tertiary);
-  font-size: 0.8rem;
+  font-size: 1rem;
 }
 .quality-alert-content ul {
   margin: 0.35rem 0 0;
   padding-left: 1.25rem;
-}
-.quality-alert-content li {
-  margin-top: 0.15rem;
 }
 .quality-alert-dismiss {
   flex: 0 0 auto;

@@ -9,6 +9,7 @@
  *   lapTarget: number|null, debounceMs: number,        // frozen at START
  *   stopTick: string|null,                             // legacy Stop fence; new runs leave this null
  *   armed, closed,
+ *   stoppedClockDisplay?: string,                     // live timer snapshot at manual Stop, not the result
  *   verification: "pending" | "verified" | "invalid" | "dnf", dnfReason: "DNF" | "DNS" | null,
  *   classification: "DNS" | "DNF" | "DSQ" | null,    // explicit operator decision
  *   startTick, finishTick: string|null,                // sprint result S1, F1
@@ -29,7 +30,7 @@ import { MASTER_TICKS_PER_MS } from "./event-timing";
 import { WIRELESS_STATUS_MAX_AGE_MS, DEFAULT_DEBOUNCE_MS, RESULT_CLASSIFICATIONS, MODES } from "./constants";
 
 export const RUN_SCHEMA = 3;
-export const MASTER_TIMEBASE_ENDED = "The master timebase ended during the run.";
+const MASTER_TIMEBASE_ENDED = "The master timebase ended during the run.";
 export const MASTER_REBOOTED = "The master rebooted during the run.";
 
 export class EngineError extends Error {
@@ -263,11 +264,14 @@ export function evaluateRun(run, rows, { now = Date.now() } = {}) {
     if (state === "invalid") startTick = null;
   }
 
-  const decided = state === "invalid" || (state === "verified" && (run.mode === "sprint" || (run.lapTarget && crossingTicks.length === run.lapTarget + 1)));
+  // A verified sprint result does not close capture collection. Only Stop, a lost
+  // timebase, an invalid result, or an explicit lap target ends the run.
+  const decided = state === "invalid" || sessionEnd != null ||
+    (state === "verified" && run.mode === "laps" && run.lapTarget && crossingTicks.length === run.lapTarget + 1);
   let next = { ...run, verification: state, dnfReason: null, startTick, finishTick, crossingTicks, totalValid };
   if (decided) next = { ...next, armed: false, closed: true };
   if (state === "invalid") next.fault = run.fault || makeFault(run, (faultCuts || []).map(reasonOf), "measurement", now);
-  else if (decided) next.fault = null;
+  else if (state === "verified") next.fault = null;
 
   const laps = [];
   if (run.mode === "laps") {

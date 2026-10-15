@@ -129,7 +129,7 @@ export function validateNodeId(s) {
 }
 
 // 64-bit tick as a decimal string or safe integer -> string; undefined when invalid, null when absent.
-export function tickToText(v) {
+function tickToText(v) {
   if (v === undefined || v === null) return null;
   if (typeof v === "number" && Number.isSafeInteger(v) && v >= 0) return String(v);
   if (typeof v === "string" && /^\d{1,20}$/.test(v) && BigInt(v) <= MASTER_TICK_MAX) return v;
@@ -146,11 +146,7 @@ export function bootIdText(value) {
   return n <= MASTER_TICK_MAX ? String(n) : null;
 }
 
-export function validBootId(value) {
-  return bootIdText(value) !== null;
-}
-
-export function normalizeNodeId(token) {
+function normalizeNodeId(token) {
   const s = String(token ?? "");
   return s === NODE_MASTER ? s : s.toUpperCase();
 }
@@ -260,13 +256,13 @@ export function parseLine(line) {
   }
 }
 
-export const CONTRACT_SENSOR_ROLE = "Board Is Not a Master";
-export const CONTRACT_VERSION = "Firmware and Console Protocols Do Not Match";
+export const CONTRACT_SENSOR_ROLE = "Board is not a master";
+export const CONTRACT_VERSION = "Firmware and console protocols do not match";
 
 // The master may be used for measurement only after an I line of this exact contract.
 export function contractOf(identity) {
-  if (!identity) return { ok: false, reason: "Waiting for Master Identification" };
-  if (identity.product !== USB_PRODUCT) return { ok: false, reason: `Unexpected device: ${identity.product}.` };
+  if (!identity) return { ok: false, reason: "Waiting for master identification" };
+  if (identity.product !== USB_PRODUCT) return { ok: false, reason: `Unexpected device: ${identity.product}` };
   if (identity.usbProto !== USB_PROTO_VERSION || identity.radioProto !== RADIO_PROTO_VERSION || identity.ticksPerMs !== Number(MASTER_TICKS_PER_MS)) {
     return { ok: false, reason: CONTRACT_VERSION, label: "Protocol Mismatch", action: "Update the firmware and console" };
   }

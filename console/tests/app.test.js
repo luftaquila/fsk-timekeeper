@@ -267,7 +267,7 @@ describe("app under jsdom", () => {
     await waitFor(() => timing.live.crossings.length === 2);
     await flushPromises();
     assert.deepEqual(wrapper.findAll(".sensors h3").map((el) => el.text()), ["🟢 Start", "🏁 Finish"]);
-    assert.match(wrapper.text(), /\+00:00\.8\d\d/);
+    assert.match(wrapper.findAll(".sensors .card")[1].find(".crossing-time").text(), /^00:00\.8\d\d$/);
     // Each role has one sensor: the two first crossings decide the sprint on arrival.
     await waitFor(() => timing.run.verification === "verified");
     await waitFor(() => timing.run.durationNs != null, 4000);
@@ -275,7 +275,41 @@ describe("app under jsdom", () => {
     assert.doesNotMatch(wrapper.find(".result-body").text(), /Verified|GPS|nominal 16 MHz/);
     assert.equal(wrapper.findAll(".chk").length, 0);
     assert.match(wrapper.find(".result-time").text(), /^00:00\.8\d\d$/);
-    assert.ok(wrapper.find(".traffic-light.red").exists(), "red light after completion");
+    assert.ok(wrapper.find(".traffic-light.green").exists(), "keeps running after the first finish");
+    assert.equal(timing.armed, true);
+    assert.equal(timing.run.closed, false);
+    const firstResult = timing.run.durationNs;
+    const { useHistoryStore } = await import("../src/stores/history");
+    const history = useHistoryStore(pinia);
+    await waitFor(() => history.rows.length === 1 && history.rows[0].durationNs === firstResult);
+    assert.equal(history.rows[0].closed, false, "first finish saves before Stop");
+    const elapsed = timing.live.clockDisplay;
+    await waitFor(() => timing.live.clockDisplay !== elapsed);
+    fake.crossing(a);
+    fake.crossing(b, { offsetMs: 800 });
+    await waitFor(() => timing.live.crossings.length === 4);
+    await flushPromises();
+    assert.equal(wrapper.findAll(".sensors .card")[0].findAll(".rec-list li").length, 2);
+    assert.equal(wrapper.findAll(".sensors .card")[1].findAll(".rec-list li").length, 2);
+    assert.equal(timing.run.durationNs, firstResult);
+    assert.equal(history.rows.length, 1, "later crossings do not add another result");
+    assert.equal(history.rows[0].durationNs, firstResult);
+    // Stop must freeze the elapsed clock, not replace it with the first finish result.
+    const stopNow = Date.now();
+    timing.live.startedAt = stopNow - 12345;
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(stopNow);
+    await wrapper.findAll("button").find(btn => btn.text() === "Stop").trigger("click");
+    nowSpy.mockRestore();
+    await flushPromises();
+    assert.equal(timing.armed, false);
+    assert.ok(wrapper.find(".traffic-light.red").exists(), "stops only after Stop");
+    const stoppedClock = timing.live.clockDisplay;
+    assert.equal(stoppedClock, "00:12.345");
+    assert.equal(timing.run.durationNs, firstResult);
+    fake.crossing(a);
+    await sleep(100);
+    assert.equal(timing.live.crossings.length, 4);
+    assert.equal(timing.live.clockDisplay, stoppedClock);
 
     await router.push("/history");
     await flushPromises();
@@ -283,8 +317,6 @@ describe("app under jsdom", () => {
     assert.match(wrapper.text(), /Start → Finish/);
 
     // A saved fault must remain readable without hovering over a status chip.
-    const { useHistoryStore } = await import("../src/stores/history");
-    const history = useHistoryStore(pinia);
     const saved = history.rows[0];
     const priorFault = saved.fault;
     saved.fault = { reasons: [{ role: "finish", reason: `Sensor ${b} lost captures.`, lo: saved.boundaryTick, hi: null }] };

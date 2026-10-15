@@ -11,7 +11,7 @@ import { FLAG_HEALTHY, FLAG_TIME_UNKNOWN, NODE_MASTER } from "./protocol";
 const HALF = 0x80000000;
 const KIND_ORDER = { capture: 0, loss: 1, checkpoint: 2 };
 
-export const HOLE_REASON = {
+const HOLE_REASON = {
   loss: "Capture Loss",
   unknownLoss: "Capture Loss (Time Unknown)",
   unhealthy: "Invalid Capture Clock",

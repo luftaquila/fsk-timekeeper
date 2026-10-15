@@ -159,7 +159,7 @@ describe("reference cases (D = 300 ms)", () => {
     const r = ev(run, log);
     assert.equal(r.run.verification, "verified");
     assert.equal(secs(r.run.startTick, r.run.finishTick), 4);
-    assert.equal(r.run.closed, true);
+    assert.equal(r.run.closed, false);
     assert.equal(r.run.fault, null);
   });
 
@@ -186,9 +186,39 @@ describe("reference cases (D = 300 ms)", () => {
     log.capture("B", 4010);
     r = ev(run, log);
     assert.equal(r.run.verification, "verified");
-    assert.equal(r.run.closed, true);
-    assert.equal(r.run.armed, false);
+    assert.equal(r.run.closed, false);
+    assert.equal(r.run.armed, true);
     assert.equal(secs(r.run.startTick, r.run.finishTick), 4);
+  });
+
+  it("keeps recording both sensors after the first finish until Stop", () => {
+    const log = sprintLog();
+    const run = start(log, "sprint", SPRINT);
+    log.capture("A", 1000);
+    log.capture("B", 5000);
+    let r = ev(run, log);
+    log.capture("A", 6000);
+    log.capture("B", 7000);
+    r = ev(r.run, log);
+    assert.equal(r.run.armed, true);
+    assert.equal(r.run.closed, false);
+    assert.equal(r.run.verification, "verified");
+    assert.equal(r.run.startTick, tick(1000));
+    assert.equal(r.run.finishTick, tick(5000));
+    assert.deepEqual(r.crossings.map(c => [c.role, c.tick]), [
+      ["start", tick(1000)], ["start", tick(6000)],
+      ["finish", tick(5000)], ["finish", tick(7000)],
+    ]);
+    const stopped = stopRun(r.run);
+    assert.equal(stopped.armed, false);
+    assert.equal(stopped.closed, true);
+    assert.equal(secs(stopped.startTick, stopped.finishTick), 4);
+
+    const ended = ev(endMasterSession(r.run), log).run;
+    assert.equal(ended.closed, true);
+    assert.equal(ended.armed, false);
+    assert.equal(ended.verification, "verified");
+    assert.equal(secs(ended.startTick, ended.finishTick), 4);
   });
 
   it("F: a finish before the first start is ignored without a warning", () => {

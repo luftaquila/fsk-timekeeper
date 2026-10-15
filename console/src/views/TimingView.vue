@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed } from "vue";
+import { computed } from "vue";
 import { useTimingStore } from "../stores/timing";
 import { useSettingsStore } from "../stores/settings";
 import { MODE_LABEL } from "../lib/constants";
@@ -11,7 +11,10 @@ import TimerCard from "../components/TimerCard.vue";
 
 const timing = useTimingStore();
 const settings = useSettingsStore();
-const note = ref(settings.state.lastNote || "");
+const note = computed({
+  get: () => settings.state.lastNote,
+  set: (value) => settings.rememberNote(value),
+});
 
 // The page follows the open run's mode; with no run, the selected mode.
 const mode = computed(() => timing.run?.mode ?? settings.state.mode);
@@ -74,7 +77,7 @@ function deltaBefore(index) {
             <div v-if="!startList.length" class="empty-state">No crossing yet</div>
             <ul v-else class="rec-list">
               <li v-for="c in startList" :key="c.key" :class="{ confirmed: c.confirmed }">
-                <span class="mono">{{ formatDuration(c.ns) }}</span>
+                <span class="crossing-time mono">{{ formatDuration(c.ns) }}</span>
                 <span class="who mono">{{ c.node_id }}</span>
               </li>
             </ul>
@@ -86,7 +89,7 @@ function deltaBefore(index) {
             <div v-if="!finishList.length" class="empty-state">No crossing yet</div>
             <ul v-else class="rec-list">
               <li v-for="c in finishList" :key="c.key" :class="{ confirmed: c.confirmed }">
-                <span class="mono">{{ c.ns != null ? `+${formatDuration(c.ns)}` : "—" }}</span>
+                <span class="crossing-time mono">{{ formatDuration(c.ns) }}</span>
                 <span class="who mono">{{ c.node_id }}</span>
               </li>
             </ul>
@@ -171,7 +174,8 @@ function deltaBefore(index) {
 <style scoped>
 .sensors {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: start;
   gap: 1.5rem;
 }
 .rec-list {
@@ -182,20 +186,26 @@ function deltaBefore(index) {
 }
 .rec-list li {
   display: flex;
-  align-items: center;
-  gap: 0.75rem;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.75rem;
   padding: 0.4rem 0.6rem;
   border-radius: 6px;
   background: var(--bg-secondary);
-  font-size: 1.05rem;
+  font-size: 1.5rem;
+  line-height: 1.4;
   color: var(--text-secondary);
 }
 .rec-list li.confirmed {
   color: var(--text-primary);
 }
+.crossing-time {
+  font-weight: 400;
+  white-space: nowrap;
+}
 .who {
   margin-left: auto;
-  font-size: 1.05rem;
+  font-size: 1.125rem;
   color: var(--text-secondary);
 }
 .stats {
@@ -207,7 +217,7 @@ function deltaBefore(index) {
   padding: 0;
 }
 .stat .k {
-  font-size: 1rem;
+  font-size: 1.125rem;
   font-weight: 600;
   color: var(--text-primary);
   padding: 0.65rem 1rem;
@@ -283,6 +293,7 @@ function deltaBefore(index) {
   align-items: center;
   gap: 1.5rem;
   flex-wrap: wrap;
+  padding: 1.25rem 2rem;
 }
 .result-time {
   font-size: 2.5rem;
@@ -295,7 +306,7 @@ function deltaBefore(index) {
   align-items: flex-start;
 }
 .lbl {
-  font-size: 0.85rem;
+  font-size: 1rem;
   color: var(--text-secondary);
 }
 .lbl.bad {
@@ -305,11 +316,8 @@ function deltaBefore(index) {
   flex-basis: 100%;
   margin: 0;
   padding-left: 1.2rem;
-  font-size: 0.85rem;
+  font-size: 1rem;
   color: var(--accent-danger);
-}
-.fault-list .win {
-  color: var(--text-tertiary);
 }
 @media (max-width: 900px) {
   .stats {
