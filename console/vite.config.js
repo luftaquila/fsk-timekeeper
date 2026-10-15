@@ -1,6 +1,7 @@
 import { defineConfig } from "vite";
 import vue from "@vitejs/plugin-vue";
 import { resolve } from "path";
+import { readFileSync } from "node:fs";
 import { viteSingleFile } from "vite-plugin-singlefile";
 
 // `single` inlines every asset into dist-single/index.html so the page runs
@@ -13,6 +14,10 @@ export default defineConfig(({ mode }) => {
     plugins: [vue(), single && viteSingleFile()],
     server: {
       port: 9810,
+      https: process.env.FSK_TLS_CERT && process.env.FSK_TLS_KEY ? {
+        cert: readFileSync(process.env.FSK_TLS_CERT),
+        key: readFileSync(process.env.FSK_TLS_KEY),
+      } : undefined,
     },
     build: {
       outDir: single ? "dist-single" : "dist",
