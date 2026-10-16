@@ -1,6 +1,6 @@
 import { describe, it } from "vitest";
 import assert from "node:assert/strict";
-import { wirelessQuality, telemetryAgeMs, missingRoles, pipelineHealth } from "../src/lib/quality.js";
+import { wirelessQuality, telemetryAgeMs, missingRoles, pipelineHealth, timingHealth } from "../src/lib/quality.js";
 
 const NOW = 1_700_000_000_000;
 function healthy(node, extra = {}) {
@@ -13,10 +13,11 @@ function healthy(node, extra = {}) {
     snr: 9,
     skew_ppm: 12,
     provisioned: 1,
+    diag_valid: 1,
     sync_valid: 1,
     skew_valid: 1,
     clock_source: "xtal",
-    sync_age_ms: 9000, // no separate age check: the sync_valid flag decides
+    sync_age_ms: 100,
     queue_depth: 0,
     ...extra,
   };
@@ -31,6 +32,44 @@ function gate(mode, mappings, telemetry, { masterFresh = true, contract, pipelin
 const ALL = () => ({ 0: healthy("0"), A: healthy("A"), B: healthy("B") });
 
 describe("wirelessQuality", () => {
+  it("shares diagnostic validity, sync expiry and drift limits with Timing", () => {
+    const cases = [
+      [{ diag_valid: 0, clock_source: "rc", sync_age_ms: 65535 }, "CONNECTING", false],
+      [{ diag_valid: 0 }, "CONNECTING", false],
+      [{ diag_valid: 0, skew_ppm: -199, skew_valid: 0 }, "CONNECTING", false],
+      [{ clock_source: "rc" }, "XTAL FAIL", false],
+      [{ sync_age_ms: 6000 }, "OK", true], // one second since this report
+      [{ sync_age_ms: 6001 }, "SYNC INVALID", false],
+      [{ sync_age_ms: null }, "SYNC INVALID", false],
+      [{ skew_ppm: 100 }, "OK", true],
+      [{ skew_ppm: -100 }, "OK", true],
+      [{ skew_ppm: 101, skew_valid: 0 }, "CLOCK DRIFT", false],
+      [{ skew_ppm: -101, skew_valid: 0 }, "CLOCK DRIFT", false],
+      [{ skew_ppm: -199, skew_valid: 0 }, "CLOCK DRIFT", false],
+      [{ skew_ppm: 200, skew_valid: 0 }, "CLOCK DRIFT", false],
+      [{ skew_ppm: 12, skew_valid: 0 }, "SYNC INVALID", false],
+      [{ capture_overflow: 5, fifo_drop: 12 }, "OK", true],
+      [{ received_at: NOW - 12000, sync_age_ms: 0 }, "SYNC INVALID", false],
+      [{ received_at: NOW - 12001 }, "UNKNOWN", false],
+    ];
+    for (const [extra, label, ok] of cases) {
+      const t = healthy("A", extra);
+      const health = timingHealth(t, { now: NOW });
+      assert.equal(health.label, label, JSON.stringify(extra));
+      assert.equal(health.ok, ok);
+      assert.equal(gate("sprint", SPRINT, { ...ALL(), A: t }).ok, ok);
+    }
+  });
+
+  it("keeps a live connection usable during reauthentication and expires pending reports", () => {
+    const admission = { state: "WAIT", at: NOW };
+    assert.equal(timingHealth(null, { nodeId: "A", admission, now: NOW }).label, "CONNECTING");
+    assert.equal(timingHealth(null, { nodeId: "A", admission, now: NOW + 12001 }).label, "UNKNOWN");
+    assert.equal(timingHealth(healthy("A"), { admission, now: NOW }).label, "OK");
+    assert.equal(timingHealth(healthy("A"), { connected: false, now: NOW }).label, "UNKNOWN");
+    assert.equal(timingHealth(healthy("0", { sync_age_ms: 65535, skew_ppm: 500 }), { now: NOW }).label, "OK");
+  });
+
   it("passes with a fresh master and healthy mapped sensors", () => {
     assert.deepEqual(gate("sprint", SPRINT, ALL()), { ok: true, reasons: [], mappings: SPRINT });
   });
@@ -43,7 +82,7 @@ describe("wirelessQuality", () => {
     t[0] = healthy("0", { received_at: NOW - 12001 });
     assert.match(gate("sprint", SPRINT, t).reasons[0].reason, /No recent status report from master/);
     const r = gate("sprint", SPRINT, { ...ALL(), 0: healthy("0", { provisioned: 0, clock_source: "rc" }) }).reasons;
-    assert.deepEqual(r.map((x) => x.reason), ["Master HFXO not confirmed", "Master has no radio key"]);
+    assert.deepEqual(r.map((x) => x.reason), ["Master has no radio key", "Master HFXO not confirmed"]);
   });
 
   it("requires every role of the mode to be mapped", () => {
@@ -65,7 +104,7 @@ describe("wirelessQuality", () => {
     });
     assert.deepEqual(
       bad.reasons.map((r) => `${r.node_id}:${r.reason.split(" ").slice(-2).join(" ")}`),
-      ["A:link: STALE", "A:radio key", "A:not confirmed", "A:not valid", "A:(101 ppm)", "B:not valid"],
+      ["A:link: STALE", "B:not valid"],
     );
   });
 

@@ -5,34 +5,19 @@
 #include "mac_schedule.h"
 #include "proto_usb.h" /* PU_STATE_LOST */
 
+static void open_window(master_admission_t *a, uint32_t now)
+{
+    a->join_until_ms = now + JOIN_WINDOW_MS;
+    a->quiet_frames = 0;
+}
+
 void master_admission_session(master_admission_t *a, uint32_t now)
 {
     memset(a->pending, 0, sizeof(a->pending));
     memset(a->seen, 0, sizeof(a->seen));
     a->seen_count = a->seen_next = 0;
     a->next_link = 0;
-    master_admission_open(a, now);
-}
-
-void master_admission_open(master_admission_t *a, uint32_t now)
-{
-    a->join_until_ms = now + JOIN_WINDOW_MS;
-    a->quiet_frames = 0;
-}
-
-int master_admission_forget(master_admission_t *a, registry_t *r, uint32_t id, uint32_t now)
-{
-    int found = 0;
-    for (unsigned i = 0; i < MAX_NODES; i++) {
-        if (r->e[i].used && r->e[i].id == id) {
-            memset(&r->e[i], 0, sizeof(r->e[i])); found = 1;
-        }
-        if (a->pending[i].phase != ADMISSION_EMPTY && a->pending[i].id == id) {
-            memset(&a->pending[i], 0, sizeof(a->pending[i])); found = 1;
-        }
-    }
-    if (found) { master_admission_open(a, now); }
-    return found;
+    open_window(a, now);
 }
 
 static int join_open(const master_admission_t *a, uint32_t now)
@@ -78,7 +63,7 @@ static admission_result_t on_join(master_admission_t *a, registry_t *r, const ui
     seen->id = meta.node_id; seen->boot = meta.boot_id; memcpy(seen->ns, j.ns, 16);
     a->seen_next = (uint8_t)((a->seen_next + 1u) % 8u);
     if (a->seen_count < 8u) { a->seen_count++; }
-    if (!join_open(a, now)) { master_admission_open(a, now); }
+    if (!join_open(a, now)) { open_window(a, now); }
     a->request_seen = 1;
     *id = meta.node_id;
     return ADMISSION_WAIT;
@@ -111,6 +96,7 @@ static admission_result_t on_confirm(master_admission_t *a, registry_t *r, const
          * for this sensor boot; only a fresh uplink can restore diagnostics. */
         e->diag.health = 0;
         e->diag.sync_age_ms = UINT16_MAX;
+        e->diag_valid = 0;
         memcpy(e->data_key, p->keys.data, 32);
         memset(&e->rx, 0, sizeof(e->rx));
         memset(p, 0, sizeof(*p));

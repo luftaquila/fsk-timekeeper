@@ -11,7 +11,7 @@ vi.mock("../src/stores/timing", () => ({ useTimingStore: () => timing }));
 vi.mock("../src/firmware/protocol", async importOriginal => ({ ...await importOriginal(), flashFirmware: flash }));
 const app = { getInfo: () => ({ usbVendorId: 0x1999, usbProductId: 0x0515 }) };
 const boot = { getInfo: () => ({ usbVendorId: 0x239a, usbProductId: 0x0029 }) };
-const identity = { product: "FSK-WL", devid: "0123456789ABCDEF", fw: "v1.2.3", usbProto: 6, radioProto: 15 };
+const identity = { product: "FSK-WL", devid: "0123456789ABCDEF", fw: "v1.2.3", usbProto: 7, radioProto: 15 };
 let serial;
 async function ready(options) {
   const store = useFirmwareStore();

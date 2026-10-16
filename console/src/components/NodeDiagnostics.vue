@@ -3,13 +3,16 @@ import { computed, ref, onMounted, onUnmounted } from "vue";
 import MetricValue from "./MetricValue.vue";
 import { useDeviceStore } from "../stores/device";
 import { fmtNum, fmtPpm, fmtAgeMs } from "../lib/format";
-import { telemetryFresh } from "../lib/quality";
+import { telemetryFresh, timingHealth } from "../lib/quality";
 import { errorNames, ERROR_BITS, MASTER_QUEUE_CAPACITY } from "../lib/protocol";
 
 const props = defineProps({ nodeId: { type: String, required: true } });
 const device = useDeviceStore();
 const report = computed(() => device.telemetry[props.nodeId]);
 const now = ref(Date.now());
+const health = computed(() => timingHealth(report.value, {
+  nodeId: props.nodeId, connected: device.connected, admission: device.admission?.[props.nodeId], now: now.value,
+}));
 let timer = null;
 onMounted(() => {
   timer = setInterval(() => (now.value = Date.now()), 1000);
@@ -41,18 +44,6 @@ function clockDrift(r) {
   }
   return { parts: [metric(fmtNum(r.skew_ppm), "ppm")] };
 }
-function timingHealth(r) {
-  if (r.provisioned !== 1) return { state: "bad", label: "NO KEY SET" };
-  if (r.clock_source !== "xtal") return { state: "bad", label: "XTAL FAIL" };
-  if (isMaster(r)) {
-    if (r.queue_depth >= MASTER_QUEUE_CAPACITY) return { state: "warn", label: "QUEUE FULL" };
-    return { state: "good", label: r.queue_depth > 0 ? `${r.queue_depth} QUEUED` : "OK",
-      parts: r.queue_depth > 0 ? [metric(r.queue_depth, "QUEUED")] : undefined };
-  }
-  if (r.capture_overflow || r.fifo_drop) return { state: "bad", label: "DATA LOSS" };
-  if (r.sync_valid !== 1 || r.skew_valid !== 1) return { state: "bad", label: "SYNC INVALID" };
-  return { state: "good", label: `OK (${r.sync_age_ms ?? "-"} ms)`, parts: ["OK", { ...metric(r.sync_age_ms ?? "-", "ms"), parenthesized: true }] };
-}
 const errors = computed(() => {
   const r = report.value;
   let flags = r?.err_flags;
@@ -62,6 +53,10 @@ const errors = computed(() => {
       (r.queue_depth >= MASTER_QUEUE_CAPACITY ? ERROR_BITS.QUEUE_FULL : 0);
   }
   const items = errorNames(flags).map((label) => ({ label, tone: "badge-danger" }));
+  if (props.nodeId !== "0" && r?.diag_valid === 1) {
+    if (r.capture_overflow > 0) items.push({ label: `Capture losses (total): ${r.capture_overflow}`, tone: "badge-warning" });
+    if (r.fifo_drop > 0) items.push({ label: `FIFO losses (total): ${r.fifo_drop}`, tone: "badge-warning" });
+  }
   if (props.nodeId === "0") {
     if (device.identity && !device.contract.ok) items.push({ label: device.contract.label || device.contract.reason, tone: "badge-danger" });
     if (r?.tx_drop > 0) items.push({ label: `USB TX drops: ${r.tx_drop}`, tone: "badge-danger" });
@@ -90,14 +85,20 @@ function signalGauge(value, min, max, unit, recommendedMin) {
 }
 const overview = computed(() => {
   const r = report.value;
-  if (!r) return [];
-  const health = timingHealth(r);
+  const h = health.value;
+  const parts = h.ok && h.syncAgeMs != null ? ["OK", { ...metric(Math.round(h.syncAgeMs), "ms"), parenthesized: true }] :
+    h.ok && props.nodeId === "0" && r?.queue_depth > 0 ? [metric(r.queue_depth, "QUEUED")] : undefined;
   const common = [
     { label: "Link", value: reportFresh.value ? stateLabel[r.link_state] || "UNKNOWN" : "NO REPORT",
-      title: reportFresh.value ? undefined : `Last reported link: ${stateLabel[r.link_state] || "UNKNOWN"}`,
+      title: reportFresh.value ? undefined : `Last reported link: ${stateLabel[r?.link_state] || "UNKNOWN"}`,
       tone: reportFresh.value && r.link_state === "online" ? "good" : "warn" },
-    { label: "Timing", value: health.label, parts: health.parts, tone: health.state },
+    { label: "Timing", value: h.label, parts, tone: h.state },
   ];
+  if (!r) return common;
+  if (r.diag_valid !== 1) {
+    const labels = isMaster(r) ? ["Clock Drift"] : ["Clock Drift", "RSSI", "SNR", "Latency", "Beacon Lost", "Battery", "Temperature"];
+    return [...common, ...labels.map((label) => ({ label, value: "—" }))];
+  }
   return isMaster(r) ? [...common,
     { label: "Clock Drift", ...clockDrift(r) },
   ] : [...common,
@@ -112,7 +113,7 @@ const overview = computed(() => {
 });
 const detail = computed(() => {
   const r = report.value;
-  if (!r) return [];
+  if (!r || r.diag_valid !== 1) return [];
   return isMaster(r) ? [
     { label: "Supply Voltage", parts: [voltage(r.batt_mv), "(USB)"] },
     { label: "Temperature", parts: [temperature(r.temp_c10)] },
@@ -130,7 +131,6 @@ const fields = computed(() => {
 
 <template>
   <div class="node-diagnostics" :class="{ 'has-errors': hasErrors, 'master-diagnostics': nodeId === '0', 'sensor-diagnostics': nodeId !== '0' }">
-    <p v-if="!report" class="no-report">No status report received</p>
     <dl v-if="report || hasErrors || fields.length" class="diagnostic-grid">
       <div v-for="field in fields" :key="field.label">
         <dt>{{ field.label }}</dt>

@@ -223,12 +223,9 @@ export const useDeviceStore = defineStore("device", () => {
     }
     switch (msg.type) {
       case "J":
-        if (msg.state === "REMOVED") {
-          delete admission[msg.node]; delete telemetry[msg.node];
-        } else {
-          admission[msg.node] = { state: msg.state, at: now };
-          // Periodic J reports include LOST nodes. Only live D telemetry restores them.
-        }
+        admission[msg.node] = { state: msg.state, at: now };
+        if (msg.state === "WAIT") admissionNotice.value = "";
+        // Periodic J reports include LOST nodes. Only live D telemetry restores them.
         break;
       case "K":
         if (keyReadState.value === "loading") {
@@ -396,7 +393,7 @@ export const useDeviceStore = defineStore("device", () => {
   }
 
   function onErrorLine(msg) {
-    if (msg.reason === "registry_full") admissionNotice.value = "All five sensor slots are in use. Turn off a sensor and wait for it to go offline, or release its slot.";
+    if (msg.reason === "registry_full") admissionNotice.value = "All five sensor slots are in use. Turn off an unused sensor and wait for it to go offline.";
     if (msg.reason === "badcmd" && keyReadState.value === "loading") {
       finishKeyRead("unsupported");
       return;
@@ -528,22 +525,6 @@ export const useDeviceStore = defineStore("device", () => {
     if (!isRadioConfig(cfg)) return Promise.reject(new Error("Radio settings out of range."));
     const line = radioCommand(cfg);
     return provision("R", line, line, ["cfgfail", "cfgapply", "cfgpending", "badcmd"]);
-  }
-
-  async function admissionCommand(node = null) {
-    const timing = useTimingStore();
-    if (!identityOk.value || identity.value?.role !== "M") throw new Error("Connect a compatible master first.");
-    if (timing.armed || timing.starting || timing.classifying) throw new Error("Stop the measurement first.");
-    if (node != null && (!/^[0-9A-F]{8}$/.test(node) || node === "00000000")) throw new Error("Invalid sensor ID.");
-    admissionNotice.value = "";
-    const cmd = node == null ? "JOIN" : "DROP";
-    const line = node == null ? cmd : `${cmd} ${node}`;
-    const result = await provision(cmd, line, line, ["clock", "badcmd", "notfound"]);
-    if (result === "ok" && node != null) {
-      delete admission[node]; delete telemetry[node];
-      useSettingsStore().removeSensor(node);
-    }
-    return result;
   }
 
   function readClock() {
@@ -751,7 +732,6 @@ export const useDeviceStore = defineStore("device", () => {
     telemetry,
     admission,
     admissionNotice,
-    admissionCommand,
     masterBootId,
     pps,
     ppsEdges,

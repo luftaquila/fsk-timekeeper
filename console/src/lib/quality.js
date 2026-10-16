@@ -1,6 +1,6 @@
-/* START gate. Link states are the firmware's (D line); the console only checks that the
- * report is recent. Missing diagnostics are uncertainty, not evidence of a lost capture. */
-import { REQUIRED_ROLES, WIRELESS_STATUS_MAX_AGE_MS, WIRELESS_MAX_SKEW_PPM, QUEUE_HEALTH_RATIO, HEAD_STUCK_MS } from "./constants";
+/* Shared current timing status and START gate. Missing diagnostics are uncertainty,
+ * not evidence of a hardware fault or a lost capture. */
+import { REQUIRED_ROLES, WIRELESS_STATUS_MAX_AGE_MS, WIRELESS_MAX_SKEW_PPM, WIRELESS_SYNC_TTL_MS, QUEUE_HEALTH_RATIO, HEAD_STUCK_MS } from "./constants";
 import { MASTER_QUEUE_CAPACITY } from "./protocol";
 
 const STILL_ARRIVING_MS = 1000; // the master re-sends its head every 100 ms
@@ -13,6 +13,45 @@ export function telemetryAgeMs(telemetry, now = Date.now()) {
 
 export function telemetryFresh(telemetry, now = Date.now()) {
   return telemetryAgeMs(telemetry, now) <= WIRELESS_STATUS_MAX_AGE_MS;
+}
+
+// A valid diagnostic can report a fault. diag_valid only identifies its source.
+export function timingHealth(report, { nodeId = report?.node_id, connected = true, admission, now = Date.now() } = {}) {
+  const master = nodeId === "0";
+  const who = master ? "Master" : `Sensor ${nodeId}`;
+  const result = (label, state, reasons = [], syncAgeMs = null) => ({ ok: state === "good", label, state, reasons, syncAgeMs });
+  if (!connected) return result("UNKNOWN", "warn", ["Master not connected"]);
+  const fresh = telemetryFresh(report, now);
+  // A pending replacement must not invalidate a still-usable active connection.
+  if (!master && admission?.state === "WAIT" && now - admission.at <= WIRELESS_STATUS_MAX_AGE_MS &&
+      !(fresh && report.link_state === "online" && report.diag_valid === 1)) {
+    return result("CONNECTING", "warn", [`${who} is connecting`]);
+  }
+  if (!fresh) return result("UNKNOWN", "warn", [`No recent status report from ${master ? "master" : `sensor ${nodeId}`}`]);
+  if (!master && report.link_state !== "online") {
+    return result("UNKNOWN", "warn", [`${who} link: ${report.link_state === "degraded" ? "STALE" : report.link_state === "lost" ? "LOST" : "UNKNOWN"}`]);
+  }
+  if (report.diag_valid !== 1) return result(master ? "UNKNOWN" : "CONNECTING", "warn", [`${who} has no current diagnostics`]);
+  const issues = [];
+  if (report.provisioned !== 1) issues.push(["NO KEY SET", `${who} has no radio key`]);
+  if (report.clock_source !== "xtal") issues.push([report.clock_source === "rc" ? "XTAL FAIL" : "UNKNOWN", `${who} HFXO not confirmed`]);
+  let syncAgeMs = null;
+  if (master) {
+    if (report.link_state !== "online") issues.push(["UNKNOWN", `Master link: ${report.link_state === "degraded" ? "STALE" : "LOST"}`]);
+  } else {
+    // Firmware clears skew_valid outside the limit but still reports the measured drift.
+    if (Number.isFinite(report.skew_ppm) && Math.abs(report.skew_ppm) > WIRELESS_MAX_SKEW_PPM) {
+      issues.push(["CLOCK DRIFT", `${who} clock drift out of range (${report.skew_ppm} ppm)`]);
+    }
+    syncAgeMs = Number.isFinite(report.sync_age_ms) && report.sync_age_ms >= 0 ? report.sync_age_ms + telemetryAgeMs(report, now) : null;
+    if (report.sync_valid !== 1 || syncAgeMs == null || syncAgeMs > WIRELESS_SYNC_TTL_MS) {
+      issues.push(["SYNC INVALID", `${who} clock sync is not valid`]);
+    }
+    if (report.skew_valid !== 1 || !Number.isFinite(report.skew_ppm)) issues.push(["SYNC INVALID", `${who} clock skew is not valid`]);
+  }
+  if (issues.length) return result(issues[0][0], "bad", issues.map(([, reason]) => reason), syncAgeMs);
+  if (master && report.queue_depth >= MASTER_QUEUE_CAPACITY) return result("QUEUE FULL", "warn", ["Master queue full"]);
+  return result(master && report.queue_depth > 0 ? `${report.queue_depth} QUEUED` : "OK", "good", [], syncAgeMs);
 }
 
 // master: D 0 telemetry. head: { hseq, firstSeenAt, lastSeenAt } of the latest E line.
@@ -35,13 +74,8 @@ export function wirelessQuality({ mode, mappings, telemetry, masterFresh, connec
   else if (!contract.ok) reasons.push({ node_id: "0", reason: contract.reason });
   if (!pipeline.ok) reasons.push({ node_id: "0", reason: pipeline.reason });
 
-  const master = telemetry?.["0"];
-  if (!master || !telemetryFresh(master, now)) {
-    reasons.push({ node_id: "0", reason: "No recent status report from master" });
-  } else {
-    if (master.link_state !== "online") reasons.push({ node_id: "0", reason: `Master link: ${master.link_state === "degraded" ? "STALE" : "LOST"}` });
-    if (master.clock_source !== "xtal") reasons.push({ node_id: "0", reason: "Master HFXO not confirmed" });
-    if (master.provisioned !== 1) reasons.push({ node_id: "0", reason: "Master has no radio key" });
+  for (const reason of timingHealth(telemetry?.["0"], { nodeId: "0", now }).reasons) {
+    reasons.push({ node_id: "0", reason });
   }
 
   for (const role of REQUIRED_ROLES[mode] || []) {
@@ -50,19 +84,8 @@ export function wirelessQuality({ mode, mappings, telemetry, masterFresh, connec
 
   for (const mapping of mappings) {
     const node = String(mapping.node_id);
-    const t = telemetry?.[node];
-    if (!t || !telemetryFresh(t, now)) {
-      reasons.push({ node_id: node, role: mapping.role, reason: `No recent status report from sensor ${node}` });
-      continue;
-    }
-    if (t.link_state !== "online") reasons.push({ node_id: node, role: mapping.role, reason: `Sensor ${node} link: ${t.link_state === "degraded" ? "STALE" : "LOST"}` });
-    if (t.provisioned !== 1) reasons.push({ node_id: node, role: mapping.role, reason: `Sensor ${node} has no radio key` });
-    if (t.clock_source !== "xtal") reasons.push({ node_id: node, role: mapping.role, reason: `Sensor ${node} HFXO not confirmed` });
-    if (t.sync_valid !== 1) reasons.push({ node_id: node, role: mapping.role, reason: `Sensor ${node} clock sync is not valid` });
-    if (t.skew_valid !== 1 || !Number.isFinite(t.skew_ppm)) {
-      reasons.push({ node_id: node, role: mapping.role, reason: `Sensor ${node} clock skew is not valid` });
-    } else if (Math.abs(t.skew_ppm) > WIRELESS_MAX_SKEW_PPM) {
-      reasons.push({ node_id: node, role: mapping.role, reason: `Sensor ${node} clock drift out of range (${t.skew_ppm} ppm)` });
+    for (const reason of timingHealth(telemetry?.[node], { nodeId: node, now }).reasons) {
+      reasons.push({ node_id: node, role: mapping.role, reason });
     }
   }
   return { ok: reasons.length === 0, reasons, mappings };

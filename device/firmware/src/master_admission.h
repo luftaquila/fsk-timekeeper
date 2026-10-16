@@ -1,7 +1,7 @@
 /* Master registration policy. Owns candidates, replay-request history and the
  * admission schedule; the MAC owns radio I/O, deadlines and USB reporting.
  * Time is supplied by the caller. A verified CONFIRM installs a connection;
- * explicit forget removes it. Requests and scheduling leave active entries intact. */
+ * LOST entries can be reused. Requests and scheduling leave active entries intact. */
 #ifndef MASTER_ADMISSION_H
 #define MASTER_ADMISSION_H
 
@@ -39,9 +39,7 @@ typedef enum {
     ADMISSION_FULL, ADMISSION_AUTH_FAILED
 } admission_result_t;
 
-void master_admission_open(master_admission_t *a, uint32_t now);
 void master_admission_session(master_admission_t *a, uint32_t now);
-int master_admission_forget(master_admission_t *a, registry_t *r, uint32_t id, uint32_t now);
 /* MAC checks the protocol version first. id is set for WAIT/ACCEPTED notifications. */
 admission_result_t master_admission_receive(master_admission_t *a, registry_t *r,
                                            const uint8_t *buf, int n, uint32_t now, uint32_t *id);

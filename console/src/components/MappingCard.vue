@@ -43,26 +43,6 @@ function removeSensor(node) {
   settings.removeSensor(node);
 }
 
-const admissionBusy = ref(false);
-const admissionMessage = ref("");
-async function changeAdmission(node = null) {
-  if (removalBlocked.value || admissionBusy.value) return;
-  admissionBusy.value = true; admissionMessage.value = "";
-  try {
-    const result = await device.admissionCommand(node);
-    admissionMessage.value = result === "ok" ? (node ? "Registration released. Keep the old sensor off during replacement." : "Looking for sensors (up to 30 seconds).") : `Request failed: ${result}`;
-  } catch (error) { admissionMessage.value = error.message; }
-  finally { admissionBusy.value = false; }
-}
-function connectionState(node) {
-  const a = device.admission[node];
-  if (!device.connected || !a || now.value - a.at > 17000) return "";
-  if (a.state === "WAIT") return "Connecting";
-  const t = device.telemetry[node];
-  return telemetryFresh(t, now.value) && t.link_state !== "lost" &&
-    t.sync_age_ms + now.value - t.received_at <= 7000 && t.sync_valid === 1 && t.skew_valid === 1 && t.clock_source === "xtal" ? "Ready to measure" : "Synchronizing";
-}
-
 function updateMapping(node, changes) {
   const current = settings.mappingOf(node) ?? { role: "unused", note: "" };
   settings.setMapping(node, { ...current, ...changes });
@@ -74,14 +54,13 @@ function updateMapping(node, changes) {
   <div class="card sensor-card">
     <div class="card-header mapping-header">
       <h3><span class="heading-icon" aria-hidden="true">🔭</span><span>Sensors</span> <span class="sensor-count count-chip">{{ nodes.length }}</span></h3>
-      <button class="btn btn-secondary btn-sm" type="button" :disabled="!device.identityOk || removalBlocked || admissionBusy" @click="changeAdmission()">Add sensors</button>
       <label class="debounce-control">
         <span>Debounce</span>
         <input type="text" inputmode="numeric" class="form-input debounce-input" :value="settings.state.debounceMs" :disabled="timing.armed" @input="digitsOnly" @change="onDebounce" />
         <span>ms</span>
       </label>
     </div>
-    <p v-if="device.admissionNotice || admissionMessage" class="admission-message" role="status">{{ device.admissionNotice || admissionMessage }}</p>
+    <p v-if="device.admissionNotice" class="admission-message" role="status">{{ device.admissionNotice }}</p>
     <div v-if="!nodes.length" class="card-body empty-state">{{ device.connected ? "No Sensors Detected" : "Connect the master to detect sensors" }}</div>
     <div v-else class="sensor-list">
       <article v-for="node in nodes" :key="node" class="sensor" :aria-label="`Sensor ${node}`">
@@ -89,8 +68,6 @@ function updateMapping(node, changes) {
           <div class="sensor-title">
             <h4 class="device-id mono">{{ node }}</h4>
             <NodeAge :node-id="node" />
-            <span v-if="connectionState(node)" class="connection-state">{{ connectionState(node) }}</span>
-            <button v-if="device.identityOk" class="btn btn-ghost btn-sm" type="button" :disabled="removalBlocked || admissionBusy" @click="changeAdmission(node)">Release slot</button>
             <button v-if="missing(node)" class="btn btn-ghost btn-sm remove-sensor" type="button" :disabled="removalBlocked" @click="removeSensor(node)">Remove</button>
           </div>
           <div class="mapping-controls">
@@ -113,7 +90,6 @@ function updateMapping(node, changes) {
 
 <style scoped>
 .admission-message { padding: 0 1.25rem; }
-.connection-state { color: var(--text-secondary); font-size: 0.85rem; }
 .mapping-header, .sensor-heading {
   display: flex;
   flex-wrap: wrap;

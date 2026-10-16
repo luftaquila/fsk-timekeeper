@@ -24,6 +24,7 @@ export const REQUIRED_ROLES = Object.freeze({
 // The master refreshes registered sensors every 5 seconds, including LOST entries.
 export const WIRELESS_STATUS_MAX_AGE_MS = 12000;
 export const WIRELESS_MAX_SKEW_PPM = 100;
+export const WIRELESS_SYNC_TTL_MS = 7000;
 
 // START refuses while the master's host queue is this full, or while the same E line keeps
 // arriving for longer than HEAD_STUCK_MS.

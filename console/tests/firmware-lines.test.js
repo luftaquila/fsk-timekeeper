@@ -1,4 +1,4 @@
-// The USB v5 contract on both sides: device/firmware/tests/usb_lines.txt holds lines printed
+// The USB v7 contract on both sides: device/firmware/tests/usb_lines.txt holds lines printed
 // by the firmware's own formatters with extreme values (`make test` checks the file against
 // them), and the console parses the same file.
 import { describe, it } from "vitest";
@@ -12,7 +12,7 @@ const LINES = readFileSync(resolve(__dirname, "../../device/firmware/tests/usb_l
 describe("firmware-formatted lines", () => {
   it("I: the contract accepts a master and names a sensor-role board", () => {
     const m = parseLine(LINES[0]);
-    assert.equal(m.usbProto, 6);
+    assert.equal(m.usbProto, 7);
     assert.deepEqual(radioOf(m), { freqKhz: 922900, powerDbm: 12, lbt: 1 });
     assert.deepEqual(radioOf(parseLine(LINES[1])), { freqKhz: 803000, powerDbm: -9, lbt: 0 });
     assert.equal(m.radioProto, 15);
@@ -60,11 +60,13 @@ describe("firmware-formatted lines", () => {
     assert.equal(s.sync_valid, 1);
     assert.equal(s.skew_valid, 0);
     assert.equal(s.fifo_drop, 2);
+    assert.equal(s.diag_valid, 1);
     assert.deepEqual(errorNames(s.err_flags), ["ACK anomaly"]);
     assert.equal(s.reset_reason, 64);
     assert.equal(s.sensor_boot_id, "9007199254740993");
     const m = normalizeTelemetry(parseLine(LINES[9]).telemetry, 1000);
     assert.equal(m.queue_depth, 3);
+    assert.equal(m.diag_valid, 1);
     assert.equal(m.ver_drop, 5);
     assert.equal(m.tx_drop, 9);
     const p = normalizePps(parseLine(LINES[10]).pps, 1);

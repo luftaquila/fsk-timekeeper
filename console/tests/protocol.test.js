@@ -8,8 +8,8 @@ const C_LINE = withCrc("E 17 0D2243B0 C 1234 7 3735928559 305419896 120 -91.50 9
 const L_LINE = withCrc("E 18 0D2243B0 L 1235 7 3735928559 305419896 120 -91.50 9.25 44 45 123456789030000000 123456789031000000");
 const K_LINE = withCrc("E 19 0D2243B0 K 1236 7 3735928559 305419896 120 -91.50 9.25 45 123456789040000000 1 2 3 4 5 6 3 1 2 2");
 const M_LINE = withCrc("E 20 0 L 0 0 3735928559 3735928559 0 0.00 0.00 0 0 123456789050000000 123456789050000000");
-const D_LINE = "D 0D2243B0 OK 12 3 0 4321 -91.50 9.25 22 315 3987 0 1 1 1 XTAL 800 0 0 0 0 5 0 0 4 305419896 3735928559 3 1 2 2";
-const D_MASTER = "D 0 OK 0 0 0 0 0.00 0.00 0 305 4123 2 1 1 1 XTAL 0 0 0 3 1 256 7 2 0 0 3735928559 0 0 0 0";
+const D_LINE = "D 0D2243B0 OK 12 3 0 4321 -91.50 9.25 22 315 3987 0 1 1 1 XTAL 800 0 0 0 0 5 0 0 4 305419896 3735928559 3 1 2 2 1";
+const D_MASTER = "D 0 OK 0 0 0 0 0.00 0.00 0 305 4123 2 1 1 1 XTAL 0 0 0 3 1 256 7 2 0 0 3735928559 0 0 0 0 1";
 
 describe("crc32", () => {
   it("is CRC-32/IEEE", () => {
@@ -19,6 +19,13 @@ describe("crc32", () => {
 });
 
 describe("parseLine", () => {
+  it("requires an explicit diagnostic validity flag and rejects the old live contract", () => {
+    const tokens = D_LINE.split(" ");
+    const prefix = tokens.slice(0, 32).join(" ");
+    for (const suffix of ["", " 2", " -1", " x", " 1 extra"]) assert.equal(parseLine(prefix + suffix).telemetry, null);
+    assert.equal(normalizeTelemetry(parseLine(prefix + " 0").telemetry).diag_valid, 0);
+    assert.equal(contractOf(parseLine("I FSK-WL 6 1.0.0 0123456789ABCDEF M 15 922900 7 250.00 16000 4 -9 0")).ok, false);
+  });
   it("distinguishes radio clock and initialization faults from MCU HFXO", () => {
     assert.deepEqual(errorNames(0x3020), ["HFXO restart", "radio oscillator / PLL failure", "radio initialization failure"]);
   });
@@ -29,9 +36,9 @@ describe("parseLine", () => {
       assert.deepEqual(parseLine(line), { type: "K", key: null });
     }
   });
-  it("parses I v5 and checks the contract", () => {
-    const i = parseLine("I FSK-WL 6 1.0.0 0123456789ABCDEF M 15 922900 7 250.00 16000 4 -9 0");
-    assert.deepEqual(i, { type: "I", product: "FSK-WL", usbProto: 6, fw: "1.0.0", devid: "0123456789ABCDEF", role: "M", radioProto: 15, freqKhz: 922900, sf: 7, bw: 250, ticksPerMs: 16000, resetReason: 4, powerDbm: -9, lbt: 0, v1: false });
+  it("parses I v7 and checks the contract", () => {
+    const i = parseLine("I FSK-WL 7 1.0.0 0123456789ABCDEF M 15 922900 7 250.00 16000 4 -9 0");
+    assert.deepEqual(i, { type: "I", product: "FSK-WL", usbProto: 7, fw: "1.0.0", devid: "0123456789ABCDEF", role: "M", radioProto: 15, freqKhz: 922900, sf: 7, bw: 250, ticksPerMs: 16000, resetReason: 4, powerDbm: -9, lbt: 0, v1: false });
     assert.deepEqual(radioOf(i), { freqKhz: 922900, powerDbm: -9, lbt: 0 });
     assert.equal(radioOf(parseLine("I FSK-WL 3 1.0.0 0123456789ABCDEF M 15 921.30 7 250.00 16000 4")), null);
     assert.deepEqual(contractOf(i), { ok: true, reason: null });
@@ -65,13 +72,13 @@ describe("parseLine", () => {
   it("rejects incomplete or invalid recovery summaries", () => {
     const prefix = D_LINE.split(" ").slice(0, 28).join(" ");
     for (const suffix of ["", "1 0 2", "1 2 2 2", "-1 0 2 2", "65536 0 2 2", "1 0 9 2", "1 0 2 4", "0 0 2 2", "1 0 0 0"]) {
-      assert.equal(parseLine(`${prefix} ${suffix}`).telemetry, null, suffix);
+      assert.equal(parseLine(`${prefix} ${suffix} 1`).telemetry, null, suffix);
     }
     assert.deepEqual(normalizeTelemetry(parseLine(D_LINE).telemetry).recovery, { count: 3, failures: 1, reason: 2, result: 2 });
     assert.deepEqual(errorNames(1), []); // legacy reset history must never become an active error
   });
 
-  it("parses the 32-token D line", () => {
+  it("parses the 33-token D line", () => {
     const t = normalizeTelemetry(parseLine(D_LINE).telemetry, 1_000_000);
     assert.equal(t.node_id, "0D2243B0");
     assert.equal(t.link_state, "online");
@@ -79,6 +86,7 @@ describe("parseLine", () => {
     assert.equal(t.last_seen_at, 1_000_000 - 4321);
     assert.equal(t.received_at, 1_000_000);
     assert.equal(t.sync_age_ms, 800);
+    assert.equal(t.diag_valid, 1);
     assert.equal(t.err_flags, 5);
     assert.deepEqual(errorNames(t.err_flags), ["SPI timeout"]);
     assert.equal(t.reset_reason, 4);
@@ -142,7 +150,7 @@ describe("parseEventLine", () => {
       ],
     );
     assert.equal(p.rows[0].raw, C_LINE);
-    assert.equal(p.rows[0].usb_proto, 6);
+    assert.equal(p.rows[0].usb_proto, 7);
     assert.equal(rowKey(p.rows[1]), "3735928559:0D2243B0:305419896:capture:43:123456789028345678");
     assert.equal(formatAck(p), `C 17 3735928559 ${C_LINE.slice(-8)}`);
   });
@@ -197,10 +205,10 @@ describe("radio settings", () => {
 
 describe("admission contract", () => {
   it("parses only full sensor IDs and defined states, and rejects the prior live protocol", () => {
-    for (const state of ["WAIT", "SYNC", "READY", "REMOVED"]) {
+    for (const state of ["WAIT", "SYNC", "READY"]) {
       assert.deepEqual(parseLine(`J 1234ABCD ${state}`), { type: "J", node: "1234ABCD", state });
     }
-    for (const line of ["J 0 READY", "J 00000000 READY", "J 1234ABCD YES", "J 1234ABCD READY extra"]) assert.equal(parseLine(line), null);
+    for (const line of ["J 0 READY", "J 00000000 READY", "J 1234ABCD YES", "J 1234ABCD READY extra", "J 1234ABCD REMOVED"]) assert.equal(parseLine(line), null);
     assert.equal(contractOf(parseLine("I FSK-WL 5 v1.0.0 0123456789ABCDEF M 14 922900 7 250.00 16000 0 12 1")).ok, false);
   });
 });

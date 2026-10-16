@@ -26,6 +26,7 @@ typedef struct {
     float    rssi, snr;
     uint32_t lat_ms;
     ul_diag_t diag;
+    uint8_t diag_valid;        /* a diagnostic uplink arrived on the current connection */
 } reg_entry_t;
 
 typedef struct {

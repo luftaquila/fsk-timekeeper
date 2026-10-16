@@ -9,7 +9,7 @@
 static int xtal = 1, boot_ready = 1, ready = 1, radio_fault;
 static uint32_t stops, now;
 static uint64_t boot = UINT64_C(9007199254740993);
-static unsigned sessions, inits, checkpoints, capture_inits, joins, drops;
+static unsigned sessions, inits, checkpoints, capture_inits;
 static int exhausted;
 static char output[16000];
 NRF_GPIO_Type test_gpio[2];
@@ -59,8 +59,6 @@ int keystore_write(const uint8_t key[KEYSTORE_KEY_LEN]) {
     memcpy(stored_key, key, sizeof stored_key); has_key = 1;
     return 0;
 }
-void mac_master_join_open(mac_master_t *m) { (void)m; joins++; }
-int mac_master_forget(mac_master_t *m, uint32_t id) { (void)m; drops++; return id == 0x1234ABCDu; }
 void mac_master_session(mac_master_t *m) { (void)m; sessions++; }
 void mac_master_checkpoint(mac_master_t *m) { (void)m; checkpoints++; }
 void mac_master_report(mac_master_t *m, int changed) { (void)m; (void)changed; }
@@ -103,25 +101,23 @@ static pu_cmd_t feed(const char *line)
     return cmd;
 }
 
-/* R stores the settings, reconfigures the running radio and answers I, then A R. */
-static void admission_commands(void)
+static void removed_commands_and_counter_rollover(void)
 {
     boot_ready = ready = xtal = 1; radio_fault = init_pending = 0;
-    assert(feed("JOIN\n") == PU_CMD_JOIN); command(PU_CMD_JOIN);
-    assert(joins == 1 && strstr(output, "A JOIN OK"));
-    assert(feed("DROP 1234ABCD\n") == PU_CMD_DROP && pu_drop_node() == 0x1234ABCDu);
-    command(PU_CMD_DROP); assert(drops == 1 && strstr(output, "A DROP OK"));
-    assert(feed("DROP 87654321\n") == PU_CMD_DROP);
-    command(PU_CMD_DROP); assert(strstr(output, "X notfound"));
-    assert(feed("DROP 00000000\n") == PU_CMD_BAD && feed("DROP 1234\n") == PU_CMD_BAD && feed("JOIN extra\n") == PU_CMD_BAD);
-    radio_fault = 1; command(PU_CMD_JOIN); assert(joins == 1 && strstr(output, "X clock")); radio_fault = 0;
+    const char *removed[] = { "JOIN\n", "DROP 1234ABCD\n" };
+    for (unsigned i = 0; i < sizeof(removed) / sizeof(removed[0]); i++) {
+        pu_cmd_t cmd = feed(removed[i]);
+        assert(cmd == PU_CMD_BAD); command(cmd);
+        assert(!strcmp(output, "X badcmd\n"));
+    }
     mq_init(&g_queue); exhausted = 1; uint64_t old = boot;
     unsigned count = sessions;
     assert(!master_clock_check() && sessions == count + 1 && boot != old && mq_depth(&g_queue) == 1);
     boot_ready = ready = 1;
-    puts("PASS main_admission_and_counter_rollover");
+    puts("PASS main_removed_commands_and_counter_rollover");
 }
 
+/* R stores the settings, reconfigures the running radio and answers I, then A R. */
 static void radio_settings(void)
 {
     radio_fault = 0;
@@ -302,6 +298,6 @@ int main(void)
     assert(!strstr(output, "X fault "));
     puts("PASS main_deferred_boot_fault");
     queue_pressure_report();
-    admission_commands();
+    removed_commands_and_counter_rollover();
     return 0;
 }

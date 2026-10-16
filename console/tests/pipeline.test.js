@@ -90,8 +90,8 @@ async function mapSprint(device, settings) {
 describe("pipeline with the fake master", () => {
   it("invalidates retained reports across USB sessions until new telemetry arrives", async () => {
     const { device } = await boot();
-    const identity = "I FSK-WL 6 1.0.0 0123456789ABCDEF M 15 922900 7 250.00 16000 0 12 1";
-    const report = "D 0250FEB2 OK 0 0 0 0 -60.00 8.00 0 300 4000 0 1 1 1 XTAL 100 0 0 0 0 0 0 0 0 8002 8001 0 0 0 0";
+    const identity = "I FSK-WL 7 1.0.0 0123456789ABCDEF M 15 922900 7 250.00 16000 0 12 1";
+    const report = "D 0250FEB2 OK 0 0 0 0 -60.00 8.00 0 300 4000 0 1 1 1 XTAL 100 0 0 0 0 0 0 0 0 8002 8001 0 0 0 0 1";
     await device.handleLine(identity);
     await device.handleLine(report);
     assert.equal(Number.isFinite(device.telemetry["0250FEB2"].received_at), true);
@@ -105,10 +105,10 @@ describe("pipeline with the fake master", () => {
   });
   it("keeps removed sensors hidden through cached LOST reports and restores them on reception", async () => {
     const { device, settings } = await boot();
-    await device.handleLine("I FSK-WL 6 1.0.0 0123456789ABCDEF M 15 922900 7 250.00 16000 0 12 1");
+    await device.handleLine("I FSK-WL 7 1.0.0 0123456789ABCDEF M 15 922900 7 250.00 16000 0 12 1");
     settings.setMapping("0250FEB2", { role: "start", note: "old gate" });
     settings.removeSensor("0250FEB2");
-    const report = (state) => `D 0250FEB2 ${state} 0 0 0 0 -60.00 8.00 0 300 4000 0 1 1 1 XTAL 100 0 0 0 0 0 0 0 0 8002 8001 0 0 0 0`;
+    const report = (state) => `D 0250FEB2 ${state} 0 0 0 0 -60.00 8.00 0 300 4000 0 1 1 1 XTAL 100 0 0 0 0 0 0 0 0 8002 8001 0 0 0 0 1`;
     for (const state of ["SYNC", "WAIT", "READY", "SYNC"]) {
       await device.handleLine(report("LOST"));
       await device.handleLine(`J 0250FEB2 ${state}`);
@@ -148,7 +148,7 @@ describe("pipeline with the fake master", () => {
 
   it("expires PPS by new edge arrival, ignoring zero/replayed ticks across reconnects", async () => {
     const { device } = await boot();
-    const identity = "I FSK-WL 6 1.0.0 0123456789ABCDEF M 15 922900 7 250.00 16000 0 12 1";
+    const identity = "I FSK-WL 7 1.0.0 0123456789ABCDEF M 15 922900 7 250.00 16000 0 12 1";
     await device.handleLine(identity);
     await device.handleLine("T 00000000000000000000000000000000 0 1234");
     let now = Date.now();
@@ -192,7 +192,7 @@ describe("pipeline with the fake master", () => {
 
   it("keeps no-fix drift reports out of calibration even when a segment is supplied", async () => {
     const { device } = await boot();
-    await device.handleLine("I FSK-WL 6 1.0.0 0123456789ABCDEF M 15 922900 7 250.00 16000 0 12 1");
+    await device.handleLine("I FSK-WL 7 1.0.0 0123456789ABCDEF M 15 922900 7 250.00 16000 0 12 1");
     await device.handleLine("T 00000000000000000000000000000000 0 1234");
     for (const valid of [0, 1]) {
       await device.handleLine(`P ${16000800 * (valid + 1)} 0 50000 ${valid} 0 0 8 1 ${valid}`);
@@ -292,10 +292,10 @@ describe("pipeline with the fake master", () => {
 
   it("persists checkpoint history even when a transient cleared before telemetry, and deduplicates replay/reload", async () => {
     const { device } = await boot();
-    const identity = "I FSK-WL 6 1.0.0 0123456789ABCDEF M 15 922900 7 250.00 16000 0 12 1";
+    const identity = "I FSK-WL 7 1.0.0 0123456789ABCDEF M 15 922900 7 250.00 16000 0 12 1";
     await device.handleLine(identity);
     const diag = (flags, boot = "7001") =>
-      `D 0250FEB2 OK 0 0 0 0 -60.00 8.00 0 300 4000 0 1 1 1 XTAL 100 0 0 0 0 ${flags} 0 0 0 ${boot} 8001 0 0 0 0`;
+      `D 0250FEB2 OK 0 0 0 0 -60.00 8.00 0 300 4000 0 1 1 1 XTAL 100 0 0 0 0 ${flags} 0 0 0 ${boot} 8001 0 0 0 0 1`;
     const checkpoint = (hseq, evSeq, counters = "0 2 0 0 0 1", recovery = "3 1 3 2", boot = "7001", node = "0250FEB2") => {
       const body = `E ${hseq} ${node} K ${evSeq} 7 8001 ${boot} 100 -60.00 8.00 0 ${1000 + hseq} ${counters} ${recovery}`;
       return `${body} ${crc32Hex(body)}`;
@@ -390,7 +390,7 @@ describe("pipeline with the fake master", () => {
     await device.handleLine(first);
     assert.equal(device.dropped.reasons.unknown_line, 1);
     assert.ok(device.logEntries.some((e) => e.code === "unknown_line" && e.text === first));
-    await device.handleLine("I FSK-WL 6 1.0.0 0123456789ABCDEF M 15 922900 7 250.00 16000 0 12 1");
+    await device.handleLine("I FSK-WL 7 1.0.0 0123456789ABCDEF M 15 922900 7 250.00 16000 0 12 1");
     for (const line of ["D malformed", "P malformed", "E malformed"]) await device.handleLine(line);
     await waitFor(() => ["tel_format", "pps", "event_unreadable"].every((code) => device.logEntries.some((e) => e.code === code)));
     const secret = "ab".repeat(32);
@@ -961,26 +961,21 @@ describe("pipeline with the fake master", () => {
   });
 });
 
-describe("sensor admission commands", () => {
-  it("opens admission, releases the master registration only on ACK, and rejects changes during measurement", async () => {
-    const { device, settings, timing } = await boot();
+describe("automatic sensor admission", () => {
+  it("tracks connection states and clears the full-registry notice when admission resumes", async () => {
+    const { device, settings } = await boot();
     await device.connect({ kind: "fake" });
     await waitFor(() => device.identityOk && device.keyReadState !== "loading");
     const fake = device.fakeTransport(), node = [...fake.sensors.keys()][0];
     settings.setMapping(node, { role: "finish", note: "old sensor" });
-    assert.equal(await device.admissionCommand(), "ok");
+    await device.handleLine("X registry_full");
+    assert.match(device.admissionNotice, /Turn off an unused sensor/);
     await device.handleLine(`J ${node} WAIT`); assert.equal(device.admission[node].state, "WAIT");
+    assert.equal(device.admissionNotice, "");
     await device.handleLine(`J ${node} SYNC`); assert.equal(device.admission[node].state, "SYNC");
     await device.handleLine(`J ${node} READY`); assert.equal(device.admission[node].state, "READY");
-    timing.starting = true;
-    await assert.rejects(device.admissionCommand(node), /Stop the measurement/);
-    timing.starting = false;
-    assert.equal(await device.admissionCommand(node), "ok");
-    assert.equal(fake.sensors.has(node), false);
-    assert.equal(device.telemetry[node], undefined); assert.equal(device.admission[node], undefined);
-    assert.equal(settings.mappingOf(node), null);
-    assert.equal(await device.admissionCommand(node), "notfound");
-    await assert.rejects(device.admissionCommand("00000000"), /Invalid sensor/);
+    assert.equal(settings.mappingOf(node).role, "finish");
+    assert.equal(settings.mappingOf(node).note, "old sensor");
     await device.disconnect();
     assert.deepEqual(Object.keys(device.admission), []);
   });

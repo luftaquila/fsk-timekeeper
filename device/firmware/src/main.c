@@ -218,6 +218,7 @@ static void emit_self(int timebase_ok)
     timebase_ok = timebase_ok && sec_ready() && !radio_needs_reset();
     pu_diag_t d = {0};
     d.is_master = 1;
+    d.diag_valid = 1; /* self diagnostics are observed locally, even when unhealthy */
     d.state = timebase_ok ? PU_STATE_OK : PU_STATE_LOST;
     d.temp_c10 = meas_temp_c10();
     d.batt_mv = meas_vddh_mv();
@@ -315,14 +316,6 @@ static void master_command(pu_cmd_t cmd, int st, uint32_t now, uint8_t idle_seq)
         if (!ready) { pu_emit_err("clock"); break; } /* no beacons without a timebase */
         mac_master_checkpoint(&g_mac);
         pu_emit_ack("CP");
-        break;
-    case PU_CMD_JOIN:
-        if (!ready) { pu_emit_err("clock"); break; }
-        mac_master_join_open(&g_mac); pu_emit_ack("JOIN"); break;
-    case PU_CMD_DROP:
-        if (!ready) { pu_emit_err("clock"); break; }
-        if (mac_master_forget(&g_mac, pu_drop_node())) { pu_emit_ack("DROP"); }
-        else { pu_emit_err("notfound"); }
         break;
     case PU_CMD_BAD:
         pu_emit_err("badcmd");

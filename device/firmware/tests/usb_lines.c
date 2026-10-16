@@ -72,6 +72,7 @@ static void diagnostics(void)
     d.batt_mv = 3987;
     d.sec_drop = 2;
     d.provisioned = 1;
+    d.diag_valid = 1;
     d.health = HEALTH_SYNC_VALID | HEALTH_CLOCK_XTAL;
     d.sync_age_ms = 800;
     d.capture_overflow = 1;
@@ -84,6 +85,7 @@ static void diagnostics(void)
 
     memset(&d, 0, sizeof d);
     d.is_master = 1;
+    d.diag_valid = 1;
     d.state = PU_STATE_OK;
     d.provisioned = 1;
     d.health = HEALTH_EVENT_REQUIRED;

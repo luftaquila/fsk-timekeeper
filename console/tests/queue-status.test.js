@@ -17,9 +17,10 @@ describe("current master queue status", () => {
   it("recovers despite legacy latched flags and 751 historical retries, then warns on a new full queue", async () => {
     const pinia = createPinia();
     const device = useDeviceStore(pinia);
+    device.connected = true;
     device.telemetry = { 0: {
       node_id: "0", received_at: Date.now(), link_state: "online",
-      provisioned: 1, clock_source: "xtal", queue_depth: 16, queue_overflow: 751,
+      provisioned: 1, clock_source: "xtal", queue_depth: 16, queue_overflow: 751, diag_valid: 1,
       err_flags: ERROR_BITS.QUEUE_FULL | ERROR_BITS.USB_DROP,
     } };
     const wrapper = mount(NodeDiagnostics, { props: { nodeId: "0" }, global: { plugins: [pinia] } });

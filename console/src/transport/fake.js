@@ -1,4 +1,4 @@
-/* Development fake of the FSK-WL master, USB line protocol v6. Same interface as serial.js.
+/* Development fake of the FSK-WL master, USB line protocol v7. Same interface as serial.js.
  *
  * Each sensor keeps its records (captures, losses, checkpoints) in order; a record reaches the
  * master queue one slot delay after it was made, consecutive captures bundled up to 5 per E
@@ -167,11 +167,11 @@ export function createFakeTransport({ onLine, onDisconnect }) {
   function diagLine(node, s) {
     const age = Date.now() - s.lastUplinkAt;
     const state = age <= 12000 ? "OK" : age <= 17000 ? "STALE" : "LOST";
-    return `D ${node} ${state} 12 0 0 ${age} ${fmt(s.rssi)} ${fmt(s.snr)} 22 312 ${s.batt} 0 1 1 1 XTAL ${400 + Math.round(Math.random() * 600)} 0 0 0 0 ${s.errFlags ?? 0} 0 0 0 ${s.boot} ${masterBoot} 0 0 0 0`;
+    return `D ${node} ${state} 12 0 0 ${age} ${fmt(s.rssi)} ${fmt(s.snr)} 22 312 ${s.batt} 0 1 1 1 XTAL ${400 + Math.round(Math.random() * 600)} 0 0 0 0 ${s.errFlags ?? 0} 0 0 0 ${s.boot} ${masterBoot} 0 0 0 0 1`;
   }
   function masterDiag() {
     const depth = queueDepthOverride ?? queue.length;
-    return `D 0 OK 0 0 0 0 0.00 0.00 0 305 4980 0 ${provisioned ? 1 : 0} 1 1 XTAL 0 0 0 ${depth} ${queueOverflow} ${errFlags} ${verDrop} ${txDrop} 0 0 ${masterBoot} 0 0 0 0`;
+    return `D 0 OK 0 0 0 0 0.00 0.00 0 305 4980 0 ${provisioned ? 1 : 0} 1 1 XTAL 0 0 0 ${depth} ${queueOverflow} ${errFlags} ${verDrop} ${txDrop} 0 0 ${masterBoot} 0 0 0 0 1`;
   }
   function identity() {
     return `I FSK-WL ${proto.usb} v1.0.0 ${devid} ${role} ${proto.radio} ${radio.freqKhz} 7 250.00 ${proto.ticks} 0 ${radio.powerDbm} ${radio.lbt}`;
@@ -293,15 +293,6 @@ export function createFakeTransport({ onLine, onDisconnect }) {
         for (const [node, s] of sensors) { emit(diagLine(node, s)); emit(`J ${node} READY`); }
         emit(masterDiag());
         emit("A STATUS OK");
-        break;
-      case "JOIN":
-        emit(masterClockFaulted ? "X clock" : "A JOIN OK");
-        break;
-      case "DROP":
-        if (masterClockFaulted) emit("X clock");
-        else if (t.length !== 2 || !/^[0-9A-F]{8}$/.test(t[1])) emit("X badcmd");
-        else if (!sensors.delete(t[1])) emit("X notfound");
-        else { emit(`J ${t[1]} REMOVED`); emit("A DROP OK"); }
         break;
       case "?KEY":
         emit(`K ${provisioned ? radioKey : "NONE"}`);

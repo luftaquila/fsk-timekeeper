@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import * as protocol from "../src/lib/protocol.js";
 import { MASTER_TICKS_PER_MS } from "../src/lib/event-timing.js";
-import { WIRELESS_STATUS_MAX_AGE_MS } from "../src/lib/constants.js";
+import { WIRELESS_STATUS_MAX_AGE_MS, WIRELESS_SYNC_TTL_MS } from "../src/lib/constants.js";
 
 const FW = resolve(__dirname, "../../device/firmware/src");
 
@@ -36,6 +36,7 @@ describe("firmware <-> console constants", () => {
 
   it("proto_usb.h", () => {
     assert.equal(u.PU_USB_PROTO, protocol.USB_PROTO_VERSION);
+    assert.equal(c.SYNC_TTL_MS, WIRELESS_SYNC_TTL_MS);
     for (const [name, bit] of Object.entries(protocol.RESET_BITS)) assert.equal(u[`RESET_${name}`], bit, `RESET_${name}`);
     for (const [name, bit] of Object.entries(protocol.ERROR_BITS)) assert.equal(u[`ERR_${name}`], bit, `ERR_${name}`);
   });

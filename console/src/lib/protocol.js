@@ -1,4 +1,4 @@
-/* FSK-WL USB line protocol v6 (newline-delimited ASCII, one space between tokens).
+/* FSK-WL USB line protocol v7 (newline-delimited ASCII, one space between tokens).
  *
  * Master -> host:
  *   I FSK-WL <usb_proto> <fw> <devid16> <M|S> <radio_proto> <freq_khz> <sf> <bw> <ticks_per_ms> <reset_reason>
@@ -10,7 +10,7 @@
  *   D <node> <OK|STALE|LOST> <skew_ppm> <rx_miss> <beacon_gap> <last_seen_ms> <rssi> <snr> <lat_ms>
  *     <temp_c10> <batt_mv> <sec_drop> <provisioned> <sync_valid> <skew_valid> <XTAL|RC> <sync_age_ms>
  *     <capture_overflow> <fifo_drop> <queue_depth> <queue_overflow> <err_flags> <ver_drop> <tx_drop>
- *     <reset_reason> <sensor_boot_id> <master_boot_id> <recovery_count> <recovery_failures> <recovery_reason> <recovery_result>
+ *     <reset_reason> <sensor_boot_id> <master_boot_id> <recovery_count> <recovery_failures> <recovery_reason> <recovery_result> <diag_valid>
  *     D recovery fields are master-only; sensor D uses four zeroes (history is in E K).
  *   T <request_id> <tick> <master_boot_id>
  *   P <pps_tick> <utc_s|0> <ppb> <pps_valid> <fix> <sats> <span_s> <seg> <n>
@@ -29,7 +29,7 @@ import { MASTER_TICKS_PER_MS } from "./event-timing";
 
 export const NODE_MASTER = "0";
 export const RADIO_PROTO_VERSION = 15;
-export const USB_PROTO_VERSION = 6;
+export const USB_PROTO_VERSION = 7;
 
 // What the Ra-01SH is rated for (firmware config.h); the board stores what R sends.
 export const RADIO_FREQ_MIN_KHZ = 803000;
@@ -174,14 +174,14 @@ export function parseLine(line) {
   if (!t[0]) return null;
   switch (t[0]) {
     case "J":
-      if (t.length !== 3 || !/^[0-9A-F]{8}$/.test(t[1]) || t[1] === "00000000" || !["WAIT", "SYNC", "READY", "REMOVED"].includes(t[2])) return null;
+      if (t.length !== 3 || !/^[0-9A-F]{8}$/.test(t[1]) || t[1] === "00000000" || !["WAIT", "SYNC", "READY"].includes(t[2])) return null;
       return { type: "J", node: t[1], state: t[2] };
     case "K":
       return { type: "K", key: t.length === 2 ? (t[1] === "NONE" ? "" : isHexKey(t[1]) ? t[1].toLowerCase() : null) : null };
     case "E":
       return { type: "E", raw: text };
     case "D": {
-      if (t.length !== 32 || !t.slice(28).every((v) => /^\d+$/.test(v))) return { type: "D", telemetry: null };
+      if (t.length !== 33 || !t.slice(28, 32).every((v) => /^\d+$/.test(v)) || !/^[01]$/.test(t[32])) return { type: "D", telemetry: null };
       const recovery = normalizeRadioRecovery({ count: num(t[28]), failures: num(t[29]), reason: num(t[30]), result: num(t[31]) });
       if (!recovery) return { type: "D", telemetry: null };
       return {
@@ -215,6 +215,7 @@ export function parseLine(line) {
           sensor_boot_id: bootIdText(t[26]),
           master_boot_id: bootIdText(t[27]),
           recovery,
+          diag_valid: num(t[32]),
         },
       };
     }
@@ -398,6 +399,7 @@ export function normalizeTelemetry(t, now = Date.now()) {
     batt_mv: intOrNull(t.batt_mv),
     sec_drop: intOrNull(t.sec_drop),
     provisioned: bitOrNull(t.provisioned),
+    diag_valid: bitOrNull(t.diag_valid),
     sync_valid: bitOrNull(t.sync_valid),
     skew_valid: bitOrNull(t.skew_valid),
     clock_source: ["xtal", "rc"].includes(t.clock_source) ? t.clock_source : null,

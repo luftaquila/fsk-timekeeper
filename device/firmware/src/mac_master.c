@@ -23,7 +23,7 @@ void mac_master_init(mac_master_t *m, mq_t *q)
     m->next_beacon = capture_now64();
     m->last_report_ms = board_millis();
     retry_init(&m->retry, board_millis(), RADIO_BOOT_RETRY_MS);
-    mac_master_join_open(m);
+    master_admission_session(&m->admission, board_millis());
     radio_start_rx();
 }
 
@@ -61,6 +61,7 @@ static void emit_sensor(const reg_entry_t *e, uint32_t now_ms)
     d.sec_drop = e->sec_drop;
     d.provisioned = 1; /* it authenticated */
     d.health = e->diag.health;
+    d.diag_valid = e->diag_valid;
     uint32_t age = (uint32_t)e->diag.sync_age_ms + now_ms - e->heard_ms;
     d.sync_age_ms = age > UINT16_MAX ? UINT16_MAX : (uint16_t)age;
     if (age > SYNC_TTL_MS) { d.health &= (uint8_t)~HEALTH_SYNC_VALID; }
@@ -94,18 +95,6 @@ void mac_master_report(mac_master_t *m, int changed_only)
             if (m->admission.pending[i].phase != ADMISSION_EMPTY) { pu_emit_join(m->admission.pending[i].id, PU_JOIN_WAIT); }
         }
     }
-}
-
-void mac_master_join_open(mac_master_t *m)
-{
-    master_admission_open(&m->admission, board_millis());
-}
-
-int mac_master_forget(mac_master_t *m, uint32_t id)
-{
-    int found = master_admission_forget(&m->admission, &m->reg, id, board_millis());
-    if (found) { pu_emit_join(id, PU_JOIN_REMOVED); }
-    return found;
 }
 
 static void on_admission(mac_master_t *m, const uint8_t *buf, int n)
@@ -150,6 +139,7 @@ static void on_uplink(mac_master_t *m, const uint8_t *buf, int n, float rssi, fl
     e->rssi = rssi;
     e->snr = snr;
     e->diag = u.diag;
+    e->diag_valid = 1;
     if (!(u.flags & EVENT_TIME_UNKNOWN) && u.kind != 0u) {
         uint64_t now_t = capture_now64();
         e->lat_ms = now_t > u.tick ? (uint32_t)((now_t - u.tick) / TPM) : 0u;

@@ -1038,7 +1038,7 @@ static void session_replay(void)
     memset(&nodes[1].s.join, 0, sizeof(nodes[1].s.join));
     /* Evict all request history and active replay state: an old JOIN may
      * reserve work, but its old CONFIRM must fail with fresh Nm and link ID. */
-    cur = &nodes[0]; assert(mac_master_forget(&mm, nodes[1].sender_id));
+    cur = &nodes[0]; memset(e, 0, sizeof(*e)); /* discard state in the test fixture */
     mm.admission.seen_count = 0;
     replay_wire(0, request.data, request.len);
     assert(mm.admission.pending[0].phase != ADMISSION_EMPTY && mm.admission.pending[0].link_id > link);
@@ -1267,7 +1267,6 @@ static void admission_hook(uint64_t us)
         if (nodes[i].s.timing_ready && !first_ready[i]) first_ready[i] = us;
     }
     if (admission_case == 1 && us == 20000000u) { /* four active, add the fifth */
-        cur = &nodes[0]; mac_master_join_open(&mm);
         add_node(0, 0x10000005u, 8, 0);
     }
     if (admission_case == 2 && us == 20000000u) { /* five active, same-epoch reauth */
@@ -1277,12 +1276,10 @@ static void admission_hook(uint64_t us)
         sq_push_edge(&nodes[1].s.q, 100, local_tick(&nodes[0], us), HEALTH_EVENT_REQUIRED, 1);
     }
     if ((admission_case == 3 || admission_case == 4 || admission_case == 5) && us == 20000000u) {
-        nodes[1].disabled = 1;
+        nodes[1].disabled = admission_case != 4; /* a sixth sensor cannot evict a live fleet */
         cur = &nodes[0]; reg_entry_t *e = reg_lookup(&mm.reg, nodes[1].sender_id); assert(e);
         incumbent_heard = e->heard_ms;
-        if (admission_case == 4) assert(mac_master_forget(&mm, e->id));
         if (admission_case == 5) e->heard_ms = 1; /* eligible for a LOST reservation */
-        mac_master_join_open(&mm);
         add_node(0, 0x20000006u, 8, 0);
     }
     if (admission_case == 5 && n_nodes == 7 && !race_guard) {
@@ -1342,7 +1339,7 @@ static void admission(unsigned scenario)
     if (scenario == 5) {
         assert(race_guard && reg_lookup(&mm.reg, nodes[1].sender_id) && !reg_lookup(&mm.reg, nodes[6].sender_id));
     } else {
-        for (int i = 1; i < n_nodes; i++) if (!nodes[i].disabled) {
+        for (int i = 1; i < n_nodes; i++) if (!nodes[i].disabled && !(scenario == 4 && i == 6)) {
             assert(nodes[i].s.have_session && nodes[i].s.timing_ready && nodes[i].s.entry >= 0);
             printf("admission %u node%d: registered %.3fs, ready %.3fs\n", scenario, i,
                    first_join[i] / 1e6, first_ready[i] / 1e6);
@@ -1355,7 +1352,7 @@ static void admission(unsigned scenario)
         assert(copies == 1);
     }
     if (scenario == 3) assert(first_join[6] / 1000u >= incumbent_heard + LINK_STALE_MS);
-    if (scenario == 4) assert(first_join[6] < 30000000u);
+    if (scenario == 4) assert(!first_join[6] && !reg_lookup(&mm.reg, nodes[6].sender_id) && reg_count(&mm.reg) == MAX_NODES);
     /* Each live registered sensor retains a DATA slot throughout admission. */
     for (unsigned a = 0; a < air_n; a++) {
         if (!is_beacon(&air[a]) || air[a].start_us < 19000000u) continue;
@@ -1381,9 +1378,14 @@ static void admission(unsigned scenario)
 static uint64_t reauth_old_link;
 static uint16_t reauth_old_ack;
 static int reauth_health_checked;
+static int initial_diag_pending_seen, initial_diag_seen;
 static void reauth_health_hook(uint64_t us)
 {
     reg_entry_t *e = reg_lookup(&mm.reg, nodes[1].sender_id);
+    if (us < 20000000u && e) {
+        if (!e->diag_valid) { initial_diag_pending_seen = 1; assert(e->diag.health == 0); }
+        else { initial_diag_seen = 1; }
+    }
     if (us == 20000000u) {
         assert(e && e->diag.health == HEALTH_EVENT_REQUIRED && e->have_ack);
         reauth_old_link = e->link_id; reauth_old_ack = e->ack_seq;
@@ -1393,9 +1395,10 @@ static void reauth_health_hook(uint64_t us)
     if (us > 40000000u && e && e->link_id != reauth_old_link && !reauth_health_checked) {
         assert(!sync_health(&nodes[1].s.sync, local_tick(&nodes[1], us), nodes[1].xtal));
         assert(e->have_ack && e->ack_seq == reauth_old_ack);
-        assert(e->diag.health == 0 && e->diag.sync_age_ms == UINT16_MAX);
+        assert(!e->diag_valid && e->diag.health == 0 && e->diag.sync_age_ms == UINT16_MAX);
         /* The console gets an invalidated D immediately, even without ?STATUS. */
         assert(strstr(last_d, " OK ") && strstr(last_d, " 1 0 0 RC 65535 "));
+        assert(strlen(last_d) >= 3 && !strcmp(last_d + strlen(last_d) - 3, " 0\n"));
         reauth_health_checked = 1;
     }
     if (us == 45000000u) { nodes[1].xtal = 1; }
@@ -1404,9 +1407,9 @@ static void reauth_health(void)
 {
     add_node(1, 0, 0, 0); add_node(0, 0x123443b0u, 0, 0);
     run(65000000u, reauth_health_hook);
-    assert(reauth_health_checked);
+    assert(reauth_health_checked && initial_diag_pending_seen && initial_diag_seen);
     reg_entry_t *e = reg_lookup(&mm.reg, nodes[1].sender_id);
-    assert(e && e->diag.health == HEALTH_EVENT_REQUIRED); /* fresh diagnostics restore health */
+    assert(e && e->diag_valid && e->diag.health == HEALTH_EVENT_REQUIRED); /* fresh diagnostics restore health */
     puts("PASS reauth_health");
 }
 

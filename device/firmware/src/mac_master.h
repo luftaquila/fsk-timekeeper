@@ -48,7 +48,5 @@ void mac_master_session(mac_master_t *m);
 /* D line for every registered sensor (`?STATUS`). With changed_only, report
  * transitions immediately and refresh all entries every SENSOR_STATUS_PERIOD_MS. */
 void mac_master_report(mac_master_t *m, int changed_only);
-void mac_master_join_open(mac_master_t *m);
-int mac_master_forget(mac_master_t *m, uint32_t id);
 
 #endif /* MAC_MASTER_H */
