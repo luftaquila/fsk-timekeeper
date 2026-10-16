@@ -91,7 +91,7 @@ const overview = computed(() => {
   const common = [
     { label: "Link", value: reportFresh.value ? stateLabel[r.link_state] || "UNKNOWN" : "NO REPORT",
       title: reportFresh.value ? undefined : `Last reported link: ${stateLabel[r?.link_state] || "UNKNOWN"}`,
-      tone: reportFresh.value && r.link_state === "online" ? "good" : "warn" },
+      tone: reportFresh.value ? { online: "good", degraded: "warn", lost: "bad" }[r.link_state] || "warn" : "warn" },
     { label: "Timing", value: h.label, parts, tone: h.state },
   ];
   if (!r) return common;

@@ -33,18 +33,10 @@ jobs:
       - name: Build
         run: |
           cd console
-          npm run build
-          printf '%s\n' "$GITHUB_SHA" > dist/build-sha.txt
           npm run build:single
           mv dist-single/index.html fsk-timekeeper-console.html
       - uses: actions/upload-artifact@v7
         with:
           name: html
           path: console/fsk-timekeeper-console.html
-          if-no-files-found: error
-
-      - uses: actions/upload-artifact@v7
-        with:
-          name: web
-          path: console/dist
           if-no-files-found: error

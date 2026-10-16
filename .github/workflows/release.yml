@@ -25,21 +25,17 @@ jobs:
   deploy-web:
     needs: [release]
     uses: ./.github/workflows/web.yml
-    with:
-      release-tag: ${{ github.ref_name }}
   release:
     name: release
     runs-on: ubuntu-24.04
     needs: [build-firmware, build-pcb, build-3d, build-html]
     steps:
-      - uses: actions/checkout@v6
       - uses: actions/download-artifact@v8
       - run: |
           zip -r fsk-timekeeper-firmware.zip fsk-timekeeper-firmware
           zip -r fsk-timekeeper-pcb.zip fsk-timekeeper-pcb
           zip -r fsk-timekeeper-3d.zip fsk-timekeeper-3d
           mv html/fsk-timekeeper-console.html .
-          (cd web && zip -r ../fsk-timekeeper-web.zip .)
       - uses: ncipollo/release-action@v1
         with:
           allowUpdates: true
@@ -49,7 +45,6 @@ jobs:
             fsk-timekeeper-firmware.zip
             fsk-timekeeper-pcb.zip
             fsk-timekeeper-console.html
-            fsk-timekeeper-web.zip
           commit: ${{ github.sha }}
           tag: ${{ github.ref_name }}
           body: |
