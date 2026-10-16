@@ -7990,7 +7990,7 @@
 				(justify right)
 			)
 		)
-		(property "Value" "SW_SPST"
+		(property "Value" "POWER"
 			(at 238.76 120.6499 90)
 			(hide yes)
 			(show_name no)

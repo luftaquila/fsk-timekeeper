@@ -5,9 +5,6 @@ device/firmware/actions/
 *.uf2
 *.bin
 
-# private design notes
-DESIGN.md
-
 # vitest json reporter output
 console/.vitest/
 
@@ -24,6 +21,7 @@ dist-single/
 # KiCAD
 \#auto_saved_files#
 *.lck
+.history
 
 # clangd
 .cache
