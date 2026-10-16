@@ -148,18 +148,18 @@ static void receive_one(mac_master_t *m)
     if (n > 0) { on_uplink(m, buf, n, rssi, snr); }
 }
 
-/* Listen before talk, bounded: finish a reception in progress, re-sense a busy
- * channel for up to BEACON_LBT_MAX_MS, then send regardless — every sensor syncs
- * on the beacon, and sync uses the real TxDone, not the nominal time. With RSSI
- * LBT on, each pass also listens after the drain, and a channel still loud at
- * the end costs this beacon instead. */
-static int beacon_lbt(mac_master_t *m)
+/* Finish a reception, optionally listen to RSSI, then check CAD. Retry a busy
+ * channel until BEACON_CHANNEL_RETRY_MS has elapsed. This cutoff is checked
+ * after drain/listen, so total duration can exceed it. At the cutoff omit CAD
+ * and allow TX unless RSSI is loud; a CAD error always rejects this beacon.
+ * Sensor sync uses the actual TxDone, including any channel-access delay. */
+static int beacon_channel_ready(mac_master_t *m)
 {
     uint32_t t0 = board_millis();
     for (;;) {
         if (radio_rx_settle(RX_HEADER_WAIT_MS, RX_DRAIN_MAX_MS) == RADIO_RX_PACKET) { receive_one(m); }
         int loud = radio_lbt_enabled() && radio_lbt_listen() != RADIO_LBT_QUIET;
-        if ((uint32_t)(board_millis() - t0) >= BEACON_LBT_MAX_MS) { return !loud; }
+        if ((uint32_t)(board_millis() - t0) >= BEACON_CHANNEL_RETRY_MS) { return !loud; }
         if (loud) { continue; }
         int cad = radio_cad();
         if (cad == RADIO_CAD_ERROR) { return 0; }
@@ -169,7 +169,7 @@ static int beacon_lbt(mac_master_t *m)
 
 static void send_beacon(mac_master_t *m)
 {
-    if (!beacon_lbt(m)) {
+    if (!beacon_channel_ready(m)) {
         m->m_tx_valid = 0;
         m->seq++;
         radio_start_rx();

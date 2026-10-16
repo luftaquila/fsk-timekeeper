@@ -301,6 +301,15 @@ extern "C" int radio_rx_settle(uint32_t header_wait_ms, uint32_t max_ms)
     }
 }
 
+static int cad_failure(bool stop_scan)
+{
+    el_note(EL_CAD_TIMEOUT);
+    s_cad_fail++;
+    if (stop_scan) { radio.standby(); }
+    radio_start_rx();
+    return RADIO_CAD_ERROR;
+}
+
 /* A failed start or a CAD that never completes counts towards a reset. The
  * start fails with WRONG_MODEM once the radio has reset itself: back in GFSK,
  * it still transmits and receives, so only this sees it. */
@@ -308,35 +317,25 @@ extern "C" int radio_cad(void)
 {
     hal.restartHangCheck();
     if (track(radio.startChannelScan()) != RADIOLIB_ERR_NONE) {
-        el_note(EL_CAD_TIMEOUT);
-        s_cad_fail++;
-        radio_start_rx();
-        return RADIO_CAD_ERROR;
+        return cad_failure(false);
     }
     uint32_t t0 = board_millis();
     while (gpio_read(PIN_LORA_DIO1) == 0) {
         if ((uint32_t)(board_millis() - t0) >= CAD_TIMEOUT_MS) {
-            el_note(EL_CAD_TIMEOUT);
-            s_cad_fail++;
-            radio.standby();
-            radio_start_rx();
-            return RADIO_CAD_ERROR;
+            return cad_failure(true);
         }
     }
     int16_t result = track(radio.getChannelScanResult());
     if (result != RADIOLIB_LORA_DETECTED && result != RADIOLIB_CHANNEL_FREE) {
-        s_cad_fail++;
-        el_note(EL_CAD_TIMEOUT);
-        radio_start_rx();
-        return RADIO_CAD_ERROR;
+        return cad_failure(false);
     }
     s_cad_fail = 0;
     el_radio_clear(EL_CAD_TIMEOUT);
     if (result == RADIOLIB_LORA_DETECTED) {
         radio_start_rx();
-        return 1;
+        return RADIO_CAD_BUSY;
     }
-    return 0;
+    return RADIO_CAD_CLEAR;
 }
 
 extern "C" int radio_lbt_enabled(void) { return s_cfg.lbt; }

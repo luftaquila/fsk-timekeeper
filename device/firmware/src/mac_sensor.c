@@ -13,10 +13,10 @@
 
 /* An uplink let through at SLOT_LATE_MS ends SLOT_GUARD_MS before the LBT listen of the next slot
  * starts, and the last slot ends before the next beacon even when this one went out as late as
- * the master's LBT allows (beacon_lbt(): re-sensing, a last CAD, then a drain and a listen). */
+ * beacon_channel_ready() allows (retry cutoff, a last CAD, then a drain and optional RSSI listen). */
 static_assert((SLOT_LATE_MS + TX_SETUP_MS + SLOT_GUARD_MS + LBT_LISTEN_MS) * 1000u + LORA_TOA_US(WIRE_UPLINK) <=
               SLOT_LEN_MS * 1000u, "an uplink must fit its slot");
-static_assert((SLOT_OFFSET_MS + SLOT_COUNT * SLOT_LEN_MS + BEACON_LBT_MAX_MS + CAD_TIMEOUT_MS + RX_DRAIN_MAX_MS +
+static_assert((SLOT_OFFSET_MS + SLOT_COUNT * SLOT_LEN_MS + BEACON_CHANNEL_RETRY_MS + CAD_TIMEOUT_MS + RX_DRAIN_MAX_MS +
                LBT_LISTEN_MS + TX_SETUP_MS) * 1000u + LORA_TOA_US(WIRE_BEACON) <= BEACON_PERIOD_MS * 1000u,
               "the slots must end before the next beacon");
 static_assert(LBT_LISTEN_MS < SLOT_OFFSET_MS, "the listen before slot 0 starts after the beacon");
@@ -215,7 +215,7 @@ static void slot_tx(mac_sensor_t *s)
     if (!p) { return; }
 
     if (radio_rx_settle(0, 0) != RADIO_RX_IDLE) { return; }
-    if (radio_cad()) { return; }
+    if (radio_cad() != RADIO_CAD_CLEAR) { return; }
     if (capture_now64() > late) { radio_start_rx(); return; }
 
     fill_diag(s, p);

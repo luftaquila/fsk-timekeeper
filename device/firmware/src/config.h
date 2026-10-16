@@ -83,7 +83,9 @@
 #define SLOT_LATE_MS       10u  /* latest TX start within a slot, CAD included; later -> skip the slot */
 #define TX_SETUP_MS        7u   /* SPI + oscillator startup budget after CAD, until preamble */
 #define SLOT_GUARD_MS      5u   /* spare at the end of a slot for the unmeasured parts of this budget */
-#define BEACON_LBT_MAX_MS  50u  /* re-sense a busy channel this long, then send the beacon anyway */
+/* Retry cutoff, not a total duration limit: checked after RX drain and optional
+ * RSSI listen. At the cutoff skip CAD and permit TX only when RSSI is not loud. */
+#define BEACON_CHANNEL_RETRY_MS 50u
 #define RX_DRAIN_MAX_MS    100u /* longest wait for a reception in progress before a CAD */
 #define RX_HEADER_WAIT_MS  12u  /* a preamble without a header after this long is noise */
 #define CAD_TIMEOUT_MS     10u  /* ~2.5 ms CAD (4 symbols at SF7/BW250) plus oscillator startup margin */

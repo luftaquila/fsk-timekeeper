@@ -44,13 +44,15 @@ int radio_receive(uint8_t *buf, int maxlen, float *rssi, float *snr);
 #define RADIO_RX_BUSY   2 /* a packet is still arriving */
 int radio_rx_settle(uint32_t header_wait_ms, uint32_t max_ms);
 
-/* CAD result; errors must never be interpreted as a clear channel. */
+/* CAD result; errors must never be interpreted as a clear channel. BUSY/ERROR
+ * attempt to re-arm RX (a restart failure is recorded separately). CLEAR leaves
+ * the radio out of RX; the caller must transmit or re-arm RX before listening. */
 #define RADIO_CAD_ERROR (-1)
 #define RADIO_CAD_CLEAR 0
 #define RADIO_CAD_BUSY  1
 int radio_cad(void);
 
-/* RSSI listen-before-talk, when the settings enable it: receive for LBT_LISTEN_MS
+/* RSSI listen-before-talk; the caller checks radio_lbt_enabled(). Receive for LBT_LISTEN_MS
  * (the radio must be in RX) and report QUIET only when every instantaneous RSSI
  * stayed at or below LBT_THRESHOLD_DBM. A failed read is LOUD: errors must never
  * pass for a quiet channel. */
