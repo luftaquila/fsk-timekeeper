@@ -30,7 +30,7 @@ const timing = useTimingStore();
 <style scoped>
 .run-note {
   margin-top: -0.25rem;
-  font-size: 1.1rem;
+  font-size: 1.25rem;
   color: var(--text-secondary);
   word-break: break-word;
 }

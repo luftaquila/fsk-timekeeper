@@ -46,10 +46,30 @@ function onTarget(e) {
       </div>
 
       <div v-if="mode === 'laps'" class="form-group">
-        <label class="form-label">Auto-Stop After N Laps</label>
-        <input type="text" inputmode="numeric" class="form-input lap-target" :value="settings.state.lapTarget ?? ''" placeholder="off" :disabled="timing.armed" @input="digitsOnly" @change="onTarget" />
+        <label for="lap-target" class="form-label">Auto-Stop After</label>
+        <div class="lap-target-field">
+          <input id="lap-target" type="text" inputmode="numeric" class="form-input lap-target" :value="settings.state.lapTarget ?? ''" placeholder="Off" aria-describedby="lap-target-unit" :disabled="timing.armed" @input="digitsOnly" @change="onTarget" />
+          <span id="lap-target-unit" class="lap-target-unit">Laps</span>
+        </div>
       </div>
 
     </div>
   </div>
 </template>
+
+<style scoped>
+.lap-target-field {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.lap-target {
+  flex: 1;
+  min-width: 0;
+}
+
+.lap-target-unit {
+  color: var(--text-secondary);
+}
+</style>
