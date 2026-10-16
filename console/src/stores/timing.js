@@ -37,7 +37,7 @@ export const useTimingStore = defineStore("timing", () => {
   const starting = ref(false);
   const classifying = ref(false);
   const freezes = new Map(); // runId -> timer; independent of the selected run
-  const generation = runLog.epoch();
+  let generation = runLog.epoch();
   let restored = false;
 
   const armed = computed(() => !!run.value?.armed);
@@ -159,7 +159,7 @@ export const useTimingStore = defineStore("timing", () => {
 
   // START: quality -> fresh master clock -> quality again -> run from checkpoints -> catch up.
   async function start(mode, note = "") {
-    if (starting.value || classifying.value || useHistoryStore().importing) return false;
+    if (starting.value || classifying.value || useHistoryStore().importing || useHistoryStore().clearing) return false;
     const device = useDeviceStore();
     if (device.updateInProgress) return false;
     const settings = useSettingsStore();
@@ -226,7 +226,7 @@ export const useTimingStore = defineStore("timing", () => {
   }
 
   async function classify(classification, mode = useSettingsStore().state.mode, note = "") {
-    if (starting.value || classifying.value || useHistoryStore().importing || (classification !== null && !RESULT_CLASSIFICATIONS.includes(classification))) return false;
+    if (starting.value || classifying.value || useHistoryStore().importing || useHistoryStore().clearing || (classification !== null && !RESULT_CLASSIFICATIONS.includes(classification))) return false;
     if (classification === null && !run.value?.classification) return true;
     classifying.value = true;
     try {
@@ -251,6 +251,15 @@ export const useTimingStore = defineStore("timing", () => {
   function reset() {
     resetLive();
     return setRun(null);
+  }
+
+  function discardRecords() {
+    for (const timer of freezes.values()) clearTimeout(timer);
+    freezes.clear();
+    generation = runLog.epoch();
+    run.value = null;
+    restored = true;
+    resetLive();
   }
 
   function pendingRun(current) {
@@ -462,6 +471,7 @@ export const useTimingStore = defineStore("timing", () => {
     stop,
     classify,
     reset,
+    discardRecords,
     onEventRows,
     onMasterBoot,
     onMasterVersion,

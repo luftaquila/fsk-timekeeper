@@ -47,6 +47,7 @@ function plain(value) {
 
 export const useHistoryStore = defineStore("history", () => {
   const importing = ref(false);
+  const clearing = ref(false);
   const rows = ref([]); // newest first
   let memoryId = 0;
 
@@ -206,7 +207,30 @@ export const useHistoryStore = defineStore("history", () => {
   }
 
   function removeRow(id) { return deleteRows(rows => rows.filter(r => r.id === id)); }
-  function clearAll() { return deleteRows(rows => rows.slice()); }
+  async function clearAll() {
+    const timing = useTimingStore(), device = useDeviceStore();
+    if (clearing.value || importing.value || timing.armed || timing.starting || timing.classifying || device.connecting || device.updateInProgress || device.dfuInProgress) {
+      throw new Error("Stop measurement and wait for current operations before clearing all data.");
+    }
+    clearing.value = true;
+    try {
+      await device.pauseData();
+      await timing.settleResults();
+      await eventLog.flush();
+      await flush();
+      // Prevent migration of a legacy localStorage run after the next reload.
+      localStorage.removeItem("tk.run.v3");
+      localStorage.removeItem("tk.run.v2");
+      await enqueue(() => eventLog.clearAllData());
+      rows.value = [];
+      memoryId = 0;
+      timing.discardRecords();
+      device.discardRecords();
+    } finally {
+      device.clearingData = false;
+      clearing.value = false;
+    }
+  }
 
   function filtered(mode = null) {
     return mode ? rows.value.filter((r) => r.mode === mode) : rows.value.slice();
@@ -278,6 +302,7 @@ export const useHistoryStore = defineStore("history", () => {
   }
 
   async function recoveryJson() {
+    if (clearing.value) throw new Error("Wait for data deletion to finish before exporting.");
     await useTimingStore().settleResults();
     await eventLog.flush();
     const recovery = await backup.snapshot(rows.value, useDeviceStore().ppsEdges);
@@ -292,7 +317,7 @@ export const useHistoryStore = defineStore("history", () => {
 
   async function importJson(file) {
     const timing = useTimingStore(), device = useDeviceStore();
-    if (importing.value || timing.armed || timing.starting || timing.classifying || device.updateInProgress) {
+    if (clearing.value || importing.value || timing.armed || timing.starting || timing.classifying || device.updateInProgress) {
       throw new Error("Stop measurement and wait for current operations before importing.");
     }
     importing.value = true;
@@ -307,5 +332,5 @@ export const useHistoryStore = defineStore("history", () => {
     } finally { importing.value = false; }
   }
 
-  return { rows, importing, init, flush, recoveryJson, importJson, upsert, updateCalibration, classify, removeRow, clearAll, filtered, status, edgesFor, exportData, exportExcel, exportJson };
+  return { rows, importing, clearing, init, flush, recoveryJson, importJson, upsert, updateCalibration, classify, removeRow, clearAll, filtered, status, edgesFor, exportData, exportExcel, exportJson };
 });

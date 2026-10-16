@@ -186,6 +186,11 @@ textarea {
   color: var(--text-primary);
 }
 
+.btn-ghost-danger:hover:not(:disabled), .btn-ghost-danger:focus-visible {
+  color: #fff;
+  background: var(--accent-danger);
+}
+
 .btn-sm {
   padding: 0.375rem 0.75rem;
   font-size: 1rem;

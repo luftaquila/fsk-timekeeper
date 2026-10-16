@@ -472,13 +472,17 @@ describe("app under jsdom", () => {
     vi.mocked(window.confirm).mockReturnValueOnce(false);
     await clearHistory.trigger("click");
     await flushPromises();
-    assert.equal(window.confirm.mock.calls.at(-1)[0], "Delete all history records?");
+    assert.equal(window.confirm.mock.calls.at(-1)[0], "Delete all history, events, PPS data, quarantined data, and device logs? The master will be disconnected. Settings will be kept.");
     assert.equal(history.rows.length, recordCount);
     assert.equal(clearHistory.text(), "Clear All");
     vi.mocked(window.confirm).mockReturnValueOnce(true);
     await clearHistory.trigger("click");
     await flushPromises();
-    await waitFor(() => history.rows.length === 0);
+    await waitFor(() => history.rows.length === 0 && !history.clearing);
+    assert.equal(device.logEntries.length, 0);
+    await flushPromises();
+    assert.equal(clearHistory.element.disabled, false);
+    await device.handleLine("X badcmd");
 
     await router.push("/settings");
     await flushPromises();

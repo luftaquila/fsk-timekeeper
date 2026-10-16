@@ -161,6 +161,31 @@ export function getLastSeq() {
 
 export async function flush() { await chain; }
 
+// Call only after live ingestion and run writes have drained.
+export function clearAllData() {
+  return serialize(async () => {
+    // A write failure can close our connection while leaving old data on disk.
+    const storage = db || (typeof indexedDB !== "undefined" ? await openDb(DB_NAME, DB_VERSION, upgrade) : null);
+    try {
+      if (storage) {
+        const tx = transaction(storage, Array.from(storage.objectStoreNames), "readwrite");
+        const finished = done(tx);
+        for (const name of storage.objectStoreNames) tx.objectStore(name).clear();
+        await finished;
+      }
+    } finally {
+      if (storage && storage !== db) storage.close();
+    }
+    rows = [];
+    keyToSeq.clear();
+    lines.clear();
+    lastSeq = 0;
+    insertsSincePrune = 0;
+    protectSeq = Infinity;
+    runLog.reset();
+  });
+}
+
 // Import adds archived evidence without sending it through the live run engine.
 export function adopt(imported) {
   const known = new Set(rows.map(r => r.seq));

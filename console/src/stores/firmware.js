@@ -29,7 +29,7 @@ export const useFirmwareStore = defineStore("firmware", () => {
     return comparison === 0 ? "Reinstall" : comparison === -1 ? "Downgrade" : "Update";
   });
   const canStart = computed(() => !!firmware.value?.compatible && !busy.value && !awaitingPort.value &&
-    !device.updateInProgress && !useHistoryStore().importing && !timing.armed && !timing.starting && !timing.classifying && !device.connecting && device.transportKind !== "fake" && device.supported);
+    !device.updateInProgress && !device.clearingData && !useHistoryStore().importing && !timing.armed && !timing.starting && !timing.classifying && !device.connecting && device.transportKind !== "fake" && device.supported);
 
   function release() { device.updateInProgress = false; }
   function error(e) {
@@ -55,7 +55,7 @@ export const useFirmwareStore = defineStore("firmware", () => {
   }
 
   async function start() {
-    if (!canStart.value) return;
+    if (!canStart.value || device.clearingData) return;
     device.updateInProgress = true;
     expectedId.value = device.identity?.devid || null;
     message.value = ""; progress.value = 0;

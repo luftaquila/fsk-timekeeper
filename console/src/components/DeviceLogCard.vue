@@ -29,6 +29,7 @@ async function exportJson() {
 }
 
 async function clearAll() {
+  if (device.clearingData) return;
   if (!window.confirm("Delete all device log entries?")) return;
   await device.clearLog();
   notyf.success("Device log cleared");
@@ -49,8 +50,8 @@ async function clearAll() {
             <option v-for="option in types" :key="option.kind" :value="option.kind">{{ option.label }}</option>
           </select>
         </label>
-        <button class="btn btn-ghost btn-sm" :disabled="!filtered.length" aria-label="Export all logs matching the type filter as JSON" @click="exportJson">Export JSON</button>
-        <button class="btn btn-ghost btn-sm" :disabled="!device.logEntries.length" @click="clearAll">Clear All</button>
+        <button class="btn btn-ghost btn-sm" :disabled="!filtered.length || device.clearingData" aria-label="Export all logs matching the type filter as JSON" @click="exportJson"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" /></svg> Export JSON</button>
+        <button class="btn btn-ghost btn-ghost-danger btn-sm" :disabled="!device.logEntries.length || device.clearingData" @click="clearAll"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M19 6l-1 14H6L5 6M9 6V3h6v3M10 10v6M14 10v6" /></svg> Clear All</button>
       </div>
       <div v-if="!filtered.length" class="empty-state">{{ device.logEntries.length ? 'No matching entries' : 'No entries' }}</div>
       <div v-else class="table-scroll">

@@ -59,7 +59,9 @@ onMounted(async () => {
     <div v-if="!device.durable" class="banner" role="alert">
       <div><strong>Browser storage unavailable</strong><p>Records will be lost on reload</p></div>
     </div>
-    <div v-else-if="device.storageWarning" class="banner warn" role="alert">Browser storage is not protected from automatic cleanup</div>
+    <div v-else-if="device.storageWarning" class="banner warn" role="alert">
+      <div><strong>Browser storage is not protected from automatic cleanup</strong><p>Records may be lost when you close the browser. Always export your records before closing.</p></div>
+    </div>
     <div v-for="alarm in device.alarms" :key="alarm.key" class="banner" role="alert">
       <span>{{ alarm.text }}</span>
       <button class="banner-close" type="button" aria-label="Dismiss" @click="device.dismissAlarm(alarm.key)">×</button>

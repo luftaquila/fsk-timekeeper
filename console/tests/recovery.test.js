@@ -158,7 +158,8 @@ describe("durable run recovery", () => {
     const r = { schema:3, runId:"delete", mode:"sprint", verification:"verified", classification:null,
       closed:true, startTick:"16000000", finishTick:"32000000", crossingTicks:[], calibration:null,
       durationNs:"1000000000", cursor:0, startedAt:1, durable:true };
-    await Promise.all([history.upsert(r), history.clearAll()]);
+    await history.upsert(r);
+    await Promise.all([history.upsert(r), history.removeRow(history.rows[0].id)]);
     await history.upsert(r);
     assert.equal(history.rows.length, 0);
     assert.equal((await getAll(eventLog.getDb(), eventLog.STORE_RESULTS)).length, 0);
@@ -296,7 +297,7 @@ it("restores result-only deletions explicitly and remaps device-log evidence wat
   data.events = [{seq:100,kind:"quarantine",master_boot_id:"5",node_id:"*",hseq:1,raw:"bad",received_at:1}];
   data.log = [{at:1,kind:"state",code:"radio_history_clear",throughSeq:100,text:""}];
   const text = await backup.pack([],data);
-  await history.clearAll();assert.equal(runLog.isDeleted(row.runId),true);
+  await history.removeRow(history.rows[0].id);assert.equal(runLog.isDeleted(row.runId),true);
   await history.importJson({size:text.length,text:async()=>text});
   assert.equal(runLog.isDeleted(row.runId),false);
   assert.equal(history.rows.length,1);
@@ -450,4 +451,89 @@ it("remaps imported log-clear membership without clearing unrelated or later evi
   assert.deepEqual(await loggedNodes(),["00000003","00000099"]);
   const restored=await boot({keepStorage:true});await restored.device.loadLog();
   assert.deepEqual(await loggedNodes(),["00000003","00000099"]);
+});
+
+it("clears all records and caches, survives reload, and records again", async () => {
+  let { device, settings, timing, history } = await boot();
+  const { fake, a, b } = await mapSprint(device, settings);
+  await timing.start("sprint", "erase everything");
+  await assert.rejects(history.clearAll(), /Stop measurement/);
+  const tick = BigInt(fake.crossing(a)); fake.crossing(b, { at: tick + 16000000n });
+  await waitFor(() => timing.run.verification === "verified");
+  await timing.stop();
+  await eventLog.ingestQuarantine({raw:"invalid", reason:"invalid", node:null, hseq:999, masterBootId:"500"});
+  localStorage.setItem("tk.run.v3", "legacy");
+  localStorage.setItem("tk.run.v2", "legacy");
+  localStorage.setItem("unrelated-setting", "keep");
+  assert.ok(history.rows.length);
+  assert.ok(eventLog.since(0).length);
+  const clearing = history.clearAll();
+  assert.equal(await timing.classify("DNS", "sprint", "during deletion"), false);
+  assert.equal(await device.connect({kind:"fake"}), false);
+  await clearing;
+  assert.equal(device.connected, false);
+  assert.equal(timing.run, null);
+  assert.equal(history.rows.length, 0);
+  assert.equal(eventLog.since(0).length, 0);
+  assert.equal(device.logEntries.length, 0);
+  assert.equal(device.ppsEdges.length, 0);
+  assert.equal(device.quarantine, null);
+  assert.equal(localStorage.getItem("tk.run.v3"), null);
+  assert.equal(localStorage.getItem("tk.run.v2"), null);
+  assert.equal(localStorage.getItem("unrelated-setting"), "keep");
+  for (const name of eventLog.getDb().objectStoreNames) assert.deepEqual(await getAll(eventLog.getDb(), name), [], name);
+  const exported = await backup.unpack(await history.recoveryJson());
+  for (const key of ["results","runs","events","pps","quarantine","log"]) assert.deepEqual(exported[key], [], key);
+  // New measurements work without a page reload, including calibration finalization.
+  const next = await mapSprint(device, settings);
+  await timing.start("sprint", "new measurement");
+  const nextTick = BigInt(next.fake.crossing(next.a)); next.fake.crossing(next.b, {at:nextTick+16000000n});
+  await waitFor(() => timing.run.verification === "verified");
+  await timing.stop();
+  await timing.settleResults();
+  assert.equal(history.rows.length, 1);
+  assert.ok(history.rows[0].calibration);
+  await history.clearAll();
+  // Empty History must still allow clearing remaining evidence.
+  await eventLog.ingestLine({rows:[reviewedEvent(1)],masterBootId:"500",hseq:1});
+  await history.clearAll();
+  ({device, timing, history} = await boot({keepStorage:true}));
+  await device.loadLog();
+  assert.equal(timing.run, null);
+  assert.equal(history.rows.length, 0);
+  assert.equal(device.logEntries.length, 0);
+  const restored = await backup.unpack(await history.recoveryJson());
+  for (const key of ["results","runs","events","pps","quarantine","log"]) assert.deepEqual(restored[key], [], key);
+});
+
+it("clears stale disk records and memory fallback after a storage failure", async () => {
+  let {timing, history, device} = await boot();
+  await timing.classify("DNS", "sprint", "on disk");
+  eventLog.reportWriteFailure(new Error("storage lost"));
+  await timing.reset();
+  await timing.classify("DNF", "sprint", "in memory");
+  await device.handleLine("X badcmd");
+  await eventLog.ingestQuarantine({raw:"bad",reason:"invalid",node:null,hseq:1,masterBootId:null});
+  await history.clearAll();
+  const data = await backup.unpack(await history.recoveryJson());
+  for (const key of ["results","runs","events","pps","quarantine","log"]) assert.deepEqual(data[key], [], key);
+  ({timing, history, device} = await boot({keepStorage:true}));
+  await device.loadLog();
+  assert.equal(history.rows.length, 0);
+  assert.equal(timing.run, null);
+  assert.equal(device.logEntries.length, 0);
+});
+
+it("retains data and releases the deletion lock when clearing fails", async () => {
+  const {timing, history, device} = await boot();
+  await timing.classify("DNS", "sprint", "keep on failure");
+  const id = history.rows[0].runId;
+  const spy = vi.spyOn(eventLog.getDb(), "transaction").mockImplementation(() => {throw new Error("clear failed");});
+  try { await assert.rejects(history.clearAll(), /clear failed/); }
+  finally { spy.mockRestore(); }
+  assert.equal(history.clearing, false);
+  assert.equal(device.clearingData, false);
+  assert.equal(history.rows[0].runId, id);
+  assert.equal(timing.run.runId, id);
+  assert.equal((await getAll(eventLog.getDb(), eventLog.STORE_RESULTS))[0].runId, id);
 });

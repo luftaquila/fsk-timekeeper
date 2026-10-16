@@ -15,7 +15,7 @@ const notyf = useNotification();
 const timing = useTimingStore();
 const device = useDeviceStore();
 const importInput = ref(null);
-const importBlocked = computed(() => exporting.value || history.importing || timing.armed || timing.starting || timing.classifying || device.updateInProgress);
+const importBlocked = computed(() => exporting.value || history.importing || history.clearing || timing.armed || timing.starting || timing.classifying || device.updateInProgress);
 const classifying = ref(false);
 const exporting = ref(false);
 const filter = ref("");
@@ -60,7 +60,7 @@ async function classify(r, event) {
   }
 }
 async function exportFile(format) {
-  if (exporting.value) return;
+  if (exporting.value || history.clearing) return;
   exporting.value = true;
   try {
     if (format === "excel") await history.exportExcel(filter.value || null);
@@ -86,8 +86,9 @@ async function remove(r) {
   catch (error) { notyf.error(error.message || "Delete failed"); }
 }
 async function clearAll() {
-  if (!window.confirm("Delete all history records?")) return;
-  try { await history.clearAll(); notyf.success("History cleared"); }
+  if (importBlocked.value || classifying.value || device.connecting || device.dfuInProgress) return;
+  if (!window.confirm("Delete all history, events, PPS data, quarantined data, and device logs? The master will be disconnected. Settings will be kept.")) return;
+  try { await history.clearAll(); notyf.success("All recorded data cleared"); }
   catch (error) { notyf.error(error.message || "Delete failed"); }
 }
 </script>
@@ -101,11 +102,11 @@ async function clearAll() {
       </select>
       <span class="count muted">{{ rows.length }} run{{ rows.length === 1 ? "" : "s" }}</span>
       <div class="spacer"></div>
-      <button class="btn btn-ghost btn-sm" :disabled="!rows.length || exporting || history.importing" @click="exportFile('excel')">Export Excel</button>
-      <button class="btn btn-ghost btn-sm" :disabled="exporting || history.importing" @click="exportFile('json')">Export JSON</button>
+      <button class="btn btn-ghost btn-sm" :disabled="!rows.length || exporting || history.importing || history.clearing" @click="exportFile('excel')"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" /></svg> Export Excel</button>
+      <button class="btn btn-ghost btn-sm" :disabled="exporting || history.importing || history.clearing" @click="exportFile('json')"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" /></svg> Export JSON</button>
       <input ref="importInput" type="file" accept=".json,application/json" hidden @change="importFile" />
-      <button class="btn btn-ghost btn-sm" :disabled="importBlocked" @click="importInput.click()">Import JSON</button>
-      <button class="btn btn-ghost btn-sm" :disabled="!history.rows.length || history.importing" @click="clearAll">Clear All</button>
+      <button class="btn btn-ghost btn-sm" :disabled="importBlocked" @click="importInput.click()"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 8l5-5 5 5M12 3v12" /></svg> Import JSON</button>
+      <button class="btn btn-ghost btn-ghost-danger btn-sm" :disabled="importBlocked || classifying || device.connecting || device.dfuInProgress" @click="clearAll"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M19 6l-1 14H6L5 6M9 6V3h6v3M10 10v6M14 10v6" /></svg> Clear All</button>
     </div>
 
     <div class="card">
@@ -134,14 +135,14 @@ async function clearAll() {
                 </td>
                 <td class="centered">
                   <select class="badge status-select" :class="badgeClass(r)" :value="history.status(r)"
-                    aria-label="Record status" :disabled="classifying || timing.starting || timing.classifying || history.importing" @change="classify(r, $event)">
+                    aria-label="Record status" :disabled="classifying || timing.starting || timing.classifying || history.importing || history.clearing" @change="classify(r, $event)">
                     <option v-if="!RESULT_CLASSIFICATIONS.includes(history.status(r))" :value="history.status(r)" disabled>{{ statusLabel(r) }}</option>
                     <option v-if="r.classification" value="">Clear</option>
                     <option v-for="value in RESULT_CLASSIFICATIONS" :key="value" :value="value">{{ value }}</option>
                   </select>
                   <span v-if="r.durable === false" class="badge badge-danger">Not Saved</span>
                 </td>
-                <td class="actions"><button class="btn btn-ghost btn-sm" :disabled="history.importing" @click="remove(r)">Delete</button></td>
+                <td class="actions"><button class="btn btn-ghost btn-sm" :disabled="history.importing || history.clearing" @click="remove(r)">Delete</button></td>
               </tr>
               <tr v-if="r.fault?.reasons?.length" class="fault-row"><td colspan="6"><FaultReasons :reasons="r.fault.reasons" :boundary-tick="r.boundaryTick" /></td></tr>
             </template>

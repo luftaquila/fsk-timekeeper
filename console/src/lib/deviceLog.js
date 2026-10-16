@@ -8,6 +8,8 @@ import { logCode } from "./deviceLogFormat";
 let memory = [];
 let memoryId = 0;
 
+export function resetMemory() { memory = []; memoryId = 0; }
+
 export async function addEntry(entry) {
   const row = { ...entry, code: logCode(entry.code) };
   const db = eventLog.getDb();

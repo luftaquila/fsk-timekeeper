@@ -25,6 +25,13 @@ export const useDeviceStore = defineStore("device", () => {
 
   const connected = ref(false);
   const connecting = ref(false);
+  const clearingData = ref(false);
+  const pendingData = new Set();
+  function trackData(promise) {
+    pendingData.add(promise);
+    promise.then(() => pendingData.delete(promise), () => pendingData.delete(promise));
+    return promise;
+  }
   const transportKind = ref(null); // "serial" | "fake"
   const identity = ref(null); // parsed I line
   const radioKey = ref(null); // memory only: null = unread, "" = unprovisioned
@@ -119,7 +126,9 @@ export const useDeviceStore = defineStore("device", () => {
     if (raw != null) return log({ kind: "console", code: reason, text: raw });
   }
 
-  async function log(entry) {
+  function log(entry) { return trackData(saveLog(entry)); }
+
+  async function saveLog(entry) {
     const row = await deviceLog.addEntry({ at: Date.now(), devid: identity.value?.devid ?? null, masterBootId: masterBootId.value, ...entry, text: redactLine(entry.text) });
     logEntries.value = [row, ...logEntries.value].slice(0, LOG_MAX_ENTRIES);
     return row;
@@ -145,6 +154,7 @@ export const useDeviceStore = defineStore("device", () => {
   }
 
   async function clearLog() {
+    if (clearingData.value) return;
     await deviceLog.clearEntries();
     // An intentional Clear must not be undone by the crash-recovery replay.
     await deviceLog.addEntry({ kind: "state", code: "radio_history_clear", at: Date.now(),
@@ -192,7 +202,12 @@ export const useDeviceStore = defineStore("device", () => {
     }
   }
 
-  async function handleLine(raw) {
+  function handleLine(raw) {
+    if (clearingData.value) return Promise.resolve();
+    return trackData(processLine(raw));
+  }
+
+  async function processLine(raw) {
     const now = Date.now();
     lastLineAt.value = now;
     stats.lines++;
@@ -367,8 +382,7 @@ export const useDeviceStore = defineStore("device", () => {
     const edge = { master_boot_id: bootId, tick: p.tick, seg: p.seg, n: p.n, utc: p.utc, received_at: now };
     const list = ppsEdges.value;
     ppsEdges.value = list.length && BigInt(list[list.length - 1].tick) < BigInt(edge.tick) ? [...list, edge] : [...list, edge].sort((a, b) => (BigInt(a.tick) < BigInt(b.tick) ? -1 : 1));
-    ppsLog.saveEdge(edge);
-    useTimingStore().onPpsEdge(edge);
+    return Promise.all([ppsLog.saveEdge(edge), useTimingStore().onPpsEdge(edge)]);
   }
 
   function onErrorLine(msg) {
@@ -604,6 +618,7 @@ export const useDeviceStore = defineStore("device", () => {
 
   // kind: "serial" (default) | "fake" (dev simulator).
   async function connect({ kind = "serial", port, forUpdate = false } = {}) {
+    if (clearingData.value) return false;
     if (updateInProgress.value && !forUpdate) return false;
     if (connected.value || connecting.value) return true;
     if (kind === "serial" && !isSerialSupported()) {
@@ -643,6 +658,35 @@ export const useDeviceStore = defineStore("device", () => {
     }
   }
 
+  async function pauseData() {
+    clearingData.value = true;
+    await disconnect();
+    while (pendingData.size) await Promise.allSettled([...pendingData]);
+    await radioLogChain;
+    await ackChain;
+  }
+
+  function discardRecords() {
+    resetSession();
+    deviceLog.resetMemory();
+    logEntries.value = [];
+    radioHistory.clear();
+    radioReports.clear();
+    ppsEdges.value = [];
+    ppsBootId.value = null;
+    lastPpsTick = null;
+    masterBootId.value = null;
+    consoleLines.value = [];
+    quarantine.value = null;
+    alarms.value = [];
+    verDrop.value = null;
+    lastLineAt.value = 0;
+    for (const key of Object.keys(telemetry)) delete telemetry[key];
+    for (const key of Object.keys(stats)) stats[key] = 0;
+    dropped.count = 0;
+    dropped.reasons = {};
+  }
+
   async function enterBootloader() {
     if (!transport) throw new Error("Master not connected");
     if (useTimingStore().armed) throw new Error("Stop the running measurement first.");
@@ -664,6 +708,9 @@ export const useDeviceStore = defineStore("device", () => {
     reportStorageFailure: onStorageFailure,
     connected,
     connecting,
+    clearingData,
+    pauseData,
+    discardRecords,
     transportKind,
     identity,
     radioKey,
