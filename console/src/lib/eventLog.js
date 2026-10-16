@@ -7,9 +7,10 @@
  */
 import { openDb, transaction, request, done, addAll, getAll, count, removeRange } from "./idb";
 import { rowKey, lineKey } from "./protocol";
+import * as runLog from "./runLog";
 
 export const DB_NAME = "fsk-timekeeper";
-export const DB_VERSION = 2;
+export const DB_VERSION = 3;
 export const STORE_EVENTS = "events";
 export const STORE_RESULTS = "results";
 export const STORE_PPS = "pps";
@@ -47,6 +48,10 @@ function upgrade(database, oldVersion, tx) {
     database.createObjectStore(STORE_PPS, { keyPath: ["master_boot_id", "tick"] }).createIndex("received_at", "received_at");
     database.createObjectStore(STORE_LOG, { keyPath: "id", autoIncrement: true }).createIndex("at", "at");
     database.createObjectStore(STORE_QUARANTINE, { keyPath: "id", autoIncrement: true }).createIndex("line", "line", { unique: true });
+  }
+  if (oldVersion < 3) {
+    database.createObjectStore(runLog.STORE_RUNS, { keyPath: "runId" });
+    database.createObjectStore(runLog.STORE_META, { keyPath: "key" });
   }
 }
 
@@ -98,6 +103,8 @@ export async function init({ minSeq = Infinity } = {}) {
   try {
     db = await openDb(DB_NAME, DB_VERSION, upgrade);
     durable = true;
+    const activeRun = await runLog.init(db);
+    if (activeRun && !activeRun.closed) minSeq = Math.min(minSeq, activeRun.cursor);
     const tail = await getAllDesc(STORE_EVENTS, MEMORY_WINDOW);
     let loaded = tail;
     if (Number.isFinite(minSeq) && tail.length && tail[tail.length - 1].seq > minSeq + 1) {
@@ -150,6 +157,15 @@ export function since(seq) {
 
 export function getLastSeq() {
   return lastSeq;
+}
+
+export async function flush() { await chain; }
+
+// Import adds archived evidence without sending it through the live run engine.
+export function adopt(imported) {
+  const known = new Set(rows.map(r => r.seq));
+  for (const row of imported) if (!known.has(row.seq)) { append(row); known.add(row.seq); }
+  rows.sort((a, b) => a.seq - b.seq);
 }
 
 // Latest checkpoint row of a node under a master session at or before maxTick.
@@ -242,7 +258,7 @@ export function ingestQuarantine({ raw, reason, node, hseq, masterBootId }, rece
 }
 
 export async function listQuarantine() {
-  if (!db) return rows.filter((row) => row.kind === "quarantine").map((row) => ({ masterBootId: row.master_boot_id, hseq: row.hseq, raw: row.raw, reason: row.reason, node_id: row.node_id === "*" ? null : row.node_id, at: row.received_at }));
+  if (!db) return rows.filter((row) => row.kind === "quarantine").map((row) => ({ line: lineKey(row.master_boot_id, row.hseq), masterBootId: row.master_boot_id, hseq: row.hseq, raw: row.raw, reason: row.reason, node_id: row.node_id === "*" ? null : row.node_id, at: row.received_at }));
   return getAll(db, STORE_QUARANTINE);
 }
 
@@ -281,6 +297,16 @@ export async function rowsBetween(fromSeqExclusive, toSeqInclusive) {
   return rows.filter((r) => r.seq > fromSeqExclusive && r.seq <= toSeqInclusive);
 }
 
+// Imported ranges can be noncontiguous and reordered in this DB. Keep source order.
+export async function rowsFor(record) {
+  if (record.evidenceSeqs == null) return rowsBetween(record.cursorSeq ?? record.cursor ?? 0, record.throughSeq ?? lastSeq);
+  if (!record.evidenceSeqs.length) return [];
+  const low = record.evidenceSeqs.reduce((n, seq) => Math.min(n, seq), Infinity);
+  const high = record.evidenceSeqs.reduce((n, seq) => Math.max(n, seq), 0);
+  const bySeq = new Map((await rowsBetween(low - 1, high)).map(row => [row.seq, row]));
+  return record.evidenceSeqs.map(seq => bySeq.get(seq)).filter(Boolean);
+}
+
 export function close() {
   try {
     db?.close();
@@ -292,6 +318,7 @@ export function close() {
 
 // Test hook: close the database and drop in-memory state.
 export function _reset() {
+  runLog.reset();
   close();
   durable = false;
   initError = null;

@@ -1,4 +1,4 @@
-// Run <-> JSON for localStorage. A run stored by another run format or protocol version is
+// Run <-> JSON, including migration from localStorage. Another run format or protocol version is
 // closed as invalid on load (its evidence cannot be judged by this console); history keeps it.
 import { DEFAULT_DEBOUNCE_MS } from "./constants";
 import { RUN_SCHEMA, invalidateRun } from "./engine";

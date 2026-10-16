@@ -36,6 +36,7 @@ const { useTimingStore } = await import("../src/stores/timing.js");
 const { useHistoryStore } = await import("../src/stores/history.js");
 const { resultNs } = await import("../src/lib/results.js");
 const { formatDuration } = await import("../src/lib/format.js");
+const runLog = await import("../src/lib/runLog.js");
 const { encodeRun } = await import("../src/lib/run-codec.js");
 const { getAll, put } = await import("../src/lib/idb.js");
 
@@ -53,6 +54,7 @@ async function waitFor(pred, timeoutMs = 5000, step = 20) {
 const ms = (ns) => Number((BigInt(ns) + 500_000n) / 1_000_000n);
 
 async function boot({ keepStorage = false } = {}) {
+  await runLog.flush();
   setActivePinia(createPinia());
   if (!keepStorage) localStorage.clear();
   eventLog._reset();
@@ -947,7 +949,7 @@ describe("pipeline with the fake master", () => {
     assert.equal(await first.timing.start("laps", "old"), true, toasts.error.join(" | "));
     await first.device.disconnect();
     const stored = { ...first.timing.run, radioProto: 12, usbProto: 2 };
-    localStorage.setItem("tk.run.v3", encodeRun(stored));
+    await runLog.save(stored, { select: true });
     const again = await boot({ keepStorage: true });
     assert.equal(again.timing.run.closed, true);
     assert.equal(again.timing.run.verification, "invalid");

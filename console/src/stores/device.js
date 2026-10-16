@@ -60,6 +60,8 @@ export const useDeviceStore = defineStore("device", () => {
 
   let transport = null;
   let wakeLock = null;
+  let wakeRequest = null;
+  let wakeGeneration = 0;
   let provisionPending = null; // { cmd, fails, resolve, timer }: K or R awaiting A <cmd> / X <fail>
   let ackChain = Promise.resolve();
   let lastVerDrop = null;
@@ -126,7 +128,9 @@ export const useDeviceStore = defineStore("device", () => {
   async function loadLog() {
     const entries = await deviceLog.listEntries();
     logEntries.value = entries.filter((e) => e.kind !== "state").slice(0, LOG_MAX_ENTRIES);
-    const clearedThrough = Math.max(0, ...entries.filter((e) => e.code === "radio_history_clear").map((e) => e.throughSeq ?? 0));
+    const clears = entries.filter(e => e.code === "radio_history_clear");
+    const clearedThrough = Math.max(0, ...clears.filter(e => e.evidenceSeqs == null).map(e => e.throughSeq ?? 0));
+    const clearedEvidence = new Set(clears.flatMap(e => e.evidenceSeqs ?? []));
     for (const e of [...entries].reverse()) {
       if (e.radioKey && e.radioSnapshot) radioReports.set(e.radioKey, e.radioSnapshot);
       if (e.historyKey && e.historySnapshot) radioHistory.set(e.historyKey, e.historySnapshot);
@@ -134,7 +138,7 @@ export const useDeviceStore = defineStore("device", () => {
     // Evidence is committed before ACK. Rebuild a missing display log if the
     // browser stopped between evidence storage and device-log creation.
     for (const row of eventLog.since(0)) {
-      if (row.radio_history && row.seq > clearedThrough && row.received_at >= Date.now() - LOG_RETENTION_MS) {
+      if (row.radio_history && row.seq > clearedThrough && !clearedEvidence.has(row.seq) && row.received_at >= Date.now() - LOG_RETENTION_MS) {
         await logCheckpointHistory(row, row.received_at);
       }
     }
@@ -514,13 +518,30 @@ export const useDeviceStore = defineStore("device", () => {
 
   /* Screen Wake Lock: keep the console awake while connected. */
   async function acquireWakeLock() {
+    if (wakeRequest || (wakeLock && !wakeLock.released) || !connected.value ||
+        (typeof document !== "undefined" && document.visibilityState === "hidden")) return;
+    const generation = wakeGeneration;
     try {
-      if ("wakeLock" in navigator && !wakeLock) wakeLock = await navigator.wakeLock.request("screen");
+      if (!("wakeLock" in navigator)) return;
+      const request = navigator.wakeLock.request("screen");
+      wakeRequest = request;
+      const lock = await request;
+      if (generation !== wakeGeneration || !connected.value ||
+          (typeof document !== "undefined" && document.visibilityState === "hidden")) {
+        await lock.release();
+        return;
+      }
+      wakeLock = lock;
+      lock.addEventListener("release", () => { if (wakeLock === lock) wakeLock = null; }, { once: true });
     } catch {
       /* optional */
+    } finally {
+      if (generation === wakeGeneration) wakeRequest = null;
     }
   }
   function releaseWakeLock() {
+    wakeGeneration++;
+    wakeRequest = null;
     try {
       wakeLock?.release();
     } catch {
@@ -640,6 +661,7 @@ export const useDeviceStore = defineStore("device", () => {
 
   return {
     supported,
+    reportStorageFailure: onStorageFailure,
     connected,
     connecting,
     transportKind,

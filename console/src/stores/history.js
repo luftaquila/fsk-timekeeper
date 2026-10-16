@@ -5,7 +5,11 @@ import writeExcelFile from "write-excel-file/universal";
 import { defineStore } from "pinia";
 import { ref, toRaw } from "vue";
 import * as eventLog from "../lib/eventLog";
-import { getAll, put, remove, clear } from "../lib/idb";
+import { getAll, put, remove, transaction, done } from "../lib/idb";
+import { enqueue, flush } from "../lib/storageQueue";
+import * as runLog from "../lib/runLog";
+import * as backup from "../lib/backup";
+import { useTimingStore } from "./timing";
 import { ROLE_LABEL, RESULT_CLASSIFICATIONS } from "../lib/constants";
 import { downloadBlob, timestampSlug, formatDuration } from "../lib/format";
 import { isOldFormatRow, resultNs, resultTicks, lapsNs } from "../lib/results";
@@ -42,9 +46,10 @@ function plain(value) {
 }
 
 export const useHistoryStore = defineStore("history", () => {
+  const importing = ref(false);
   const rows = ref([]); // newest first
   let memoryId = 0;
-  let pendingWrite = Promise.resolve();
+
 
   function db() {
     return eventLog.getDb();
@@ -60,7 +65,8 @@ export const useHistoryStore = defineStore("history", () => {
         const emptyIds = new Set(empty.map((row) => row.id));
         rows.value = all.filter((row) => !emptyIds.has(row.id)).sort((a, b) => b.createdAt - a.createdAt);
       }
-    } catch {
+    } catch (error) {
+      eventLog.reportWriteFailure(error);
       rows.value = [];
     }
   }
@@ -99,6 +105,7 @@ export const useHistoryStore = defineStore("history", () => {
   }
 
   async function saveResult(run, { throughSeq = null } = {}) {
+    if (runLog.isDeleted(run.runId)) return null;
     const existing = rows.value.find((r) => r.runId === run.runId);
     const measured = hasResult(run);
     if (!existing && ((!measured && !RESULT_CLASSIFICATIONS.includes(run.classification)) || run.historyId != null)) return null;
@@ -111,7 +118,10 @@ export const useHistoryStore = defineStore("history", () => {
       createdAt: run.startedAt || Date.now(),
     };
     if ((measured || !existing) && !isOldFormatRow(run)) {
+      const frozen = row.calibration && JSON.stringify(resultTicks(row)) === JSON.stringify(resultTicks(run))
+        ? { calibration: row.calibration, durationNs: row.durationNs } : null;
       Object.assign(row, fieldsOf(run));
+      if (frozen) Object.assign(row, frozen);
       row.note = run.note || row.note;
       if (throughSeq != null) row.throughSeq = throughSeq;
     } else {
@@ -138,9 +148,24 @@ export const useHistoryStore = defineStore("history", () => {
     // Capture the state now and serialize writes: several laps or calibration can arrive
     // while IndexedDB is still inserting the first result.
     const snapshot = plain(run);
-    const write = pendingWrite.then(() => saveResult(snapshot, options));
-    pendingWrite = write.catch(() => {});
-    return write;
+    return enqueue(() => saveResult(snapshot, options));
+  }
+
+  // Finalization changes timing only. Read the latest row inside the mutation queue
+  // so an operator's classification (including Clear) always survives a late freeze.
+  function updateCalibration(run) {
+    const snapshot = plain(run);
+    return enqueue(async () => {
+      const existing = rows.value.find(r => r.runId === snapshot.runId);
+      if (!existing || existing.calibration || runLog.isDeleted(snapshot.runId)) return;
+      const ticks = resultTicks(existing);
+      if (!ticks.length || !ticks.every(tick => snapshot.calibration?.points?.[tick])) return;
+      const row = { ...plain(existing), calibration: snapshot.calibration, durationNs: null, updatedAt: Date.now() };
+      const ns = resultNs(row);
+      row.durationNs = ns == null ? null : String(ns);
+      if (snapshot.durable === false) row.durable = false;
+      return save(row);
+    });
   }
 
   async function saveClassification(row, classification) {
@@ -154,36 +179,34 @@ export const useHistoryStore = defineStore("history", () => {
 
   function classify(runId, classification) {
     if (classification !== null && !RESULT_CLASSIFICATIONS.includes(classification)) return Promise.reject(new Error("Invalid classification"));
-    const write = pendingWrite.then(() => {
+    return enqueue(() => {
       const row = rows.value.find((r) => r.runId === runId);
       if (!row) throw new Error("Record not found");
       return saveClassification(row, classification);
     });
-    pendingWrite = write.catch(() => {});
-    return write;
+
   }
 
-  async function removeRow(id) {
-    rows.value = rows.value.filter((r) => r.id !== id);
-    if (db() && id > 0) {
-      try {
-        await remove(db(), eventLog.STORE_RESULTS, id);
-      } catch {
-        /* ignore */
+  function deleteRows(select) {
+    return enqueue(async () => {
+      const removed = select(rows.value);
+      const ids = new Set(removed.map(r => r.runId));
+      if (db()) {
+        const tx = transaction(db(), [eventLog.STORE_RESULTS, runLog.STORE_RUNS], "readwrite");
+        const finished = done(tx);
+        for (const row of removed) {
+          if (row.id > 0) tx.objectStore(eventLog.STORE_RESULTS).delete(row.id);
+          tx.objectStore(runLog.STORE_RUNS).put({ runId: row.runId, deleted: true });
+        }
+        await finished;
       }
-    }
+      for (const id of ids) runLog.tombstone(id);
+      rows.value = rows.value.filter(r => !ids.has(r.runId));
+    });
   }
 
-  async function clearAll() {
-    rows.value = [];
-    if (db()) {
-      try {
-        await clear(db(), eventLog.STORE_RESULTS);
-      } catch {
-        /* ignore */
-      }
-    }
-  }
+  function removeRow(id) { return deleteRows(rows => rows.filter(r => r.id === id)); }
+  function clearAll() { return deleteRows(rows => rows.slice()); }
 
   function filtered(mode = null) {
     return mode ? rows.value.filter((r) => r.mode === mode) : rows.value.slice();
@@ -197,9 +220,9 @@ export const useHistoryStore = defineStore("history", () => {
 
   const status = statusValue;
 
-  // A single display-only snapshot feeds both file formats. Raw storage fields never leave here.
-  function exportData(mode = null) {
-    return { History: filtered(mode).map((row) => {
+  // Display columns shared by Excel and the human-readable section of recovery JSON.
+  function exportData(mode = null, source = rows.value) {
+    return { History: source.filter(row => !mode || row.mode === mode).map((row) => {
       const edges = edgesFor(row);
       const record = historyRecord(row, edges);
       const stats = lapSummary(row, edges);
@@ -222,6 +245,7 @@ export const useHistoryStore = defineStore("history", () => {
   }
 
   async function exportExcel(mode = null) {
+    await useTimingStore().settleResults();
     const headers = ["Date", "Mode", "Note", "Result", "Status"];
     const widths = [28, 26, 40, 20, 24];
     const data = [];
@@ -253,10 +277,35 @@ export const useHistoryStore = defineStore("history", () => {
     downloadBlob(blob, `fsk-timekeeper-${mode || "all"}-${timestampSlug()}.xlsx`);
   }
 
-  async function exportJson(mode = null) {
-    const blob = new Blob([JSON.stringify(exportData(mode), null, 2)], { type: "application/json" });
-    downloadBlob(blob, `fsk-timekeeper-${mode || "all"}-${timestampSlug()}.json`);
+  async function recoveryJson() {
+    await useTimingStore().settleResults();
+    await eventLog.flush();
+    const recovery = await backup.snapshot(rows.value, useDeviceStore().ppsEdges);
+    recovery.results.sort((a, b) => b.createdAt - a.createdAt);
+    return backup.pack(exportData(null, recovery.results).History, recovery);
   }
 
-  return { rows, init, upsert, classify, removeRow, clearAll, filtered, status, edgesFor, exportData, exportExcel, exportJson };
+  async function exportJson() {
+    const blob = new Blob([await recoveryJson()], { type: "application/json" });
+    downloadBlob(blob, `fsk-timekeeper-all-${timestampSlug()}.json`);
+  }
+
+  async function importJson(file) {
+    const timing = useTimingStore(), device = useDeviceStore();
+    if (importing.value || timing.armed || timing.starting || timing.classifying || device.updateInProgress) {
+      throw new Error("Stop measurement and wait for current operations before importing.");
+    }
+    importing.value = true;
+    try {
+      if (file.size > backup.MAX_BACKUP_BYTES) throw new Error("JSON exceeds the 64 MB limit.");
+      const data = await backup.unpack(await file.text());
+      await timing.settleResults();
+      const result = await backup.merge(data);
+      await init();
+      await device.loadLog();
+      return result;
+    } finally { importing.value = false; }
+  }
+
+  return { rows, importing, init, flush, recoveryJson, importJson, upsert, updateCalibration, classify, removeRow, clearAll, filtered, status, edgesFor, exportData, exportExcel, exportJson };
 });

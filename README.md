@@ -23,6 +23,19 @@ Wireless LoRa timing instrument for Formula Student Korea dynamic events.
   * Both ZIPs contain `fsk-timekeeper-metadata.json`. Packages without this metadata are rejected. The browser checks product, application region, protocol compatibility, embedded build identity, file sizes, SHA-256 and the DFU CRC before writing. Hashes detect corruption; they do not authenticate the publisher.
   * Works offline in the bundled HTML and in the hosted console. No firmware download service is used. After transfer, use Reconnect to select the application port; completion requires reading back the expected running version and protocols (and chip ID when known). A completed transfer without reconnection is shown as unverified.
   * Reinstall and downgrade are explicitly labeled. Measurement and device configuration are blocked during the update. Keep the board connected while writing; after a failed transfer, reset into bootloader and retry. Only the application region is programmed; radio settings and the fleet-key page are excluded.
+* History → Export JSON saves **all modes**, including unfinished run snapshots, exact timing values, evidence, PPS and device logs. Export Excel follows the selected mode filter.
+  * Import JSON beside Export JSON merges the recovery file. Identical records are skipped; conflicting records cancel the entire import. Stop measurement and finish any firmware update first. Imported unfinished runs remain stopped.
+  * Verified results save automatically. PPS finalization continues across Clear, the next run and reload; without usable PPS it freezes at nominal 16 MHz. JSON and Excel export wait for any existing finalization deadline (up to 2 seconds).
+  * Active runs use IndexedDB. Storage failures use the existing storage banner and non-durable record marking; export JSON before closing the page when storage fails.
+
+## Deployment and recovery
+
+1. Export JSON from the console before updating. Keep the matching firmware ZIP and console HTML from the current release.
+2. Build and test the target revision. A `v*` tag runs firmware, PCB, housing and console workflows; all must succeed before the release publishes.
+3. The release publishes firmware, standalone HTML and `fsk-timekeeper-web.zip` from the same revision. Pages deployment starts only after publication and verifies the web archive's `build-sha.txt` against the release tag.
+4. Update every board with the release firmware, then use its console. Verify device identity/protocols, connection, a measured result and JSON export/import before operation.
+5. To retry Pages deployment or roll back, run **Build web application** with a published `release-tag` that contains the web ZIP. It deploys that archive without rebuilding. Restore matching board firmware if needed; use Import JSON to restore records. Import never clears existing data; a conflicting record leaves storage unchanged.
+   * Earlier consoles without recovery import or support for database version 3 need a separate browser profile and their matching standalone HTML. Keep the current profile and recovery JSON for restoration with a compatible console.
 
 > [!NOTE]
 > Assembly, usage and troubleshooting guides will follow.

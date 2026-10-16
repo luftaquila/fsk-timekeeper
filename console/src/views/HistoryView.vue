@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed, nextTick } from "vue";
 import { useTimingStore } from "../stores/timing";
+import { useDeviceStore } from "../stores/device";
 import { useHistoryStore } from "../stores/history";
 import { useNotification } from "../composables/useNotification";
 import { MODES, MODE_LABEL, RESULT_CLASSIFICATIONS } from "../lib/constants";
@@ -12,6 +13,9 @@ import FaultReasons from "../components/FaultReasons.vue";
 const history = useHistoryStore();
 const notyf = useNotification();
 const timing = useTimingStore();
+const device = useDeviceStore();
+const importInput = ref(null);
+const importBlocked = computed(() => exporting.value || history.importing || timing.armed || timing.starting || timing.classifying || device.updateInProgress);
 const classifying = ref(false);
 const exporting = ref(false);
 const filter = ref("");
@@ -60,21 +64,31 @@ async function exportFile(format) {
   exporting.value = true;
   try {
     if (format === "excel") await history.exportExcel(filter.value || null);
-    else await history.exportJson(filter.value || null);
+    else await history.exportJson();
   } catch (error) {
     notyf.error(error.message || "Export failed");
   } finally {
     exporting.value = false;
   }
 }
+async function importFile(event) {
+  const file = event.target.files?.[0];
+  event.target.value = "";
+  if (!file || importBlocked.value) return;
+  try {
+    const { added, skipped, runs } = await history.importJson(file);
+    notyf.success(`Imported ${added} records and ${runs} run snapshots; ${skipped} duplicates skipped`);
+  } catch (error) { notyf.error(error.message || "Import failed"); }
+}
+
 async function remove(r) {
-  await history.removeRow(r.id);
-  notyf.success("Deleted");
+  try { await history.removeRow(r.id); notyf.success("Deleted"); }
+  catch (error) { notyf.error(error.message || "Delete failed"); }
 }
 async function clearAll() {
   if (!window.confirm("Delete all history records?")) return;
-  await history.clearAll();
-  notyf.success("History cleared");
+  try { await history.clearAll(); notyf.success("History cleared"); }
+  catch (error) { notyf.error(error.message || "Delete failed"); }
 }
 </script>
 
@@ -87,9 +101,11 @@ async function clearAll() {
       </select>
       <span class="count muted">{{ rows.length }} run{{ rows.length === 1 ? "" : "s" }}</span>
       <div class="spacer"></div>
-      <button class="btn btn-ghost btn-sm" :disabled="!rows.length || exporting" @click="exportFile('excel')">Export Excel</button>
-      <button class="btn btn-ghost btn-sm" :disabled="!rows.length || exporting" @click="exportFile('json')">Export JSON</button>
-      <button class="btn btn-ghost btn-sm" :disabled="!history.rows.length" @click="clearAll">Clear All</button>
+      <button class="btn btn-ghost btn-sm" :disabled="!rows.length || exporting || history.importing" @click="exportFile('excel')">Export Excel</button>
+      <button class="btn btn-ghost btn-sm" :disabled="exporting || history.importing" @click="exportFile('json')">Export JSON</button>
+      <input ref="importInput" type="file" accept=".json,application/json" hidden @change="importFile" />
+      <button class="btn btn-ghost btn-sm" :disabled="importBlocked" @click="importInput.click()">Import JSON</button>
+      <button class="btn btn-ghost btn-sm" :disabled="!history.rows.length || history.importing" @click="clearAll">Clear All</button>
     </div>
 
     <div class="card">
@@ -118,14 +134,14 @@ async function clearAll() {
                 </td>
                 <td class="centered">
                   <select class="badge status-select" :class="badgeClass(r)" :value="history.status(r)"
-                    aria-label="Record status" :disabled="classifying || timing.starting || timing.classifying" @change="classify(r, $event)">
+                    aria-label="Record status" :disabled="classifying || timing.starting || timing.classifying || history.importing" @change="classify(r, $event)">
                     <option v-if="!RESULT_CLASSIFICATIONS.includes(history.status(r))" :value="history.status(r)" disabled>{{ statusLabel(r) }}</option>
                     <option v-if="r.classification" value="">Clear</option>
                     <option v-for="value in RESULT_CLASSIFICATIONS" :key="value" :value="value">{{ value }}</option>
                   </select>
                   <span v-if="r.durable === false" class="badge badge-danger">Not Saved</span>
                 </td>
-                <td class="actions"><button class="btn btn-ghost btn-sm" @click="remove(r)">Delete</button></td>
+                <td class="actions"><button class="btn btn-ghost btn-sm" :disabled="history.importing" @click="remove(r)">Delete</button></td>
               </tr>
               <tr v-if="r.fault?.reasons?.length" class="fault-row"><td colspan="6"><FaultReasons :reasons="r.fault.reasons" :boundary-tick="r.boundaryTick" /></td></tr>
             </template>

@@ -1,6 +1,7 @@
 import { defineStore } from "pinia";
 import { reactive, computed, watch } from "vue";
 import { MODES, ROLES, REQUIRED_ROLES, DEFAULT_DEBOUNCE_MS, DEBOUNCE_MIN_MS, DEBOUNCE_MAX_MS } from "../lib/constants";
+import * as eventLog from "../lib/eventLog";
 import { validateNodeId } from "../lib/protocol";
 
 const KEY = "tk.settings.v2";
@@ -58,8 +59,8 @@ export const useSettingsStore = defineStore("settings", () => {
     () => {
       try {
         localStorage.setItem(KEY, JSON.stringify(state));
-      } catch {
-        /* quota / private mode */
+      } catch (error) {
+        eventLog.reportWriteFailure(error);
       }
     },
     { deep: true },

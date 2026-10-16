@@ -21,11 +21,12 @@ jobs:
     uses: ./.github/workflows/3d.yml
   build-html:
     uses: ./.github/workflows/web-bundle.yml
-  # The console refuses a master of another protocol version, so it is only
-  # deployed once the firmware and console tests of this release pass.
+  # Publish the matching firmware and console before updating the hosted console.
   deploy-web:
-    needs: [build-firmware, build-html]
+    needs: [release]
     uses: ./.github/workflows/web.yml
+    with:
+      release-tag: ${{ github.ref_name }}
   release:
     name: release
     runs-on: ubuntu-24.04
@@ -38,14 +39,17 @@ jobs:
           zip -r fsk-timekeeper-pcb.zip fsk-timekeeper-pcb
           zip -r fsk-timekeeper-3d.zip fsk-timekeeper-3d
           mv html/fsk-timekeeper-console.html .
+          (cd web && zip -r ../fsk-timekeeper-web.zip .)
       - uses: ncipollo/release-action@v1
         with:
           allowUpdates: true
+          artifactErrorsFailBuild: true
           artifacts: |
             fsk-timekeeper-3d.zip
             fsk-timekeeper-firmware.zip
             fsk-timekeeper-pcb.zip
             fsk-timekeeper-console.html
+            fsk-timekeeper-web.zip
           commit: ${{ github.sha }}
           tag: ${{ github.ref_name }}
           body: |

@@ -10,6 +10,7 @@ import * as ppsLog from "../lib/ppsLog";
 import { createRun, createClassifiedRun, evaluateRun, stopRun, endMasterSession, shouldInvalidateOnMasterBoot, runTouchedBy, EngineError, MASTER_REBOOTED } from "../lib/engine";
 import { wirelessQuality, missingRoles as missingRolesOf } from "../lib/quality";
 import { encodeRun, decodeRun } from "../lib/run-codec";
+import * as runLog from "../lib/runLog";
 import { MODES, CALIBRATION_WAIT_MS, RESULT_CLASSIFICATIONS } from "../lib/constants";
 import { buildTimeline, freezeCalibration, utcMsAt, durationNs } from "../lib/calibration";
 import { resultTicks, resultNs as resultNsOf, lapsNs as lapsNsOf, spanNs } from "../lib/results";
@@ -35,8 +36,9 @@ export const useTimingStore = defineStore("timing", () => {
   const live = reactive(makeLive());
   const starting = ref(false);
   const classifying = ref(false);
-  let freezeTimer = null;
-  let freezeWait = null; // { runId, lastTick } while a decided result waits for its next PPS edge
+  const freezes = new Map(); // runId -> timer; independent of the selected run
+  const generation = runLog.epoch();
+  let restored = false;
 
   const armed = computed(() => !!run.value?.armed);
   const fault = computed(() => run.value?.fault ?? null);
@@ -68,12 +70,7 @@ export const useTimingStore = defineStore("timing", () => {
   }
 
   function persist() {
-    try {
-      if (run.value) localStorage.setItem(KEY_RUN, encodeRun(run.value));
-      else localStorage.removeItem(KEY_RUN);
-    } catch {
-      /* ignore */
-    }
+    return runLog.save(run.value, { select: true });
   }
 
   function openCursor() {
@@ -87,13 +84,11 @@ export const useTimingStore = defineStore("timing", () => {
       let decoded = decodeRun(localStorage.getItem(KEY_RUN));
       if (!decoded) {
         decoded = decodeRun(localStorage.getItem(KEY_RUN_OLD));
-        if (decoded) localStorage.removeItem(KEY_RUN_OLD);
       }
       if (decoded && MODES.includes(decoded.run.mode)) {
         // Older versions kept stopped runs open while awaiting sensor checkpoints.
         const stopped = !decoded.run.closed && decoded.run.stopTick != null;
         run.value = stopped ? stopRun(decoded.run) : decoded.run;
-        persist();
       }
     } catch {
       run.value = null;
@@ -103,8 +98,9 @@ export const useTimingStore = defineStore("timing", () => {
 
   function setRun(next) {
     run.value = next;
-    persist();
+    const saved = persist();
     eventLog.protect(openCursor());
+    return saved;
   }
 
   async function syncHistory(current, options = {}) {
@@ -163,7 +159,7 @@ export const useTimingStore = defineStore("timing", () => {
 
   // START: quality -> fresh master clock -> quality again -> run from checkpoints -> catch up.
   async function start(mode, note = "") {
-    if (starting.value || classifying.value) return false;
+    if (starting.value || classifying.value || useHistoryStore().importing) return false;
     const device = useDeviceStore();
     if (device.updateInProgress) return false;
     const settings = useSettingsStore();
@@ -205,11 +201,10 @@ export const useTimingStore = defineStore("timing", () => {
         startedUtc: utcMs != null ? new Date(utcMs).toISOString() : null,
         durable: device.durable,
       });
-      cancelFreeze();
       resetLive();
       settings.rememberNote(note);
       next.masterDevId = device.identity?.devid || null;
-      setRun(next);
+      await setRun(next);
       // Edges captured during the clock read belong to this run.
       onEventRows(eventLog.since(next.cursor));
       return true;
@@ -226,12 +221,12 @@ export const useTimingStore = defineStore("timing", () => {
     const current = run.value;
     if (!current?.armed) return false;
     updateClock();
-    applyEvaluation({ run: { ...stopRun(current), stoppedClockDisplay: live.clockDisplay }, crossings: live.crossings, laps: live.laps });
+    await applyEvaluation({ run: { ...stopRun(current), stoppedClockDisplay: live.clockDisplay }, crossings: live.crossings, laps: live.laps });
     return true;
   }
 
   async function classify(classification, mode = useSettingsStore().state.mode, note = "") {
-    if (starting.value || classifying.value || (classification !== null && !RESULT_CLASSIFICATIONS.includes(classification))) return false;
+    if (starting.value || classifying.value || useHistoryStore().importing || (classification !== null && !RESULT_CLASSIFICATIONS.includes(classification))) return false;
     if (classification === null && !run.value?.classification) return true;
     classifying.value = true;
     try {
@@ -254,62 +249,78 @@ export const useTimingStore = defineStore("timing", () => {
   }
 
   function reset() {
-    cancelFreeze();
     resetLive();
-    setRun(null);
+    return setRun(null);
   }
 
-  function cancelFreeze() {
-    if (freezeTimer) clearTimeout(freezeTimer);
-    freezeTimer = null;
-    freezeWait = null;
-  }
-
-  // Freeze the calibration of a decided run's ticks (the result and any confirmed laps). The
-  // live edges belong to the connected master's boot: after a reboot the run's boot is in storage.
-  async function freezeNow(runId) {
-    cancelFreeze();
-    const pending = run.value;
-    if (!pending || pending.runId !== runId || pending.calibration) return;
+  function pendingRun(current) {
+    if (!current || current.calibration || !(current.closed || (current.mode === "sprint" && current.verification === "verified"))) return current;
+    if (!resultTicks(current).length || current.finalizeAt != null) return current;
     const device = useDeviceStore();
-    const edges = device.ppsBootId === pending.masterBootId ? device.ppsEdges : await ppsLog.loadEdges(pending.masterBootId);
-    const current = run.value;
-    if (!current || current.runId !== runId || current.calibration) return;
+    return { ...current, finalizeAt: Date.now() + CALIBRATION_WAIT_MS,
+      calibrationEdges: runLog.clone(device.ppsBootId === current.masterBootId ? device.ppsEdges : []) };
+  }
+
+  async function freezeNow(runId) {
+    if (generation !== runLog.epoch()) return;
+    clearTimeout(freezes.get(runId));
+    freezes.delete(runId);
+    const current = runLog.get(runId);
+    if (!current || current.deleted || current.calibration || current.finalizeAt == null) return;
     const ticks = resultTicks(current);
-    if (!ticks.length) return;
-    const calibration = freezeCalibration(edges, ticks);
+    const calibration = freezeCalibration(current.calibrationEdges || [], ticks);
     let ns = null;
     if (current.verification === "verified") {
       if (current.mode === "sprint") ns = durationNs(calibration.points, current.startTick, current.finishTick);
       else if (current.totalValid && ticks.length >= 2) ns = durationNs(calibration.points, ticks[0], ticks[ticks.length - 1]);
     }
-    setRun({ ...current, calibration, durationNs: ns == null ? null : String(ns) });
-    if (!current.armed) showStoppedClock();
-    syncHistory(run.value, { throughSeq: eventLog.getLastSeq() });
+    const next = { ...current, calibration, durationNs: ns == null ? null : String(ns) };
+    delete next.calibrationEdges;
+    delete next.finalizeAt;
+    if (run.value?.runId === runId) {
+      await setRun(next);
+      if (run.value?.runId === runId && !next.armed) showStoppedClock();
+    } else await runLog.save(next);
+    await useHistoryStore().updateCalibration(next);
   }
 
-  // A decided result waits for a qualified PPS edge after its last tick, at most CALIBRATION_WAIT_MS.
-  function scheduleFreeze() {
-    const current = run.value;
-    if (!current || current.calibration || !(current.closed || (current.mode === "sprint" && current.verification === "verified"))) return;
+  function scheduleFreeze(current = run.value) {
+    if (!current || current.calibration || current.finalizeAt == null || runLog.isDeleted(current.runId)) return;
     const ticks = resultTicks(current);
-    if (!ticks.length) return;
-    const lastTick = ticks.reduce((m, t) => (BigInt(t) > m ? BigInt(t) : m), 0n);
-    const device = useDeviceStore();
-    const edges = device.ppsBootId === current.masterBootId ? device.ppsEdges : [];
-    if (edges.some((e) => BigInt(e.tick) > lastTick)) return freezeNow(current.runId);
-    cancelFreeze();
-    freezeWait = { runId: current.runId, lastTick, masterBootId: current.masterBootId };
-    freezeTimer = setTimeout(() => freezeNow(current.runId), CALIBRATION_WAIT_MS);
+    const lastTick = ticks.reduce((m, t) => BigInt(t) > m ? BigInt(t) : m, 0n);
+    if (Date.now() >= current.finalizeAt || current.calibrationEdges?.some(e => BigInt(e.tick) > lastTick)) {
+      return freezeNow(current.runId);
+    }
+    if (!freezes.has(current.runId)) {
+      freezes.set(current.runId, setTimeout(() => freezeNow(current.runId), current.finalizeAt - Date.now()));
+    }
   }
 
-  function onPpsEdge(edge) {
-    if (!freezeWait || edge.master_boot_id !== freezeWait.masterBootId || BigInt(edge.tick) <= freezeWait.lastTick) return;
-    freezeNow(freezeWait.runId);
+  async function onPpsEdge(edge) {
+    for (const current of runLog.all()) {
+      if (current.calibration || current.finalizeAt == null || edge.master_boot_id !== current.masterBootId) continue;
+      if (Date.now() > current.finalizeAt) { await freezeNow(current.runId); continue; }
+      const edges = current.calibrationEdges || [];
+      if (!edges.some(e => e.tick === edge.tick)) edges.push(runLog.clone(edge));
+      const next = { ...current, calibrationEdges: edges };
+      if (run.value?.runId === next.runId) await setRun(next);
+      else await runLog.save(next);
+      await scheduleFreeze(next);
+    }
+  }
+
+  // Export waits only for already pending finalizations, never for a running race.
+  async function settleResults() {
+    const pending = runLog.all().filter(r => r.finalizeAt != null && !r.calibration);
+    await Promise.all(pending.map(async r => {
+      await new Promise(resolve => setTimeout(resolve, Math.max(0, r.finalizeAt - Date.now())));
+      await freezeNow(r.runId);
+    }));
+    await runLog.flush();
   }
 
   function applyEvaluation(result) {
-    const next = result.run;
+    const next = pendingRun({ ...result.run, throughSeq: eventLog.getLastSeq() });
     const before = run.value;
     live.crossings = result.crossings;
     live.laps = result.laps;
@@ -318,7 +329,7 @@ export const useTimingStore = defineStore("timing", () => {
       live.startedAt = useDeviceStore().tickToWallMs(firstStart.tick);
       startClock();
     }
-    setRun(next);
+    const persisted = setRun(next);
     if (next.closed || !next.armed) {
       stopClock();
       showStoppedClock();
@@ -336,7 +347,7 @@ export const useTimingStore = defineStore("timing", () => {
     const saved = changed ? syncHistory(next, { throughSeq: eventLog.getLastSeq() }) : Promise.resolve();
     if ((next.closed && !(before?.closed && before.runId === next.runId)) ||
         (next.mode === "sprint" && next.verification === "verified" && before?.verification !== "verified")) scheduleFreeze();
-    return saved;
+    return Promise.all([persisted, saved]);
   }
 
   function evaluateOpen(current = run.value) {
@@ -376,7 +387,30 @@ export const useTimingStore = defineStore("timing", () => {
 
   // After the event log is loaded: rebuild the live view of a restored run.
   async function reevaluate() {
-    let current = run.value;
+    if (!restored) {
+      restored = true;
+      if (runLog.hasActiveState()) {
+        const stored = runLog.active();
+        run.value = stored && !stored.deleted ? decodeRun(encodeRun(stored))?.run ?? null : null;
+      }
+      const migrated = await persist();
+      if (migrated) {
+        try { localStorage.removeItem(KEY_RUN); localStorage.removeItem(KEY_RUN_OLD); }
+        catch (error) { useDeviceStore().reportStorageFailure(error); }
+      }
+      for (const stored of runLog.all()) {
+        if (stored.finalizeAt == null || stored.calibration) continue;
+        const diskEdges = await ppsLog.loadEdges(stored.masterBootId);
+        const edges = new Map((stored.calibrationEdges || []).map(e => [e.tick, e]));
+        for (const e of diskEdges) if (e.received_at <= stored.finalizeAt) edges.set(e.tick, e);
+        const next = { ...stored, calibrationEdges: [...edges.values()] };
+        if (run.value?.runId === next.runId) await setRun(next);
+        else await runLog.save(next);
+        await scheduleFreeze(next);
+      }
+    }
+    let current = pendingRun(run.value);
+    if (current !== run.value) await setRun(current);
     resetLive();
     if (!current) return;
     const device = useDeviceStore();
@@ -435,5 +469,6 @@ export const useTimingStore = defineStore("timing", () => {
     markNonDurable,
     qualityFor,
     missingRoles,
+    settleResults,
   };
 });

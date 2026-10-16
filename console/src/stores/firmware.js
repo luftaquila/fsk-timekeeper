@@ -1,6 +1,7 @@
 import { defineStore } from "pinia";
 import { computed, ref, shallowRef } from "vue";
 import { useDeviceStore } from "./device";
+import { useHistoryStore } from "./history";
 import { useTimingStore } from "./timing";
 import { readFirmwarePackage, compareVersions } from "../firmware/package";
 import { flashFirmware } from "../firmware/protocol";
@@ -28,7 +29,7 @@ export const useFirmwareStore = defineStore("firmware", () => {
     return comparison === 0 ? "Reinstall" : comparison === -1 ? "Downgrade" : "Update";
   });
   const canStart = computed(() => !!firmware.value?.compatible && !busy.value && !awaitingPort.value &&
-    !device.updateInProgress && !timing.armed && !timing.starting && !timing.classifying && !device.connecting && device.transportKind !== "fake" && device.supported);
+    !device.updateInProgress && !useHistoryStore().importing && !timing.armed && !timing.starting && !timing.classifying && !device.connecting && device.transportKind !== "fake" && device.supported);
 
   function release() { device.updateInProgress = false; }
   function error(e) {

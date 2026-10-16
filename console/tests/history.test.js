@@ -164,7 +164,7 @@ describe("history rows and exports", () => {
     }
   });
 
-  it("Excel and JSON contain exactly the same displayed values and no storage fields", async () => {
+  it("Excel stays display-only while JSON includes all records and recovery data", async () => {
     const history = useHistoryStore();
     const note = '=1+1, 한글 "note"\nsecond line';
     await history.upsert(run({ runId: "sprint", mode: "sprint", note, verification: "verified",
@@ -197,7 +197,10 @@ describe("history rows and exports", () => {
       const [jsonBlob, jsonName] = downloadBlob.mock.calls.at(-1);
       assert.match(jsonName, /\.json$/);
       const json = JSON.parse(await jsonBlob.text());
-      assert.deepEqual(json, snapshot);
+      assert.deepEqual(json.History, snapshot.History);
+      assert.equal(json.version, 1);
+      assert.equal(json.recovery.results.length, 4);
+      assert.equal(json.recovery.results.find(r => r.runId === "sprint").masterBootId, "18446744073709551615");
       assert.equal(evidence.mock.calls.length, 0);
       await history.exportExcel();
       const [excelBlob, filename] = downloadBlob.mock.calls.at(-1);
@@ -209,11 +212,11 @@ describe("history rows and exports", () => {
       assertWorkbookRecords(workbook[0].data, json.History);
       await history.exportJson("sprint");
       const filtered = JSON.parse(await downloadBlob.mock.calls.at(-1)[0].text());
-      assert.deepEqual(Object.keys(filtered), ["History"]);
-      assert.equal(filtered.History.length, 2);
+      assert.deepEqual(filtered.History, snapshot.History);
+      assert.equal(filtered.recovery.results.length, 4);
       await history.exportExcel("sprint");
       const [filteredExcel] = downloadBlob.mock.calls.at(-1);
-      assertWorkbookRecords(await readSheet(Buffer.from(await filteredExcel.arrayBuffer()), "History"), filtered.History);
+      assertWorkbookRecords(await readSheet(Buffer.from(await filteredExcel.arrayBuffer()), "History"), history.exportData("sprint").History);
     } finally {
       evidence.mockRestore();
     }
