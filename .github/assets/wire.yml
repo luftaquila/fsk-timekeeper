@@ -1,0 +1,35 @@
+# Requires Graphviz and WireViz.
+# cd .github/assets && uvx --from wireviz==0.4.1 wireviz wire.yml -f p
+# Connector image: fsk-energymeter/.github/assets/lv-mate.png (same 5557-04R housing).
+# J1 pinout: device/hardware/fsk-timekeeper.kicad_pcb
+# BA2M-DDT sensor wiring (page 2): https://autonics.se/wp-content/uploads/2018/02/BA_cat_eng_161109.pdf
+
+connectors:
+  TIMEKEEPER SENSOR:
+    type: MOLEX 5557-04R (39012040)
+    show_pincount: false
+    pinlabels: [+12V, NC, SENSE, GND]
+    image:
+      src: ./sensor-mate.png
+      width: 200
+
+  PHOTOELECTRIC SENSOR:
+    type: Autonics BA2M-DDT
+    show_pincount: false
+    pins: [BN, BK, BU]
+    pinlabels: [+V, Output, GND]
+
+cables:
+  SENSOR CABLE:
+    category: bundle
+    colors: [BN, BK, BU]
+
+connections:
+  -
+    - TIMEKEEPER SENSOR: [1, 3, 4]
+    - SENSOR CABLE: [1-3]
+    - PHOTOELECTRIC SENSOR: [BN, BK, BU]
+
+options:
+  fontname: Consolas
+  color_mode: FULL
