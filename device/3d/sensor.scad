@@ -12,18 +12,18 @@
 // base plate + PCB and self-tap into the posts hanging from the lid ceiling, pulling the
 // base + PCB up against the posts and seating the base flush in the lid's bottom opening.
 //
-// Wall features (SENSOR variant — sensor I/O only; the light connector is not used):
-//   - left  (-X): 1x Molex Mini-Fit Jr (J1 sensor +12V/SENSE). J2 (light GN/RD) opening is blanked off
-//                 (solid wall). SMA antenna stays between the connector positions.
-//   - right (+X): 1/4" tripod mount     (Ra-01 IPEX -> pigtail across the box -> antenna on the left)
-//   - front (-Y): USB-C  (nRF52840 SuperMini) + 6mm toggle switch bushing (-Y wall, left)
-//   - back  (+Y): blank
-//
-// Coordinate frame: PCB centred at XY origin; Z=0 at the outer bottom of the assembly.
+// Wall features (SENSOR):
+//   - left (-X): centred SMA antenna
+//   - right (+X): tripod mount at the original position
+//   - front (-Y): USB-C, J1 sensor and power toggle
+//   - back (+Y): blank
+// Coordinate frame: PCB centred at XY origin; Z=0 at assembly bottom.
+// Current KiCad centre: (147.1648, 98.03); model = (boardX-cx, cy-boardY).
 
 /* [Rendering] */
 part = "exploded";   // [base, lid, both, assembled, exploded]
 show_pcb = true;     // PCB + 18650 reference in 'assembled' / 'exploded'
+show_switch = true;  // MTS-102 reference attached to lid; F5 preview only
 explode = 30;        // separation gap between stacked parts in 'exploded'
 
 /* [PCB] */
@@ -32,6 +32,8 @@ pcb_w = 57;        // board width  (Y)
 pcb_r = 3;         // board corner radius
 pcb_th = 1.6;      // board thickness
 mount_inset = 3;   // mounting-hole inset from each edge (= corner radius)
+pcb_cx = 147.1648;
+pcb_cy = 98.03;
 
 /* [Shell] */
 wall = 2.5;        // side wall thickness
@@ -40,8 +42,19 @@ base_th = 3;       // base plate thickness (>= edge_r so its bottom edge can be 
 pcb_clear = 0.5;   // gap between PCB edge and wall inner face
 standoff_h = 2.5;  // PCB bottom height above base top (clears bottom-side 0603 caps ~0.5)
 edge_r = 2.5;      // fillet radius for ALL outer edges of the body
-batt_h = 21;       // *** ASSUMPTION: 18650 holder+cell height above PCB. MEASURE & adjust. ***
-ra01_h = 6;        // *** ASSUMPTION: Ra-01 module height above PCB (limits how low the tripod box reaches). ***
+batt_h = 21;       // PCB TOP to installed CELL TOP; retained at user-specified 21 mm
+ra01_h = 6;        // assumed module height above PCB
+gps_h = 6.5;       // installed GPS height above PCB TOP
+
+/* [Battery retention] */
+batt_d = 18.5;             // installed cell diameter, including wrapper
+batt_x = 147.1 - pcb_cx;
+batt_y = pcb_cy - 80.45;
+batt_block_l = 24;         // single central contact, away from both terminals
+batt_block_w = 12;
+batt_block_wrap = 2;       // saddle extends this far below cell crown
+batt_top_trim = 1;         // trim print-top shoulders by 1 mm in Z; horizontal faces
+batt_contact_gap = 0;      // nominal touch; positive adds clearance, never force the cell
 
 /* [PCB-mount screws: base -> lid post, M2 self-tapping] */
 post_d = 5.5;          // lid post outer diameter
@@ -57,51 +70,50 @@ head_d = 4.4;          // counterbore for screw head (base bottom)
 head_h = 2;            // counterbore depth
 base_fit = 0.3;        // base clearance per side inside the lid bottom opening
 
-/* [Molex Mini-Fit Jr cutouts — left/-X wall] */
-// KiCad +Y is screen-DOWN, OpenSCAD +Y is UP  ->  model_Y = 139.5 - boardY  (Y is flipped).
-// Opening centre = connector WIDTH centre (pin centroid), NOT the footprint origin: the 2 circuits sit
-// +2.1mm (local-X) from the origin -> J1 boardY 140.65 -> 139.5-(140.65-2.1) = 0.95; J2 -> -11.25.
-molex_y = [0.95, -11.25];   // connector opening Y centres (model)
-molex_cut_w = 11;          // opening width (Y) — clears the 9.6mm shroud (Molex SD-5569) + margin
-molex_cut_h = 11;          // opening height above PCB (Z) — 9.6mm shroud + right-angle standoff (sensor variant: lowered 1mm, latch slot drops with it but keeps its height)
-molex_latch_w = 4;         // latch slot width — clears the 3.0mm engaging tongue (Molex SD-5557 ".12[3.0]"); the 5.4mm is the external release handle, not through the wall (sensor variant: widened 0.5mm)
-molex_latch_h = 4.5;       // latch slot extra height — must clear the latch at MAX deflection during mating (rest ~2.5mm + flex), not just at rest; SD shows rest only, so kept generous (sensor variant: net -0.5mm from baseline 5)
+/* [J1 cutout — front/-Y wall] */
+// J1 at (132.724,113.0808), rotated 180 degrees. Body local X=-2.7..6.9.
+// Use body centre +2.1, not the footprint origin. No J2 on the current PCB.
+molex_x = 132.724 - 2.1 - pcb_cx;
+molex_front_y = pcb_cy - (113.0808 + 13.9);
+molex_cut_w = 11;
+molex_cut_h = 11;
+molex_latch_w = 4;
+molex_latch_h = 4.5;
 
-/* [USB-C cutout — -Y wall] */
-// USB-C sits on the SuperMini's short end (board Y~167, at the -Y wall). Its X centre is the MODULE-WIDTH
-// centre, NOT the footprint origin (origin = a corner pad): end pads span board X 140.47..155.71 ->
-// centre 148.09 -> model 6.09. Port CENTRE height is measured 6.4mm above the PCB bottom face.
-usb_x = 6.1;          // X centre of the USB-C port (model)
-usb_cut_w = 13;       // opening width (X) incl. cable-boot clearance
-usb_cut_h = 7;        // opening height (Z)
-usb_above_bot = 6.4;  // port CENTRE height above the PCB bottom face (measured)
+/* [USB-C cutout — front/-Y wall] */
+// U1 at (154.74401,124.704948), rotated 180 degrees.
+// USB outline local X=3.12001..12.11999 -> centre 7.62.
+usb_x = 154.74401 - 7.62 - pcb_cx;
+usb_front_y = pcb_cy - (124.704948 + 1.95244);
+usb_cut_w = 13;
+usb_cut_h = 7;
+usb_above_bot = 6.4;       // measured port centre above PCB BOTTOM
 
-/* [Toggle switch bushing hole — -Y wall, LEFT (-X), clear of the Molex] */
-// 6mm bushing toggle (MTS-/STM- 6mm series). The switch body needs a sw_cube clearance box
-// reaching inward from the -Y wall; it is kept EAST (+X) of the Molex courtyard, which reaches
-// model X -27.45 (J1 Y -4.35..+6.25, J2 Y -16.55..-5.95, Z 7.1..18), and ABOVE the PCB.
-sw_d = 6;          // bushing through-hole (6mm toggle)
-sw_cube = 14;      // required interior body-clearance cube (edge length)
-sw_x = -15;        // hole X centre on the -Y wall (moved +5mm toward the tripod/+X side); cube -X edge -22 clears Molex (+X edge -27.45)
-sw_z = 19;         // hole Z centre: cube spans z 12..26 -> above PCB + low parts (incl. L1 ~z10), below ceiling 37.6
+/* [Power toggle — front/-Y wall, on J1's side away from USB] */
+sw_d = 6;
+sw_post_gap = 0.5;         // body clearance to the adjacent corner mounting post
+sw_z = 19;                // centre of mounting hole
+// MTS-102 manufacturer drawing: https://www.piekarz.pl/pdf/51315/
+// Mounted long side along X, bushing axis along Y, short side along Z.
+sw_body_x = 13.2;
+sw_body_y = 9.5;
+sw_body_z = 7.9;
+sw_terminal_l = 4;
+sw_body_setback = 0;       // body flush against inner wall; increase for an inner nut
+// sw_x places the body next to the corner post with sw_post_gap clearance.
 
-/* [SMA antenna hole — -X (left) wall] */
-// sensor variant (J2/light blanked off): bore centred above box mid-height (Z), and in Y midway between
-// the -Y end of the J1 (sensor) opening and the -Y inner wall, nudged toward the connector, into the
-// wall freed where J2 used to be.  (ant_y/ant_z are computed in the derived section, where inner_w exists.)
-ant_d = 6.5;                             // SMA bulkhead through-hole
+/* [SMA antenna — centre of left wall] */
+ant_d = 6.5;
 
-/* [Tripod mount — +X (right) wall, ceiling-integrated box (prints support-free)] */
-// On the right wall (antenna side). A box hangs from the ceiling (fused to ceiling + wall; printed
-// ceiling-down it is a solid column off the bed -> no support) and extends DOWN to the 1/4" bore,
-// which sits at the vertical CENTRE of the face. At Y=0 the battery is absent (cell ends ~Y+8, the
-// +X contact is at Y+14..+21), so only the low Ra-01 module limits how far down the box reaches.
-tri_box_w = 12;    // box width (Y)
-tri_y = -1.5;      // box Y centre — shifted -Y off the face centre so it clears the battery holder body (-Y edge ~ +6.75)
-tri_box_d = 10;    // box depth into the cavity (X from the wall)
-tri_pilot_d = 5.7; // 1/4"-20 self-tap pilot in plastic (was 5.4 — too tight to thread in)
-tri_depth = 8;     // thread engagement depth from the outer wall face
-tri_gap = 2;       // clearance between the box bottom and the Molex envelope
+/* [Tripod mount — right/+X wall] */
+// Keep the original position. GPS is 6.5 mm above PCB; the box starts
+// 8 mm above PCB, leaving 1.5 mm vertical clearance over the GPS module.
+tri_box_w = 12;
+tri_y = -1.5;
+tri_box_d = 10;
+tri_pilot_d = 5.7;
+tri_depth = 8;
+tri_gap = 2;
 
 /* [Quality] */
 $fn = 64;
@@ -128,9 +140,22 @@ outer_h   = ceil_z + lid_th;         // overall height
 post_len  = ceil_z - pcb_top_z;      // = cavity
 
 tri_hole_z  = outer_h/2;                          // 1/4" bore at the vertical CENTRE of the right face
-tri_box_bot = pcb_top_z + ra01_h + 2;             // box hangs from the ceiling down to here (clears the Ra-01 module)
-ant_y       = ((molex_y[0] - molex_cut_w/2) + (-inner_w/2)) / 2 + 1;   // midway: sensor-hole -Y end <-> -Y inner wall, +1mm toward the connector
-ant_z       = outer_h/2 + 8;                      // sensor variant: above box mid-height
+tri_box_bot = pcb_top_z + ra01_h + 2;             // original height: 8 mm above PCB, clears GPS by 1.5 mm
+ant_y       = 0;
+ant_z       = outer_h/2;
+// Exclude the corner post from the usable space on J1's side away from USB.
+sw_space_left = max(-inner_l/2 + (post_style == "corner" ? post_pad : 0),
+                    -pcb_l/2 + mount_inset + post_d/2);
+sw_space_right = molex_x - molex_cut_w/2;
+sw_x = sw_space_left + sw_post_gap + sw_body_x/2;
+assert(sw_post_gap > 0, "Keep clearance between the switch and corner post");
+assert(sw_x+sw_body_x/2 < sw_space_right, "Toggle body overlaps the J1 aperture");
+
+batt_top_z = pcb_top_z + batt_h;
+batt_axis_z = batt_top_z - batt_d/2;
+batt_block_bot = batt_top_z + batt_contact_gap - batt_block_wrap;
+assert(batt_contact_gap >= 0, "Do not preload the battery with rigid interference");
+assert(batt_block_bot < ceil_z, "Battery retainer must reach the lid");
 
 mx = pcb_l/2 - mount_inset;          // 43
 my = pcb_w/2 - mount_inset;          // 25.5
@@ -184,12 +209,25 @@ module posts() {
     }
 }
 
-// tripod mount: a rectangular box fused to the ceiling and the -X wall, hanging down to just
-// above the Molex. Printed ceiling-down ('lid' orientation) it is a solid column off the bed,
-// so it needs no support. The 1/4" bore is a short horizontal blind hole into it.
+// Ceiling-integrated box; prints from its roof down without supports.
 module tripod_box() {
     translate([inner_l/2 - tri_box_d, tri_y - tri_box_w/2, tri_box_bot])
         cube([tri_box_d, tri_box_w, ceil_z - tri_box_bot + eps]);
+}
+
+// One broad central saddle stops upward cell movement, clear of both terminals.
+// Trim both print-top shoulders at one constant Z plane. No bevel or fillet.
+// The centre retains the original battery-contact arc and contact height.
+module battery_block() {
+    flat_z = batt_block_bot + batt_top_trim;
+    assert(batt_top_trim > 0 && batt_top_trim < batt_block_wrap,
+           "Leave a shallow battery arc between the horizontal shoulders");
+    difference() {
+        translate([batt_x-batt_block_l/2,batt_y-batt_block_w/2,flat_z])
+            cube([batt_block_l,batt_block_w,ceil_z-flat_z+eps]);
+        translate([batt_x,batt_y,batt_axis_z+batt_contact_gap])
+            rotate([0,90,0]) cylinder(h=batt_block_l+2*eps,d=batt_d,center=true,$fn=128);
+    }
 }
 
 // ============================================================
@@ -205,19 +243,17 @@ module lid() {
             // self-tapping posts (fused to corners) + ceiling-integrated tripod box
             posts();
             tripod_box();
+            battery_block();
         }
 
         // post pilot bores
         for (p=mount_pos) translate([p[0],p[1],pcb_top_z-eps]) cylinder(h=post_pilot_depth, d=post_pilot_d);
 
-        // Molex cutouts (-X wall): main opening + latch slot
-        // sensor variant: J2 (light) is blanked off — only J1 (sensor) is cut.
-        for (cy = [molex_y[0]]) {
-            translate([-outer_l/2-eps, cy-molex_cut_w/2, pcb_top_z-0.5])
-                cube([wall+pcb_clear+1+eps, molex_cut_w, molex_cut_h+0.5]);
-            translate([-outer_l/2-eps, cy-molex_latch_w/2, pcb_top_z-0.5+molex_cut_h])
-                cube([wall+pcb_clear+1+eps, molex_latch_w, molex_latch_h]);
-        }
+        // J1 front-wall aperture and latch slot; rotate the old side opening by 90 degrees.
+        translate([molex_x-molex_cut_w/2, -outer_w/2-eps, pcb_top_z-0.5])
+            cube([molex_cut_w, wall+pcb_clear+1+eps, molex_cut_h+0.5]);
+        translate([molex_x-molex_latch_w/2, -outer_w/2-eps, pcb_top_z-0.5+molex_cut_h])
+            cube([molex_latch_w, wall+pcb_clear+1+eps, molex_latch_h]);
         // USB-C (-Y wall) — opening with r=1 rounded corners, centred at usb_z
         translate([usb_x, -inner_w/2+eps, usb_z])
             rotate([90,0,0])
@@ -225,7 +261,7 @@ module lid() {
         // toggle switch bushing (-Y wall, left, clear of the Molex)
         translate([sw_x, -inner_w/2+eps, sw_z]) rotate([90,0,0])
             cylinder(h=wall+pcb_clear+1+eps, d=sw_d);
-        // SMA antenna bulkhead (-X / left wall, raised above the Molex)
+        // SMA antenna bulkhead at the horizontal and vertical centre of the left wall
         xcyl(-outer_l/2-eps, ant_y, ant_z, wall+pcb_clear+1+2*eps, ant_d);
         // tripod self-tap pilot (+X / right wall, blind, horizontal into the box, centred Y)
         xcyl(outer_l/2 - tri_depth - eps, tri_y, tri_hole_z, tri_depth + 2*eps, tri_pilot_d);
@@ -258,22 +294,40 @@ module base() {
 module pcb_ref() {
     if ($preview) {
         color([0,0.45,0.15,0.55]) translate([0,0,pcb_bot_z]) rbox(pcb_l,pcb_w,pcb_th,pcb_r);
-        bx=-0.065; by=17.58; bt=pcb_top_z+batt_h;   // BT1 holder centre / top (board 121.92 -> 139.5-121.92 = +17.58)
-        color([0.75,0.75,0.78,0.45]) {
-            translate([bx,by,bt-9.25]) rotate([0,90,0]) cylinder(h=65,d=18.5,center=true);    // 18650 cell
-            translate([bx,by,(pcb_top_z+bt)/2]) cube([78.06,21.66,bt-pcb_top_z],center=true);  // holder body
-            translate([bx-41.5,by,(pcb_top_z+bt)/2]) cube([4.9,7.5,bt-pcb_top_z],center=true);  // end contact -X
-            translate([bx+41.5,by,(pcb_top_z+bt)/2]) cube([4.9,7.5,bt-pcb_top_z],center=true);  // end contact +X
-        }
-        color([0.2,0.2,0.28,0.5]) translate([28.33,-7.92,pcb_top_z+ra01_h/2]) cube([18.5,18,ra01_h],center=true);  // Ra-01 module (board 147.42 -> 139.5-147.42 = -7.92)
-        // Molex 5569 right-angle body envelope (courtyard) — reaches model X -27.45; ±5.3 in Y about the opening centre
-        color([0.85,0.5,0.15,0.4]) for (cy=molex_y)
-            translate([-inner_l/2, cy-5.3, pcb_top_z]) cube([(-27.45)+inner_l/2, 10.6, 11]);
-        // USB-C receptacle (SuperMini short end) at the -Y wall — centred (usb_x, usb_z)
-        color([0.55,0.55,0.6,0.6]) translate([usb_x, -inner_w/2+3.5, usb_z]) cube([8.94,7,3.26],center=true);
-        // toggle switch body clearance cube (must not foul anything) — sits at the -Y wall, reaching inward
-        %translate([sw_x, -inner_w/2 + sw_cube/2, sw_z]) cube(sw_cube, center=true);
+        // Holder courtyard is an envelope, not solid plastic; cell is shown separately.
+        color([0.75,0.75,0.78,0.7])
+            translate([batt_x,batt_y,batt_axis_z]) rotate([0,90,0]) cylinder(h=65,d=batt_d,center=true);
+        %translate([batt_x,batt_y,pcb_top_z+batt_h/2]) cube([78.06,21.66,batt_h],center=true);
+        color([0.75,0.75,0.78,0.45]) for (dx=[-41.5,41.5])
+            translate([batt_x+dx,batt_y,pcb_top_z+batt_h/2]) cube([4.9,7.5,batt_h],center=true);
+        color([0.2,0.2,0.28,0.5])
+            translate([167.219376-pcb_cx,pcb_cy-107.884,pcb_top_z+ra01_h/2])
+                cube([18.5,18,ra01_h],center=true);
+        color([0.85,0.5,0.15,0.5])
+            translate([molex_x-4.8,molex_front_y,pcb_top_z]) cube([9.6,12.8,11]);
+        color([0.55,0.55,0.6,0.6])
+            translate([usb_x,usb_front_y+3.25,usb_z]) cube([9,6.5,3.26],center=true);
     }
+}
+
+// The switch belongs to the lid, so it follows the lid in exploded/print views.
+// Preview only: never fuse this reference body or its terminals into exported STL.
+module switch_ref() {
+    if ($preview) {
+        body_y = -inner_w/2 + sw_body_setback;
+        color([0.1,0.3,0.95])
+            translate([sw_x-sw_body_x/2,body_y,sw_z-sw_body_z/2])
+                cube([sw_body_x,sw_body_y,sw_body_z]);
+        color([0.75,0.77,0.8]) for (dx=[-4.7,0,4.7])
+            translate([sw_x+dx-0.4,body_y+sw_body_y,sw_z-1])
+                cube([0.8,sw_terminal_l,2]);
+    }
+}
+
+// Apply shell colour only to the shell: an outer color() overrides reference colours.
+module lid_view() {
+    color("khaki", 0.85) lid();
+    if (show_switch) switch_ref();
 }
 
 // ============================================================
@@ -281,19 +335,19 @@ module pcb_ref() {
 // ============================================================
 if (part=="base") base();
 else if (part=="lid")
-    translate([0,0,outer_h]) rotate([180,0,0]) lid();          // flipped onto its ceiling for printing
+    translate([0,0,outer_h]) rotate([180,0,0]) lid_view();          // flipped onto its ceiling for printing
 else if (part=="both") {
     translate([-(outer_l/2+8),0,0]) base();
-    translate([ (outer_l/2+8),0,outer_h]) rotate([180,0,0]) lid();
+    translate([ (outer_l/2+8),0,outer_h]) rotate([180,0,0]) lid_view();
 }
 else if (part=="assembled") {
     color("lightblue") base();
-    color("khaki", 0.85) lid();
+    lid_view();
     if (show_pcb) pcb_ref();
 }
 else if (part=="exploded") {
     // stacked bottom -> top along Z: base, PCB, lid
     color("lightblue") base();
     if (show_pcb) translate([0,0,explode]) pcb_ref();
-    color("khaki", 0.85) translate([0,0,2*explode]) lid();
+    translate([0,0,2*explode]) lid_view();
 }
