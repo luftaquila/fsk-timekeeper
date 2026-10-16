@@ -36,6 +36,7 @@ const { useTimingStore } = await import("../src/stores/timing.js");
 const { useHistoryStore } = await import("../src/stores/history.js");
 const { resultNs } = await import("../src/lib/results.js");
 const { formatDuration } = await import("../src/lib/format.js");
+const { timingHealth } = await import("../src/lib/quality.js");
 const runLog = await import("../src/lib/runLog.js");
 const { encodeRun } = await import("../src/lib/run-codec.js");
 const { getAll, put } = await import("../src/lib/idb.js");
@@ -88,6 +89,42 @@ async function mapSprint(device, settings) {
 }
 
 describe("pipeline with the fake master", () => {
+  it("tracks initial synchronization by sensor and master boot across reconnects", async () => {
+    const { device } = await boot();
+    const identity = "I FSK-WL 7 1.0.0 0123456789ABCDEF M 15 922900 7 250.00 16000 0 12 1";
+    const report = ({ skew = 0, valid = 1, sensorBoot = 8002, masterBoot = 8001 } = {}) =>
+      `D 0250FEB2 OK 0 0 0 0 -60.00 8.00 0 300 4000 0 1 1 ${skew} XTAL 100 0 0 0 0 0 0 0 0 ${sensorBoot} ${masterBoot} 0 0 0 0 ${valid}`;
+    const health = () => timingHealth(device.telemetry["0250FEB2"]);
+    await device.handleLine(identity);
+    await device.handleLine(report({ valid: 0 }));
+    assert.equal(health().label, "CONNECTING");
+    await device.handleLine(report());
+    assert.equal(health().label, "SYNCING");
+    assert.equal(health().ok, false);
+    await device.handleLine(report({ skew: 1 }));
+    assert.equal(health().label, "OK");
+    await device.handleLine(report());
+    assert.equal(health().label, "SYNC INVALID");
+
+    // Reauthentication cannot turn an established clock's failure into startup.
+    await device.handleLine("J 0250FEB2 WAIT");
+    await device.handleLine(report({ valid: 0 }));
+    await device.handleLine("J 0250FEB2 SYNC");
+    await device.handleLine(report());
+    assert.equal(health().label, "SYNC INVALID");
+    await device.disconnect();
+    await device.handleLine(identity);
+    await device.handleLine(report());
+    assert.equal(health().label, "SYNC INVALID");
+
+    await device.handleLine(report({ sensorBoot: 8003 }));
+    assert.equal(health().label, "SYNCING");
+    await device.handleLine(report({ sensorBoot: 8003, skew: 1 }));
+    assert.equal(health().label, "OK");
+    await device.handleLine(report({ sensorBoot: 8003, masterBoot: 8004 }));
+    assert.equal(health().label, "SYNCING");
+  });
+
   it("invalidates retained reports across USB sessions until new telemetry arrives", async () => {
     const { device } = await boot();
     const identity = "I FSK-WL 7 1.0.0 0123456789ABCDEF M 15 922900 7 250.00 16000 0 12 1";

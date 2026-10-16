@@ -49,7 +49,14 @@ export function timingHealth(report, { nodeId = report?.node_id, connected = tru
     }
     if (report.skew_valid !== 1 || !Number.isFinite(report.skew_ppm)) issues.push(["SYNC INVALID", `${who} clock skew is not valid`]);
   }
-  if (issues.length) return result(issues[0][0], "bad", issues.map(([, reason]) => reason), syncAgeMs);
+  if (issues.length) {
+    // Initial clock acquisition is expected. Keep actual clock/key faults visible,
+    // and keep START blocked until synchronization is valid.
+    if (!master && report.sync_established === false && issues.every(([label]) => label === "SYNC INVALID")) {
+      return result("SYNCING", "warn", [`${who} is synchronizing its clock`], syncAgeMs);
+    }
+    return result(issues[0][0], "bad", issues.map(([, reason]) => reason), syncAgeMs);
+  }
   if (master && report.queue_depth >= MASTER_QUEUE_CAPACITY) return result("QUEUE FULL", "warn", ["Master queue full"]);
   return result(master && report.queue_depth > 0 ? `${report.queue_depth} QUEUED` : "OK", "good", [], syncAgeMs);
 }

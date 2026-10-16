@@ -25,6 +25,25 @@ function render() {
 const link = () => diagnostics.findAll(".diagnostic-grid > div")[0];
 
 describe("sensor link and report freshness", () => {
+  it("shows initial synchronization in yellow and subsequent sync loss in red", async () => {
+    report("online", Date.now());
+    Object.assign(device.telemetry.A, { sync_established: false, skew_valid: 0 });
+    device.admission.A = { state: "SYNC", at: Date.now() };
+    render();
+    const timing = () => diagnostics.get(".timing-value");
+    expect(link().get("dd").text()).toBe("ONLINE");
+    expect(timing().text()).toBe("SYNCING");
+    expect(timing().classes()).toContain("warn");
+    Object.assign(device.telemetry.A, { sync_established: true, skew_valid: 1 });
+    await nextTick();
+    expect(timing().text()).toMatch(/^OK/);
+    expect(timing().classes()).toContain("good");
+    device.telemetry.A.skew_valid = 0;
+    await nextTick();
+    expect(timing().text()).toBe("SYNC INVALID");
+    expect(timing().classes()).toContain("bad");
+  });
+
   it("uses CONNECTING before diagnostics and exposes an actual RC report as XTAL FAIL", async () => {
     device.admission.A = { state: "WAIT", at: Date.now() }; render();
     const timing = () => diagnostics.get(".timing-value");

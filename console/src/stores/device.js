@@ -9,7 +9,7 @@ import { parseLine, parseEventLine, normalizeTelemetry, normalizePps, formatAck,
 import { createWirelessClock } from "../lib/wireless-clock";
 import { WIRELESS_STATUS_MAX_AGE_MS, UNREADABLE_ALARM_REPEATS, LOG_RETENTION_MS, LOG_MAX_ENTRIES } from "../lib/constants";
 import { MASTER_TICKS_PER_MS as TICKS_PER_MS } from "../lib/event-timing";
-import { pipelineHealth as pipelineHealthOf } from "../lib/quality";
+import { pipelineHealth as pipelineHealthOf, timingHealth } from "../lib/quality";
 import * as eventLog from "../lib/eventLog";
 import * as ppsLog from "../lib/ppsLog";
 import * as deviceLog from "../lib/deviceLog";
@@ -279,6 +279,14 @@ export const useDeviceStore = defineStore("device", () => {
     const t = normalizeTelemetry(raw, now);
     if (!t) {
       return drop("tel.format", line);
+    }
+    if (t.node_id !== NODE_MASTER) {
+      const previous = telemetry[t.node_id];
+      const sameClockSession = t.sensor_boot_id != null && t.master_boot_id != null &&
+        previous?.sensor_boot_id === t.sensor_boot_id && previous?.master_boot_id === t.master_boot_id;
+      // Retain convergence through USB reconnects and radio reauthentication;
+      // either board rebooting starts a new clock synchronization session.
+      t.sync_established = (sameClockSession && previous.sync_established === true) || timingHealth(t, { now }).ok;
     }
     telemetry[t.node_id] = t;
     if (t.node_id !== NODE_MASTER && (t.link_state === "online" || t.link_state === "degraded")) {
