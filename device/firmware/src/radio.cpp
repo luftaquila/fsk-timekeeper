@@ -28,6 +28,21 @@ static radio_cfg_t s_cfg = RADIO_CFG_DEFAULT;
  * RX re-arms keep their existing SPI failure threshold. */
 static bool s_init_pending;
 static bool s_configured;
+static bool s_tx_active;
+
+static void hard_stop(void)
+{
+    /* No SPI or waits here: a stuck peripheral must not keep transmitting. */
+    gpio_set(PIN_LORA_NSS);
+    gpio_clear(PIN_LORA_NRST);
+    s_init_pending = true;
+    s_configured = false;
+    s_tx_active = false;
+}
+
+extern "C" void radio_tx_abort(void) { hard_stop(); hal.unlimit(); }
+extern "C" void radio_limit(uint32_t end_us) { hal.limit(end_us); }
+extern "C" void radio_unlimit(void) { hal.unlimit(); }
 /* The wire has one RX bit, but starting RX and reading a packet recover
  * independently. Neither success is evidence that the other path recovered. */
 static unsigned s_rx_faults;
@@ -47,6 +62,7 @@ static void rx_result(unsigned source, bool ok)
  * any answered command clears the streak. */
 static int16_t track(int16_t state)
 {
+    if (hal.deadlineHit()) { hard_stop(); state = RADIOLIB_ERR_SPI_CMD_TIMEOUT; }
     bool spim_hung = hal.takeSpiTimeout();
     if (spim_hung) { state = RADIOLIB_ERR_SPI_CMD_TIMEOUT; }
     if (spim_hung || state == RADIOLIB_ERR_SPI_CMD_TIMEOUT || state == RADIOLIB_ERR_CHIP_NOT_FOUND) {
@@ -170,6 +186,8 @@ extern "C" const radio_cfg_t *radio_config(void) { return &s_cfg; }
 
 extern "C" int radio_begin(void)
 {
+    hal.unlimit();
+    s_tx_active = false;
     s_init_pending = true;
     s_configured = false;
     mod.spiConfig.timeout = RADIO_SPI_TIMEOUT_MS;
@@ -210,11 +228,44 @@ extern "C" int radio_begin(void)
 
 extern "C" int radio_transmit(const uint8_t *data, int len)
 {
+    uint32_t until = board_micros() + TX_SETUP_MS * 1000u + LORA_TOA_US((unsigned)len) + 5000u;
+    if (radio_tx_start(data, len, until) != 0) { return -1; }
+    int done;
+    do { done = radio_tx_poll(); } while (done == 0);
+    return done == 1 ? 0 : -1;
+}
+
+extern "C" int radio_tx_start(const uint8_t *data, int len, uint32_t end_us)
+{
+    if (s_tx_active || radio_needs_reset() || len <= 0 || len > 128) { return -1; }
+    uint32_t now = board_micros();
+    if ((int32_t)(end_us - now) < (int32_t)(TX_SETUP_MS * 1000u + LORA_TOA_US((unsigned)len))) { return -1; }
+    hal.limit(now + TX_SETUP_MS * 1000u);
     hal.restartHangCheck();
-    int16_t state = track(radio.transmit(data, (size_t)len));
-    if (state != RADIOLIB_ERR_NONE) { el_note(EL_TX_FAIL); }
+    int16_t state = track(radio.startTransmit(data, (size_t)len));
+    if (state != RADIOLIB_ERR_NONE || hal.expired()) {
+        hard_stop(); hal.unlimit(); el_note(EL_TX_FAIL); return -1;
+    }
+    s_tx_active = true;
+    hal.limit(end_us);
+    return 0;
+}
+
+extern "C" int radio_tx_poll(void)
+{
+    if (!s_tx_active) { return -1; }
+    if (hal.expired()) {
+        hard_stop(); hal.unlimit(); el_note(EL_TX_FAIL); return -1;
+    }
+    if (!gpio_read(PIN_LORA_DIO1)) { return 0; }
+    int16_t state = track(radio.finishTransmit());
+    s_tx_active = false;
+    if (state == RADIOLIB_ERR_NONE) { state = (int16_t)radio_start_rx(); }
+    bool late = hal.expired();
+    if (state != RADIOLIB_ERR_NONE || late) { hard_stop(); el_note(EL_TX_FAIL); }
     else { el_radio_clear(EL_TX_FAIL); }
-    return state;
+    hal.unlimit();
+    return state == RADIOLIB_ERR_NONE && !late ? 1 : -1;
 }
 
 extern "C" int radio_start_rx(void)
@@ -283,10 +334,12 @@ extern "C" int radio_rx_settle(uint32_t header_wait_ms, uint32_t max_ms)
     hal.restartHangCheck();
     uint32_t t0 = board_millis();
     for (;;) {
+        if (hal.expired()) { return RADIO_RX_BUSY; }
         if (gpio_read(PIN_LORA_DIO1)) {
             return RADIO_RX_PACKET;
         }
         uint32_t irq = radio.getIrqFlags();
+        if (hal.deadlineHit()) { track(RADIOLIB_ERR_SPI_CMD_TIMEOUT); return RADIO_RX_BUSY; }
         uint32_t waited = board_millis() - t0;
         /* A valid header means a packet is arriving, whatever older header error
          * is latched beside it. A header error or a preamble that led nowhere
@@ -321,7 +374,7 @@ extern "C" int radio_cad(void)
     }
     uint32_t t0 = board_millis();
     while (gpio_read(PIN_LORA_DIO1) == 0) {
-        if ((uint32_t)(board_millis() - t0) >= CAD_TIMEOUT_MS) {
+        if (hal.expired() || (uint32_t)(board_millis() - t0) >= CAD_TIMEOUT_MS) {
             return cad_failure(true);
         }
     }
@@ -347,6 +400,7 @@ extern "C" int radio_lbt_listen(void)
     int loud = 0;
     uint32_t t0 = board_micros();
     do {
+        if (hal.expired()) { return RADIO_LBT_LOUD; }
         uint8_t raw = 0;
         if (track(mod.SPIreadStream(RADIOLIB_SX126X_CMD_GET_RSSI_INST, &raw, 1)) != RADIOLIB_ERR_NONE ||
             raw < -2 * LBT_THRESHOLD_DBM) {

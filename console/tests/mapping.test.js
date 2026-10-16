@@ -12,7 +12,7 @@ vi.mock("../src/stores/device", () => ({ useDeviceStore: () => device }));
 vi.mock("../src/stores/timing", () => ({ useTimingStore: () => timing }));
 beforeEach(() => {
   vi.useFakeTimers(); localStorage.clear(); setActivePinia(createPinia());
-  device = reactive({ connected: true, telemetry: {}, updateInProgress: false });
+  device = reactive({ connected: true, admission: {}, telemetry: {}, updateInProgress: false });
   timing = reactive({ armed: false, starting: false, classifying: false });
 });
 afterEach(() => { wrapper?.unmount(); vi.useRealTimers(); });

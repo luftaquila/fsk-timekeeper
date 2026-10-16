@@ -246,6 +246,15 @@ void pu_emit_ack(const char *cmd)
     write_control(line);
 }
 
+void pu_emit_join(uint32_t node, int state)
+{
+    static const char *names[] = { "WAIT", "SYNC", "READY", "REMOVED" };
+    if (!node || state < 0 || state > PU_JOIN_REMOVED) { return; }
+    char line[32]; lb_t b; lb_init(&b, line, sizeof(line));
+    lb_str(&b, "J "); lb_hex8(&b, node); lb_sp(&b); lb_str(&b, names[state]); lb_finish(&b);
+    write_periodic(line); /* queryable again with ?STATUS; never delay a slot */
+}
+
 void pu_emit_key(const uint8_t *key)
 {
     static const char hex[] = "0123456789abcdef";
@@ -377,7 +386,8 @@ int pu_format_timebase_end(char *buf, unsigned cap, uint32_t hseq, uint64_t mast
 /* ---- command parser -------------------------------------------------------- */
 static uint8_t s_key[32];
 static radio_cfg_t s_radio;
-static uint32_t s_ack_hseq, s_ack_crc;
+static uint32_t s_ack_hseq, s_ack_crc, s_drop_node;
+uint32_t pu_drop_node(void) { return s_drop_node; }
 static uint64_t s_ack_boot;
 static char s_clock_token[33];
 
@@ -491,6 +501,12 @@ static pu_cmd_t classify(const char *s)
     if (!strcmp(s, "?STATUS")) { return PU_CMD_STATUS; }
     if (!strcmp(s, "?KEY")) { return PU_CMD_GETKEY; }
     if (!strcmp(s, "PING")) { return PU_CMD_PING; }
+    if (!strcmp(s, "JOIN")) { return PU_CMD_JOIN; }
+    if (!strncmp(s, "DROP ", 5)) {
+        const char *p = s + 5; uint32_t id;
+        if (strlen(p) != 8u || !parse_hex8(&p, &id) || !id) { return PU_CMD_BAD; }
+        s_drop_node = id; return PU_CMD_DROP;
+    }
     if (!strcmp(s, "CP")) { return PU_CMD_CHECKPOINT; }
     if (s[0] == 'K' && s[1] == ' ') { return parse_key(s + 2) ? PU_CMD_SETKEY : PU_CMD_BAD; }
     if (s[0] == 'R' && s[1] == ' ') { return parse_radio(s) ? PU_CMD_RADIO : PU_CMD_BAD; }

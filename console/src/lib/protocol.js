@@ -1,4 +1,4 @@
-/* FSK-WL USB line protocol v5 (newline-delimited ASCII, one space between tokens).
+/* FSK-WL USB line protocol v6 (newline-delimited ASCII, one space between tokens).
  *
  * Master -> host:
  *   I FSK-WL <usb_proto> <fw> <devid16> <M|S> <radio_proto> <freq_khz> <sf> <bw> <ticks_per_ms> <reset_reason>
@@ -28,8 +28,8 @@ import { USB_PRODUCT } from "./constants";
 import { MASTER_TICKS_PER_MS } from "./event-timing";
 
 export const NODE_MASTER = "0";
-export const RADIO_PROTO_VERSION = 14;
-export const USB_PROTO_VERSION = 5;
+export const RADIO_PROTO_VERSION = 15;
+export const USB_PROTO_VERSION = 6;
 
 // What the Ra-01SH is rated for (firmware config.h); the board stores what R sends.
 export const RADIO_FREQ_MIN_KHZ = 803000;
@@ -173,6 +173,9 @@ export function parseLine(line) {
   const t = text.split(/\s+/);
   if (!t[0]) return null;
   switch (t[0]) {
+    case "J":
+      if (t.length !== 3 || !/^[0-9A-F]{8}$/.test(t[1]) || t[1] === "00000000" || !["WAIT", "SYNC", "READY", "REMOVED"].includes(t[2])) return null;
+      return { type: "J", node: t[1], state: t[2] };
     case "K":
       return { type: "K", key: t.length === 2 ? (t[1] === "NONE" ? "" : isHexKey(t[1]) ? t[1].toLowerCase() : null) : null };
     case "E":

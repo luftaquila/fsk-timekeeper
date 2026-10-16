@@ -381,7 +381,7 @@ static void registry(void)
     int why = 0;
     reg_entry_t *a = reg_claim(&r, 0x00010001u, 0, &why);
     assert(a && a == &r.e[0] && a->id == 0x00010001u);
-    a->have_boot = 1; a->sensor_boot = 0x1234ABu; a->ack_seq = 9;
+    a->have_boot = 1; a->sensor_boot = 0x1234ABu; a->link_id = 0x1234ABu; a->ack_seq = 9;
     assert(reg_lookup(&r, 0x00010001u) == a);
     /* Full ids allow matching low words without collision exceptions. */
     assert(reg_claim(&r, 0x00020001u, 0, &why));
@@ -389,7 +389,7 @@ static void registry(void)
     assert(!reg_claim(&r, 0x77u, 0, &why) && why == REG_FULL);
     beacon_slot_t t[MAX_NODES];
     reg_slot_table(&r, 1000, t);
-    assert(t[0].node_id == 0x00010001u && t[0].ack_seq == 9 && t[0].boot_id == 0x1234ABu);
+    assert(t[0].node_id == 0x00010001u && t[0].ack_seq == 9 && t[0].link_id == 0x1234ABu);
     /* a LOST sensor frees its slot in the table, and a newcomer may take it */
     for (unsigned i = 1; i < MAX_NODES; i++) { r.e[i].heard_ms = LINK_STALE_MS + 1u; }
     reg_slot_table(&r, LINK_STALE_MS + 2u, t);
@@ -433,7 +433,7 @@ static void radio_health(void)
     d = el_radio_recovery();
     assert(d.count == UINT16_MAX && d.failures == UINT16_MAX);
     radio_history_t history = el_radio_history();
-    assert(sizeof(history) == 17 && WIRE_UPLINK == 94 && SLOT_LEN_MS == 110);
+    assert(sizeof(history) == 17 && WIRE_UPLINK == 94 && SLOT_LEN_MS == 120);
     assert(history.faults[1] == count && history.faults[5] == UINT16_MAX);
     sensor_queue_t q;
     sq_init(&q);

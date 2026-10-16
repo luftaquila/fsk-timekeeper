@@ -22,8 +22,18 @@ const radio_cfg_t *radio_config(void);
  * error code. Initialization remains pending until radio_start_rx() succeeds. */
 int radio_begin(void);
 
-/* Blocking transmit (<= ~5x airtime). Leaves the radio in standby. 0 on success. */
+/* Compatibility wrapper: setup + airtime + 5 ms, returns to RX; MAC uses start/poll. */
 int radio_transmit(const uint8_t *data, int len);
+/* Absolute TIMER2 microsecond limit, less than 2^31 us ahead. Every HAL wait
+ * inherits it; a timed-out command holds NRST low until recovery. */
+void radio_limit(uint32_t end_us);
+void radio_unlimit(void);
+/* Nonblocking TX. Start/setup <= TX_SETUP_MS; completion + RX rearm <= end_us.
+ * poll: 0 pending, 1 completed, -1 stopped/failed. */
+int radio_tx_start(const uint8_t *data, int len, uint32_t end_us);
+int radio_tx_poll(void);
+/* Hold the chip in reset immediately; a full begin + RX is required afterwards. */
+void radio_tx_abort(void);
 
 /* Continuous receive; DIO1 = RxDone, preamble/header detections latched in the
  * IRQ status for radio_rx_settle(). 0 on success. */

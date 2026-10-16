@@ -8,6 +8,7 @@
  */
 #include <stdint.h>
 #include <stddef.h>
+#include <string.h>
 
 #include "board.h"
 #include "capture.h"
@@ -51,14 +52,16 @@ static void read_key(void)
 }
 
 /* `K <64-hex>` on any board: write the fleet key and use it at once. */
-static void provision_key(void)
+static int provision_key(void)
 {
     if (keystore_write(pu_setkey()) == 0) {
         sec_reload();
         pu_emit_ack("K");
+        return 1;
     } else {
         pu_emit_err("keyfail");
     }
+    return 0;
 }
 
 /* `R <freq_khz> <power_dbm> <lbt>` on any board: store the radio settings and use
@@ -140,7 +143,13 @@ static void run_sensor(int st)
         int c;
         while ((c = usb_read_byte()) >= 0) {
             switch (pu_feed(c)) {
-            case PU_CMD_SETKEY: provision_key(); break;
+            case PU_CMD_SETKEY:
+                if (provision_key()) {
+                    memset(g_sensor.data_key, 0, sizeof(g_sensor.data_key));
+                    memset(&g_sensor.join, 0, sizeof(g_sensor.join));
+                    g_sensor.link_id = 0; g_sensor.tx_slots = 0;
+                }
+                break;
             case PU_CMD_GETKEY: read_key(); break;
             case PU_CMD_RADIO: provision_radio(0, st == 0); break;
             case PU_CMD_ID:
@@ -169,6 +178,7 @@ static void run_sensor(int st)
 
 static mq_t g_queue;
 static mac_master_t g_mac;
+static int g_rekey;
 static uint32_t g_hfxo_stops; /* board_hfxo_stops() already handled */
 
 /* A master HFXO fault ends the timebase session: its marker is queued ahead of
@@ -182,7 +192,7 @@ static int master_clock_check(void)
     uint32_t stops = board_hfxo_stops();
     int stopped = stops != g_hfxo_stops;
     g_hfxo_stops = stops;
-    if ((!board_hfclk_xtal() || stopped) && !faulted) {
+    if ((!board_hfclk_xtal() || stopped || sec_counter_exhausted() || g_rekey) && !faulted) {
         at = capture_now64();
         boot = sec_boot_id();
         faulted = 1;
@@ -193,6 +203,7 @@ static int master_clock_check(void)
      * every pass is no overflow. */
     if (!reported && !mq_full(&g_queue)) { reported = mq_push_timebase_end(&g_queue, boot, at); }
     if (reported && board_hfclk_xtal()) {
+        g_rekey = 0;
         sec_init();
         mac_master_session(&g_mac);
         faulted = 0;
@@ -285,7 +296,7 @@ static void master_command(pu_cmd_t cmd, int st, uint32_t now, uint8_t idle_seq)
         pu_emit_ack("PING");
         break;
     case PU_CMD_SETKEY:
-        provision_key();
+        if (provision_key()) { g_rekey = 1; }
         break;
     case PU_CMD_GETKEY:
         read_key();
@@ -304,6 +315,14 @@ static void master_command(pu_cmd_t cmd, int st, uint32_t now, uint8_t idle_seq)
         if (!ready) { pu_emit_err("clock"); break; } /* no beacons without a timebase */
         mac_master_checkpoint(&g_mac);
         pu_emit_ack("CP");
+        break;
+    case PU_CMD_JOIN:
+        if (!ready) { pu_emit_err("clock"); break; }
+        mac_master_join_open(&g_mac); pu_emit_ack("JOIN"); break;
+    case PU_CMD_DROP:
+        if (!ready) { pu_emit_err("clock"); break; }
+        if (mac_master_forget(&g_mac, pu_drop_node())) { pu_emit_ack("DROP"); }
+        else { pu_emit_err("notfound"); }
         break;
     case PU_CMD_BAD:
         pu_emit_err("badcmd");

@@ -2,7 +2,7 @@
  * run the production mac_master.c / mac_sensor.c with the real sync, FIFO,
  * registry, host queue and line formats. Only the hardware boundary is fake:
  * radio (airtime, collisions, loss, half duplex), TIMER1 captures, clocks with
- * ppm error, crypto (a checksum seal) and USB (a host that parses and acks E
+ * ppm error, and USB (a host that parses and acks E
  * lines). Each scenario runs in a new process.
  *
  * Invariants checked: sensor transmissions stay inside slots dealt to them (or
@@ -28,8 +28,10 @@
 #include "../src/secure.h"
 #include "../src/usb.h"
 #include "../src/board.h"
+#include "../src/mac_radio.h"
+#include "../src/mac_schedule.h"
 
-#define SIM_NODES   6
+#define SIM_NODES   7
 #define AIR_MAX     200000
 #define REC_MAX     20000
 #define EDGE_MAX    20000
@@ -49,14 +51,17 @@ typedef struct {
     int src;
     uint64_t start_us, end_us;
     int len;
-    uint8_t data[WIRE_MAX];
+    uint8_t data[WIRE_MAX], plain[WIRE_MAX];
     uint32_t seen;       /* receivers that evaluated it */
 } tx_t;
 
 typedef struct {
     int idx, is_master;
     uint32_t sender_id, tx_ctr, rng;
-    uint64_t boot_id;
+    uint64_t boot_id, tx_end;
+    int transmitting;
+    uint32_t deadline;
+    uint8_t sealed_plain[WIRE_MAX];
     int32_t ppm;
     uint64_t tick_base;
     uint64_t now_us;
@@ -73,6 +78,7 @@ typedef struct {
     unsigned receive_calls;
     unsigned begin_calls;
     unsigned loss_pct;     /* receive loss, percent */
+    int disabled, drop_type;
     int deaf;              /* drops every beacon */
     uint64_t jam_from_us, jam_to_us; /* a strong stranger next to this node: every RSSI listen is loud */
     struct { uint64_t tick; uint32_t seq; int xtal; } ring[64];
@@ -131,6 +137,7 @@ static void deliver(node_t *r)
         if (!r->rx_on || r->rx_since_us > x->start_us || collided(i)) { continue; }
         if (mix(i * 131u + (unsigned)r->idx) % 100u < r->loss_pct) { continue; }
         if (r->deaf && is_beacon(x)) { continue; }
+        if (r->drop_type && (unsigned)r->drop_type == SEC_VT_TYPE(x->data[0])) { continue; }
         memcpy(r->pkt, x->data, (size_t)x->len);
         r->pkt_len = x->len;
         r->have_pkt = 1;
@@ -218,6 +225,7 @@ int radio_begin(void)
 {
     deliver(cur);
     cur->begin_calls++;
+    if (getenv("SIM_TRACE")) fprintf(stderr,"reset node%d at%llu pending%d noresp%d\n",cur->idx,(unsigned long long)cur->now_us,cur->init_pending,cur->noresp);
     cur->init_pending = 1;
     cur->configured = 0;
     cur->rx_on = 0;
@@ -246,23 +254,30 @@ int radio_standby(void)
     return 0;
 }
 
-int radio_transmit(const uint8_t *data, int len)
+void radio_tx_abort(void) { cur->transmitting = 0; cur->init_pending = 1; cur->configured = 0; cur->rx_on = 0; }
+void radio_limit(uint32_t end_us) { cur->deadline = end_us; }
+void radio_unlimit(void) { cur->deadline = 0; }
+int radio_tx_start(const uint8_t *data, int len, uint32_t end_us)
 {
-    deliver(cur);
-    cur->rx_on = 0;
-    cur->have_pkt = 0;
+    if (cur->transmitting || radio_needs_reset() ||
+        (int32_t)(end_us - board_micros()) < (int32_t)(TX_SETUP_US + airtime_us(len))) { return -1; }
+    deliver(cur); cur->rx_on = 0; cur->have_pkt = 0;
     assert(air_n < AIR_MAX);
     tx_t *x = &air[air_n++];
-    x->src = cur->idx;
-    x->start_us = cur->now_us + TX_SETUP_US;
-    x->end_us = x->start_us + airtime_us(len);
-    x->len = len;
-    x->seen = 0;
-    memcpy(x->data, data, (size_t)len);
-    cur->now_us = x->end_us;
-    cur->dio1 = 1;
-    cur->dio1_tick = local_tick(cur, cur->now_us);
+    x->src = cur->idx; x->start_us = cur->now_us + TX_SETUP_US;
+    x->end_us = x->start_us + airtime_us(len); x->len = len; x->seen = 0;
+    memcpy(x->data, data, (size_t)len); memcpy(x->plain, cur->sealed_plain, sizeof(x->plain));
+    cur->now_us = x->start_us; cur->tx_end = x->end_us; cur->transmitting = 1;
+    cur->deadline = end_us;
     return 0;
+}
+int radio_tx_poll(void)
+{
+    if (!cur->transmitting) { return -1; }
+    if (cur->now_us < cur->tx_end) { return 0; }
+    cur->transmitting = 0;
+    cur->dio1 = 1; cur->dio1_tick = local_tick(cur, cur->tx_end);
+    radio_unlimit(); radio_start_rx(); return 1;
 }
 
 int radio_receive(uint8_t *buf, int maxlen, float *rssi, float *snr)
@@ -339,49 +354,48 @@ int radio_lbt_listen(void)
     return RADIO_LBT_QUIET;
 }
 
-/* A checksum stands in for the AEAD: version, length and integrity checks only. */
-int sec_seal(uint8_t *out, int out_cap, uint8_t type, uint32_t node_id, const void *payload, int payload_len)
-{
-    if (type == PKT_TYPE_UPLINK && cur->idx == 1) { cur->now_us += seal_delay_us; }
-    int has_node = SEC_TYPE_HAS_NODE(type);
-    int hdr = has_node ? SEC_HDR_UL : SEC_HDR_DL;
-    int wire = hdr + payload_len + SEC_MAC_LEN;
-    if (out_cap < wire) { return -1; }
-    uint32_t ctr = ++cur->tx_ctr;
-    out[0] = SEC_VT(PROTO_VER, type);
-    memcpy(out + 1, &cur->boot_id, 8);
-    out[9] = (uint8_t)ctr; out[10] = (uint8_t)(ctr >> 8); out[11] = (uint8_t)(ctr >> 16);
-    if (has_node) { memcpy(out + 12, &node_id, 4); }
-    memcpy(out + hdr, payload, (size_t)payload_len);
-    uint32_t c = crc32_ieee(out, (uint32_t)(hdr + payload_len));
-    for (int i = 0; i < SEC_MAC_LEN; i++) { out[hdr + payload_len + i] = (uint8_t)(c >> (8 * (i % 4))); }
-    return wire;
-}
-
-int sec_unseal(const uint8_t *in, int in_len, sec_meta_t *meta, void *out_payload, int payload_len)
-{
-    if (in_len < 1) { return -1; }
-    if (SEC_VT_VER(in[0]) != PROTO_VER) { return -4; }
-    uint8_t type = SEC_VT_TYPE(in[0]);
-    int has_node = SEC_TYPE_HAS_NODE(type);
-    int hdr = has_node ? SEC_HDR_UL : SEC_HDR_DL;
-    if (in_len < hdr + payload_len + SEC_MAC_LEN) { return -1; }
-    uint32_t c = crc32_ieee(in, (uint32_t)(hdr + payload_len));
-    for (int i = 0; i < SEC_MAC_LEN; i++) { if (in[hdr + payload_len + i] != (uint8_t)(c >> (8 * (i % 4)))) { return -2; } }
-    meta->type = type;
-    memcpy(&meta->boot_id, in + 1, 8);
-    meta->ctr = (uint32_t)in[9] | ((uint32_t)in[10] << 8) | ((uint32_t)in[11] << 16);
-    meta->node_id = NODE_MASTER;
-    if (has_node) { memcpy(&meta->node_id, in + 12, 4); }
-    memcpy(out_payload, in + hdr, (size_t)payload_len);
-    return 0;
-}
-
-int sec_authentic_any_version(const uint8_t *in, int in_len) { (void)in; (void)in_len; return 0; }
-
+/* Real production AEAD and KDF; only boot/counter/RNG hardware is per-node. */
+#define sec_seal real_sec_seal
+#define sec_seal_key real_sec_seal_key
+#define sec_boot_id real_sec_boot_id
+#define sec_random real_sec_random
+#define sec_challenge real_sec_challenge
+#define sec_provisioned real_sec_provisioned
+#include "../src/secure.c"
+#undef sec_seal
+#undef sec_seal_key
+#undef sec_boot_id
+#undef sec_random
+#undef sec_challenge
+#undef sec_provisioned
+int keystore_load(uint8_t out[KEYSTORE_KEY_LEN]) { memset(out, 0x42, KEYSTORE_KEY_LEN); return 1; }
+int entropy_boot_id(uint64_t *out) { *out = cur->boot_id; return 1; }
+int entropy_poll(uint8_t *out) { *out = (uint8_t)sec_random(); return 1; }
 uint64_t sec_boot_id(void) { return cur->boot_id; }
 int sec_provisioned(void) { return 1; }
 uint32_t sec_random(void) { cur->rng = mix(cur->rng + 0x9E3779B9u); return cur->rng; }
+int sec_challenge(uint8_t out[16]) {
+    for (unsigned i = 0; i < 4; i++) { uint32_t r = sec_random(); memcpy(out + i*4, &r, 4); }
+    return 1;
+}
+static void seal_context(const void *payload, int len, uint8_t type)
+{
+    if (type == PKT_TYPE_UPLINK && cur->idx == 1) { cur->now_us += seal_delay_us; }
+    g_boot_id = cur->boot_id; g_tx_ctr = cur->tx_ctr; g_have_boot_id = g_provisioned = 1;
+    memset(KEY, 0x42, sizeof(KEY));
+    memset(cur->sealed_plain, 0, sizeof(cur->sealed_plain));
+    memcpy(cur->sealed_plain, payload, (size_t)len);
+}
+int sec_seal(uint8_t *out, int cap, uint8_t type, uint32_t id, const void *p, int len)
+{
+    seal_context(p, len, type);
+    int r = real_sec_seal(out, cap, type, id, p, len); cur->tx_ctr = g_tx_ctr; return r;
+}
+int sec_seal_key(const uint8_t key[32], uint8_t *out, int cap, uint8_t type, uint32_t id, const void *p, int len)
+{
+    seal_context(p, len, type);
+    int r = real_sec_seal_key(key, out, cap, type, id, p, len); cur->tx_ctr = g_tx_ctr; return r;
+}
 
 /* ---- host: parses E lines, checks their crc, acks ------------------------ */
 typedef struct {
@@ -497,8 +511,9 @@ static void add_node(int is_master, uint32_t id, int32_t ppm, unsigned loss_pct)
     n->xtal = 1;
     n->configured = 1;
     n->loss_pct = loss_pct;
-    n->now_us = (uint64_t)n->idx * 137u; /* sensors do not start in lockstep */
+    n->now_us = now_global + (uint64_t)n->idx * 137u; /* sensors do not start in lockstep */
     cur = n;
+    g_have_boot_id = g_provisioned = 1; memset(KEY, 0x42, sizeof(KEY));
     if (is_master) {
         mq_init(&mq);
         mac_master_init(&mm, &mq);
@@ -533,7 +548,7 @@ static void run(uint64_t end_us, hook_t hook)
         }
         for (int i = 0; i < n_nodes; i++) {
             node_t *n = &nodes[i];
-            if (n->now_us > now_global) { continue; }
+            if (n->disabled || n->now_us > now_global) { continue; }
             n->now_us = now_global;
             cur = n;
             if (n->is_master) {
@@ -552,42 +567,33 @@ static void run(uint64_t end_us, hook_t hook)
 static void check_slots(uint64_t from_us)
 {
     uint64_t last_beacon_end = 0;
-    int have_beacon = 0;
-    beacon_pl_t b;
-    memset(&b, 0, sizeof(b));
+    admission_beacon_t b = {0}; uint8_t slots[SLOT_COUNT] = {0};
     for (unsigned i = 0; i < air_n; i++) {
         const tx_t *x = &air[i];
         if (is_beacon(x)) {
-            last_beacon_end = x->end_us;
-            have_beacon = 1;
-            memcpy(&b, x->data + SEC_HDR_DL, sizeof(b)); /* the checksum seal leaves it readable */
-            continue;
+            last_beacon_end = x->end_us; memcpy(&b, x->plain, sizeof(b));
+            if (b.base.flags & BEACON_ADMISSION) { memcpy(slots, b.schedule, sizeof(slots)); }
+            else { mac_normal_schedule(&b.base, slots); }
+            assert(mac_schedule_valid(slots)); continue;
         }
-        if (x->start_us < from_us || !have_beacon) { continue; }
-        /* inside one slot of the beacon it follows */
+        if (x->start_us < from_us || !last_beacon_end) { continue; }
         uint64_t off = x->start_us - last_beacon_end;
         assert(off >= SLOT_OFFSET_MS * 1000u);
         uint64_t k = (off - SLOT_OFFSET_MS * 1000u) / (SLOT_LEN_MS * 1000u);
         assert(k < SLOT_COUNT);
         uint64_t slot_start = last_beacon_end + (SLOT_OFFSET_MS + k * SLOT_LEN_MS) * 1000u;
         assert(x->start_us - slot_start <= (SLOT_LATE_MS + 1u) * 1000u + TX_SETUP_US);
-        assert(x->end_us <= slot_start + SLOT_LEN_MS * 1000u);
-        /* a slot dealt to the sender, or the free one while the sender has no entry */
-        uint32_t id;
-        uint64_t boot;
-        memcpy(&id, x->data + 12, 4);
-        memcpy(&boot, x->data + 1, 8);
-        int live = 0, rank = -1;
-        for (unsigned e = 0; e < MAX_NODES; e++) {
-            if (b.slot[e].node_id == 0u) { continue; }
-            if (b.slot[e].node_id == id && b.slot[e].boot_id == boot) { rank = live; }
-            live++;
-        }
-        if (k == SLOT_COUNT - 1u) { assert(rank < 0); }
-        else { assert(rank >= 0 && (int)(k % (unsigned)live) == rank); }
+        assert(x->end_us <= slot_start + (SLOT_LEN_MS - SLOT_GUARD_MS - LBT_LISTEN_MS) * 1000u);
+        unsigned role = SLOT_ROLE(slots[k]), entry = SLOT_ENTRY(slots[k]);
+        unsigned type = SEC_VT_TYPE(x->data[0]);
+        uint32_t id = nodes[x->src].sender_id;
+        if (type == PKT_TYPE_UPLINK) { assert(role == SLOT_ROLE_DATA && b.base.slot[entry].node_id == id); }
+        else if (type == PKT_TYPE_JOIN) { assert(role == SLOT_ROLE_REQUEST); }
+        else if (type == PKT_TYPE_CONFIRM) { assert(role == SLOT_ROLE_CONFIRM && b.base.slot[entry].node_id == id); }
+        else { assert(type == PKT_TYPE_OFFER && role == SLOT_ROLE_OFFER && x->src == 0); }
         for (unsigned j = 0; j < air_n; j++) {
-            if (j == i) { continue; }
-            assert(!(air[j].start_us < x->end_us && air[j].end_us > x->start_us)); /* no overlap at all */
+            if (j == i || (type == PKT_TYPE_JOIN && SEC_VT_TYPE(air[j].data[0]) == PKT_TYPE_JOIN)) { continue; }
+            assert(!(air[j].start_us < x->end_us && air[j].end_us > x->start_us));
         }
     }
 }
@@ -929,6 +935,7 @@ static void hfxo_stop(void)
 static void faults_hook(uint64_t us)
 {
     if (us == 30000000u) { nodes[2].noresp = (int)RADIO_NORESP_RESET; }
+    if (us == 35000000u) { assert(nodes[2].begin_calls == 1); }
     if (us == 45000000u) {
         /* master timebase session change (clock fault recovery path) */
         cur = &nodes[0];
@@ -944,10 +951,10 @@ static void faults(void)
     add_node(1, 0, 0, 0);
     add_node(0, 0x0D2243B0u, 12, 0);
     add_node(0, 0x7A1C9F02u, -3, 0);
-    edge_at(1, 60000000u);
-    edge_at(2, 61000000u);
+    edge_at(1, 70000000u);
+    edge_at(2, 71000000u);
     run(80000000u, faults_hook);
-    assert(nodes[2].begin_calls == 1); /* three SPI no-responses reset the radio */
+    assert(nodes[2].begin_calls >= 1); /* the SPI fault recovered before the new-master handshake */
     int saw_end = 0;
     unsigned after = 0;
     for (unsigned j = 0; j < n_recs; j++) {
@@ -964,7 +971,7 @@ static void inject_uplink(uplink_pl_t *u)
 {
     uint8_t wire[WIRE_MAX];
     cur = &nodes[1];
-    int n = sec_seal(wire, sizeof wire, PKT_TYPE_UPLINK, cur->sender_id, u, sizeof *u);
+    int n = sec_seal_key(cur->s.data_key, wire, sizeof wire, PKT_TYPE_UPLINK, cur->sender_id, u, sizeof *u);
     cur = &nodes[0];
     memcpy(cur->pkt, wire, (size_t)n);
     cur->pkt_len = n; cur->have_pkt = 1;
@@ -972,38 +979,85 @@ static void inject_uplink(uplink_pl_t *u)
     mac_master_step(&mm);
 }
 
+/* Feed recorded ciphertext directly to a receiver: this bypasses RF collision
+ * handling deliberately, and exercises the actual MAC plus Monocypher. */
+static void replay_wire(int receiver, const uint8_t *wire, int len)
+{
+    cur = &nodes[receiver]; cur->now_us = now_global;
+    assert(!cur->transmitting);
+    memcpy(cur->pkt, wire, (size_t)len); cur->pkt_len = len; cur->have_pkt = 1;
+    cur->dio1 = 1; cur->dio1_tick = capture_now64();
+    if (receiver) { cur->s.tx_slots = 0; mac_sensor_step(&cur->s); }
+    else {
+        uint64_t next = mm.next_beacon; mm.next_beacon = UINT64_MAX;
+        mac_master_step(&mm); mm.next_beacon = next;
+    }
+}
+static tx_t recorded(unsigned type)
+{
+    for (unsigned i = 0; i < air_n; i++) if (SEC_VT_TYPE(air[i].data[0]) == type) return air[i];
+    fprintf(stderr, "No packet type %u\n", type); abort();
+}
 static void session_replay(void)
 {
-    add_node(1, 0, 0, 0);
-    add_node(0, 0x123443b0u, 0, 0);
+    add_node(1, 0, 0, 0); add_node(0, 0x123443b0u, 0, 0);
     uplink_pl_t u = {.kind = UL_KIND_EDGES, .flags = HEALTH_EVENT_REQUIRED, .ev_seq = 1, .capture_seq = 1};
-    u.u.edges.count = 1;
-    u.master_boot_id = nodes[0].boot_id ^ (UINT64_C(1) << 40);
-    inject_uplink(&u);
-    assert(reg_count(&mm.reg) == 0 && mq_depth(&mq) == 0);
-    u.master_boot_id = nodes[0].boot_id;
-    inject_uplink(&u);
-    assert(reg_count(&mm.reg) == 1 && mq_depth(&mq) == 1);
+    u.u.edges.count = 1; u.master_boot_id = nodes[0].boot_id;
+    uint64_t next = mm.next_beacon;
+    inject_uplink(&u); /* authenticated with no negotiated key: no auto-registration */
+    assert(reg_count(&mm.reg) == 0 && mq_depth(&mq) == 0); mm.next_beacon = next;
+    run(15900000u, NULL);
+    assert(nodes[1].s.have_session && nodes[1].s.timing_ready && reg_count(&mm.reg) == 1);
+    tx_t beacon = recorded(PKT_TYPE_BEACON), request = recorded(PKT_TYPE_JOIN);
+    tx_t offer = recorded(PKT_TYPE_OFFER), confirm = recorded(PKT_TYPE_CONFIRM), data = recorded(PKT_TYPE_UPLINK);
     reg_entry_t *e = reg_lookup(&mm.reg, nodes[1].sender_id);
-    uint32_t counter = e->rx.max_ctr;
-    u.master_boot_id ^= UINT64_C(1) << 40;
-    nodes[1].tx_ctr = counter + 100;
-    inject_uplink(&u);
-    assert(e->rx.max_ctr == counter && mq_depth(&mq) == 1);
-    nodes[1].tx_ctr = counter;
-    u.master_boot_id = nodes[0].boot_id; u.ev_seq = 2; u.capture_seq = 2;
-    inject_uplink(&u);
-    assert(e->ack_seq == 2 && mq_depth(&mq) == 2);
-    uint64_t a = nodes[1].boot_id;
-    nodes[1].boot_id ^= UINT64_C(1) << 40;
-    nodes[1].tx_ctr = 0; u.ev_seq = 1;
-    inject_uplink(&u);
-    uint64_t b = e->sensor_boot;
-    assert(b != a && mq_depth(&mq) == 3);
-    nodes[1].boot_id = a; nodes[1].tx_ctr = counter + 200;
-    inject_uplink(&u);
-    assert(e->sensor_boot == b && mq_depth(&mq) == 3 && e->rx.max_ctr == 1);
-    puts("PASS session_replay");
+    reg_entry_t saved = *e;
+    sensor_queue_t q = nodes[1].s.q; sync_t sync = nodes[1].s.sync;
+    uint32_t high = nodes[1].s.from_master.max_ctr;
+    uint64_t link = nodes[1].s.link_id;
+    replay_wire(0, data.data, data.len);
+    assert(e->rx.max_ctr == saved.rx.max_ctr && e->ack_seq == saved.ack_seq && mq_depth(&mq) == 0);
+    replay_wire(0, request.data, request.len); replay_wire(0, confirm.data, confirm.len);
+    assert(mm.admission.pending[0].phase == ADMISSION_EMPTY && e->link_id == link);
+    replay_wire(1, beacon.data, beacon.len); replay_wire(1, offer.data, offer.len);
+    assert(nodes[1].s.from_master.max_ctr == high && nodes[1].s.link_id == link);
+    assert(!memcmp(&nodes[1].s.q, &q, sizeof(q)) && !memcmp(&nodes[1].s.sync, &sync, sizeof(sync)));
+    /* An authentic but never-seen old master epoch cannot retire the live
+     * epoch, apply ACK/CP, reset sync, or erase queued evidence. */
+    uint8_t wire[WIRE_MAX]; beacon_pl_t old = { .cp_req = 77 };
+    cur = &nodes[0]; uint64_t boot = cur->boot_id; cur->boot_id ^= UINT64_C(1) << 40;
+    int n = sec_seal(wire, sizeof(wire), PKT_TYPE_BEACON, 0, &old, sizeof(old)); cur->boot_id = boot;
+    replay_wire(1, wire, n);
+    assert(nodes[1].s.master_boot_id == boot && nodes[1].s.link_id == link && nodes[1].s.join.phase == SENSOR_JOIN_IDLE);
+    /* Even after losing the live master, a beacon is merely an untrusted hint. */
+    nodes[1].s.last_beacon_ms -= SYNC_TTL_MS + 1;
+    replay_wire(1, wire, n);
+    assert(nodes[1].s.join.phase == SENSOR_JOIN_WAIT_OFFER);
+    assert(nodes[1].s.master_boot_id == boot && nodes[1].s.link_id == link);
+    assert(!memcmp(&nodes[1].s.q, &q, sizeof(q)) && !memcmp(&nodes[1].s.sync, &sync, sizeof(sync)));
+    memset(&nodes[1].s.join, 0, sizeof(nodes[1].s.join));
+    /* Evict all request history and active replay state: an old JOIN may
+     * reserve work, but its old CONFIRM must fail with fresh Nm and link ID. */
+    cur = &nodes[0]; assert(mac_master_forget(&mm, nodes[1].sender_id));
+    mm.admission.seen_count = 0;
+    replay_wire(0, request.data, request.len);
+    assert(mm.admission.pending[0].phase != ADMISSION_EMPTY && mm.admission.pending[0].link_id > link);
+    master_admission_offer_started(&mm.admission, 0, 1);
+    replay_wire(0, confirm.data, confirm.len); replay_wire(0, data.data, data.len);
+    assert(reg_count(&mm.reg) == 0 && mq_depth(&mq) == 0);
+    /* Same epoch, fresh connection: retained FIFO identity survives. */
+    memset(mm.admission.pending, 0, sizeof(mm.admission.pending));
+    sq_push_edge(&nodes[1].s.q, 100, local_tick(&nodes[0], now_global), HEALTH_EVENT_REQUIRED, 1);
+    run(35900000u, NULL);
+    assert(nodes[1].s.have_session && nodes[1].s.link_id > link && nodes[1].s.master_boot_id == boot);
+    e = reg_lookup(&mm.reg, nodes[1].sender_id); assert(e && e->link_id == nodes[1].s.link_id);
+    saved = *e;
+    replay_wire(0, confirm.data, confirm.len); replay_wire(0, data.data, data.len);
+    assert(e->link_id == saved.link_id && e->rx.max_ctr == saved.rx.max_ctr && e->ack_seq == saved.ack_seq);
+    unsigned copies = 0;
+    for (unsigned i = 0; i < n_recs; i++) if (recs[i].node == e->id && recs[i].kind == 'C' && recs[i].seq == 100) copies++;
+    assert(copies == 1);
+    puts("PASS session_replay (all five packet types, unknown epoch, eviction, fresh keys, retained evidence)");
 }
 
 static void late_hook(uint64_t us)
@@ -1073,8 +1127,8 @@ static void cad_failure(void)
 static unsigned peak_fifo;
 static void load_hook(uint64_t us)
 {
-    if (us == 30000000u) { host_acks = 0; }
-    if (us == 45000000u) { host_acks = 1; }
+    if (us == 50000000u) { host_acks = 0; }
+    if (us == 65000000u) { host_acks = 1; }
     for (int i = 1; i < n_nodes; i++) {
         if (nodes[i].s.q.count > peak_fifo) { peak_fifo = nodes[i].s.q.count; }
     }
@@ -1085,7 +1139,7 @@ static void load(unsigned sensors, unsigned rate)
     add_node(1, 0, 0, 10); /* inject loss on uplinks as well as sensor beacon reception */
     for (unsigned i = 1; i <= sensors; i++) {
         add_node(0, 0x12340000u + i, (int)i * 5, 10);
-        for (uint64_t us = 12000000u + i * 20000u; us < 52000000u; us += 1000000u / rate) { edge_at((int)i, us); }
+        for (uint64_t us = 32000000u + i * 20000u; us < 72000000u; us += 1000000u / rate) { edge_at((int)i, us); }
     }
     run(180000000u, load_hook);
     check_slots(20000000u);
@@ -1202,10 +1256,216 @@ static void status_reports(void)
     puts("PASS status_reports");
 }
 
+static int admission_case;
+static uint64_t first_join[SIM_NODES], first_ready[SIM_NODES], old_link, incumbent_heard;
+static int race_guard;
+static unsigned duplicate_types;
+static void admission_hook(uint64_t us)
+{
+    for (int i = 1; i < n_nodes; i++) {
+        if (nodes[i].s.have_session && !first_join[i]) first_join[i] = us;
+        if (nodes[i].s.timing_ready && !first_ready[i]) first_ready[i] = us;
+    }
+    if (admission_case == 1 && us == 20000000u) { /* four active, add the fifth */
+        cur = &nodes[0]; mac_master_join_open(&mm);
+        add_node(0, 0x10000005u, 8, 0);
+    }
+    if (admission_case == 2 && us == 20000000u) { /* five active, same-epoch reauth */
+        old_link = nodes[1].s.link_id; assert(old_link);
+        nodes[1].s.link_id = 0;
+        memset(nodes[1].s.data_key, 0, 32);
+        sq_push_edge(&nodes[1].s.q, 100, local_tick(&nodes[0], us), HEALTH_EVENT_REQUIRED, 1);
+    }
+    if ((admission_case == 3 || admission_case == 4 || admission_case == 5) && us == 20000000u) {
+        nodes[1].disabled = 1;
+        cur = &nodes[0]; reg_entry_t *e = reg_lookup(&mm.reg, nodes[1].sender_id); assert(e);
+        incumbent_heard = e->heard_ms;
+        if (admission_case == 4) assert(mac_master_forget(&mm, e->id));
+        if (admission_case == 5) e->heard_ms = 1; /* eligible for a LOST reservation */
+        mac_master_join_open(&mm);
+        add_node(0, 0x20000006u, 8, 0);
+    }
+    if (admission_case == 5 && n_nodes == 7 && !race_guard) {
+        for (unsigned i = 0; i < MAX_NODES; i++) {
+            if (mm.admission.pending[i].phase != ADMISSION_EMPTY && mm.admission.pending[i].id == nodes[6].sender_id) {
+                assert(mm.reg.e[i].id == nodes[1].sender_id);
+                mm.reg.e[i].heard_ms = (uint32_t)(us / 1000u); race_guard = 1;
+            }
+        }
+    }
+    if (admission_case >= 6 && admission_case <= 8 && us == 10000000u) nodes[admission_case == 7 ? 1 : 0].drop_type = 0;
+    if (admission_case == 9) { /* lose the registration-complete beacon(s) */
+        if (!race_guard && reg_count(&mm.reg)) { nodes[1].deaf = 1; race_guard = 1; }
+        if (us == 8000000u) nodes[1].deaf = 0;
+    }
+    if (admission_case == 10 && us == 1200000u) mm.admission.join_until_ms = 1200; /* cancel an active exchange */
+    if (admission_case == 11) {
+        for (unsigned a = 0; a < air_n; a++) {
+            const tx_t *x = &air[a]; unsigned type = SEC_VT_TYPE(x->data[0]);
+            if (duplicate_types & (1u << type) || x->end_us > us) continue;
+            int receiver = type == PKT_TYPE_BEACON || type == PKT_TYPE_OFFER ? 1 : 0;
+            if (nodes[receiver].transmitting || !((x->seen >> receiver) & 1u)) continue;
+            mac_sensor_t *sensor = &nodes[1].s;
+            reg_entry_t *e = reg_lookup(&mm.reg, nodes[1].sender_id);
+            if (type == PKT_TYPE_BEACON && (!sensor->hint_valid || sensor->hint_ctr != sec_wire_counter(x->data))) continue;
+            if (type == PKT_TYPE_JOIN && mm.admission.pending[0].phase == ADMISSION_EMPTY) continue;
+            if (type == PKT_TYPE_OFFER &&
+                ((sensor->join.phase != SENSOR_JOIN_CONFIRM_READY && sensor->join.phase != SENSOR_JOIN_WAIT_ASSIGNMENT) ||
+                 sensor->join.offer_ctr != sec_wire_counter(x->data))) continue;
+            if (type == PKT_TYPE_CONFIRM && (!e || mm.admission.pending[0].phase != ADMISSION_EMPTY)) continue;
+            if (type == PKT_TYPE_UPLINK && (!e || e->rx.max_ctr < sec_wire_counter(x->data))) continue;
+            uint64_t first_rx = sensor->hint_rx, link = e ? e->link_id : 0;
+            uint32_t born = mm.admission.pending[0].born_ms, until = mm.admission.join_until_ms, high = e ? e->rx.max_ctr : 0;
+            sensor_join_t candidate = sensor->join;
+            uint8_t slots = sensor->tx_slots;
+            replay_wire(receiver, x->data, x->len);
+            if (receiver) sensor->tx_slots = slots;
+            assert(sensor->hint_rx == first_rx);
+            if (type == PKT_TYPE_JOIN) assert(mm.admission.pending[0].born_ms == born && mm.admission.join_until_ms == until);
+            if (type == PKT_TYPE_OFFER) assert(!memcmp(&candidate, &sensor->join, sizeof(candidate)));
+            if (type == PKT_TYPE_CONFIRM || type == PKT_TYPE_UPLINK) assert(e->link_id == link && e->rx.max_ctr == high);
+            duplicate_types |= 1u << type;
+        }
+    }
+}
+static void admission(unsigned scenario)
+{
+    admission_case = (int)scenario;
+    add_node(1, 0, 0, 0);
+    unsigned count = scenario >= 6 ? 1 : scenario == 1 ? 4 : 5;
+    for (unsigned i = 1; i <= count; i++) add_node(0, 0x10000000u + i, (int32_t)i * 3, 0);
+    if (scenario >= 6 && scenario <= 8) nodes[scenario == 7 ? 1 : 0].drop_type =
+        scenario == 6 ? PKT_TYPE_JOIN : scenario == 7 ? PKT_TYPE_OFFER : PKT_TYPE_CONFIRM;
+    run(scenario == 5 ? 29000000u : 70000000u, admission_hook);
+    check_slots(0);
+    if (scenario == 11) assert(duplicate_types == 0x3e);
+    if (scenario == 5) {
+        assert(race_guard && reg_lookup(&mm.reg, nodes[1].sender_id) && !reg_lookup(&mm.reg, nodes[6].sender_id));
+    } else {
+        for (int i = 1; i < n_nodes; i++) if (!nodes[i].disabled) {
+            assert(nodes[i].s.have_session && nodes[i].s.timing_ready && nodes[i].s.entry >= 0);
+            printf("admission %u node%d: registered %.3fs, ready %.3fs\n", scenario, i,
+                   first_join[i] / 1e6, first_ready[i] / 1e6);
+        }
+    }
+    if (scenario == 2) {
+        assert(nodes[1].s.link_id > old_link);
+        unsigned copies = 0;
+        for (unsigned i = 0; i < n_recs; i++) if (recs[i].node == nodes[1].sender_id && recs[i].kind == 'C' && recs[i].seq == 100) copies++;
+        assert(copies == 1);
+    }
+    if (scenario == 3) assert(first_join[6] / 1000u >= incumbent_heard + LINK_STALE_MS);
+    if (scenario == 4) assert(first_join[6] < 30000000u);
+    /* Each live registered sensor retains a DATA slot throughout admission. */
+    for (unsigned a = 0; a < air_n; a++) {
+        if (!is_beacon(&air[a]) || air[a].start_us < 19000000u) continue;
+        const admission_beacon_t *b = (const admission_beacon_t *)air[a].plain;
+        if (!(b->base.flags & BEACON_ADMISSION)) continue;
+        for (unsigned k = 0; k < MAX_NODES; k++) {
+            if (!b->base.slot[k].node_id || b->base.slot[k].node_id == 0x20000006u) continue;
+            if (b->pending & (1u << k)) continue; /* same-ID candidate is checked by the full reauth assertion below */
+            unsigned slots = 0;
+            for (unsigned j = 0; j < SLOT_COUNT; j++) slots += b->schedule[j] == (SLOT_ROLE_DATA | k);
+            assert(slots == 1);
+        }
+        if (scenario == 2) {
+            unsigned slots = 0;
+            for (unsigned j = 0; j < SLOT_COUNT; j++) slots += SLOT_ROLE(b->schedule[j]) == SLOT_ROLE_DATA;
+            assert(slots == 5);
+        }
+    }
+    printf("PASS admission_%u\n", scenario);
+}
+
+/* Reauthentication refreshes link liveness, never cached clock health. */
+static uint64_t reauth_old_link;
+static uint16_t reauth_old_ack;
+static int reauth_health_checked;
+static void reauth_health_hook(uint64_t us)
+{
+    reg_entry_t *e = reg_lookup(&mm.reg, nodes[1].sender_id);
+    if (us == 20000000u) {
+        assert(e && e->diag.health == HEALTH_EVENT_REQUIRED && e->have_ack);
+        reauth_old_link = e->link_id; reauth_old_ack = e->ack_seq;
+        nodes[1].disabled = 1;
+    }
+    if (us == 40000000u) { nodes[1].disabled = 0; nodes[1].xtal = 0; }
+    if (us > 40000000u && e && e->link_id != reauth_old_link && !reauth_health_checked) {
+        assert(!sync_health(&nodes[1].s.sync, local_tick(&nodes[1], us), nodes[1].xtal));
+        assert(e->have_ack && e->ack_seq == reauth_old_ack);
+        assert(e->diag.health == 0 && e->diag.sync_age_ms == UINT16_MAX);
+        /* The console gets an invalidated D immediately, even without ?STATUS. */
+        assert(strstr(last_d, " OK ") && strstr(last_d, " 1 0 0 RC 65535 "));
+        reauth_health_checked = 1;
+    }
+    if (us == 45000000u) { nodes[1].xtal = 1; }
+}
+static void reauth_health(void)
+{
+    add_node(1, 0, 0, 0); add_node(0, 0x123443b0u, 0, 0);
+    run(65000000u, reauth_health_hook);
+    assert(reauth_health_checked);
+    reg_entry_t *e = reg_lookup(&mm.reg, nodes[1].sender_id);
+    assert(e && e->diag.health == HEALTH_EVENT_REQUIRED); /* fresh diagnostics restore health */
+    puts("PASS reauth_health");
+}
+
+static void join_hint(uint64_t ms)
+{
+    now_global = ms * 1000u;
+    cur = &nodes[0]; cur->now_us = now_global;
+    uint8_t wire[WIRE_MAX]; beacon_pl_t b = {0};
+    int n = sec_seal(wire, sizeof(wire), PKT_TYPE_BEACON, 0, &b, sizeof(b));
+    assert(n > 0);
+    replay_wire(1, wire, n);
+}
+static void join_uptime(void)
+{
+    add_node(1, 0, 0, 0); add_node(0, 0x123443b0u, 0, 0);
+    const uint64_t times[] = {0x7fffffffu, 0x80000000u, UINT32_MAX, UINT64_C(1) << 32};
+    for (unsigned i = 0; i < sizeof(times)/sizeof(times[0]); i++) {
+        memset(&nodes[1].s.join, 0, sizeof(nodes[1].s.join));
+        join_hint(times[i]);
+        assert(nodes[1].s.join.phase == SENSOR_JOIN_WAIT_OFFER);
+    }
+    puts("PASS join_uptime");
+}
+static void join_backoff(void)
+{
+    add_node(1, 0, 0, 0); add_node(0, 0x123443b0u, 0, 0);
+    uint64_t cancelled_ms = (uint64_t)UINT32_MAX - 1u;
+    join_hint(cancelled_ms - JOIN_LIFETIME_MS);
+    join_hint(cancelled_ms); /* expire the candidate, start real backoff across wrap */
+    assert(nodes[1].s.join.phase == SENSOR_JOIN_IDLE);
+    uint32_t wait = nodes[1].s.retry_join_ms - (uint32_t)cancelled_ms;
+    assert(wait >= 1000u && wait <= 4000u);
+    join_hint(cancelled_ms + wait - 1u);
+    assert(nodes[1].s.join.phase == SENSOR_JOIN_IDLE);
+    join_hint(cancelled_ms + wait);
+    assert(nodes[1].s.join.phase == SENSOR_JOIN_WAIT_OFFER);
+    /* A later backoff expires while no beacon asks us to join. Its stale
+     * deadline must not become a new wait after another half millis period. */
+    cancelled_ms += wait + JOIN_LIFETIME_MS;
+    join_hint(cancelled_ms);
+    assert(nodes[1].s.join.phase == SENSOR_JOIN_IDLE);
+    wait = nodes[1].s.retry_join_ms - (uint32_t)cancelled_ms;
+    now_global = (cancelled_ms + wait) * 1000u;
+    cur = &nodes[1]; cur->now_us = now_global;
+    mac_sensor_step(&cur->s);
+    assert(cur->s.join.phase == SENSOR_JOIN_IDLE);
+    join_hint(cancelled_ms + wait + (UINT64_C(1) << 31));
+    assert(nodes[1].s.join.phase == SENSOR_JOIN_WAIT_OFFER);
+    puts("PASS join_backoff");
+}
+
 int main(int argc, char **argv)
 {
     assert(argc == 2);
-    if (!strcmp(argv[1], "steady")) { steady(); }
+    if (!strncmp(argv[1], "admission_", 10)) { admission((unsigned)atoi(argv[1]+10)); }
+    else if (!strcmp(argv[1], "reauth_health")) { reauth_health(); }
+    else if (!strcmp(argv[1], "join_uptime")) { join_uptime(); }
+    else if (!strcmp(argv[1], "join_backoff")) { join_backoff(); }
+    else if (!strcmp(argv[1], "steady")) { steady(); }
     else if (!strcmp(argv[1], "status_reports")) { status_reports(); }
     else if (!strcmp(argv[1], "init_recovery")) { init_recovery(); }
     else if (!strcmp(argv[1], "latency")) { latency(1); }

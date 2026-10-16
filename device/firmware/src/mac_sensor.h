@@ -8,17 +8,36 @@
 #include <stdint.h>
 #include "retry.h"
 
+#include "config.h"
 #include "protocol.h"
 #include "secure.h"
 #include "sensor_queue.h"
 #include "sync.h"
+
+/* IDLE -> WAIT_OFFER -> CONFIRM_READY -> WAIT_ASSIGNMENT -> IDLE.
+ * The active connection is separate and survives candidate cancellation. */
+typedef enum {
+    SENSOR_JOIN_IDLE = 0,
+    SENSOR_JOIN_WAIT_OFFER,      /* fresh Ns, no authenticated response */
+    SENSOR_JOIN_CONFIRM_READY,   /* master proved Ns; CONFIRM can be sent */
+    SENSOR_JOIN_WAIT_ASSIGNMENT  /* CONFIRM started; require a fresh DATA assignment */
+} sensor_join_phase_t;
+
+typedef struct {
+    sensor_join_phase_t phase;
+    uint64_t master_boot, link_id;
+    uint32_t born_ms, offer_ctr, beacon_floor, seen_ctr;
+    uint8_t ns[16], nm[16];
+    sec_link_keys_t keys;
+    sync_t sync;
+} sensor_join_t;
 
 typedef struct {
     uint32_t my_id;
     uint8_t  reset_reason;
     sync_t sync;
     sensor_queue_t q;
-    sec_replay_t from_master;
+    sec_rx_counter_t from_master;
     int      have_session;
     uint64_t master_boot_id;
     int      timing_ready;   /* health was complete once in this session */
@@ -32,6 +51,13 @@ typedef struct {
     uint32_t last_beacon_ms;
     retry_t retry;
     uint32_t hfxo_stops;     /* board_hfxo_stops() already handled */
+    uint64_t link_id;
+    uint8_t data_key[32];
+    sensor_join_t join;
+    admission_beacon_t hint;
+    uint32_t hint_ctr, retry_join_ms;
+    uint64_t hint_boot, hint_rx;
+    uint8_t hint_valid, schedule[SLOT_COUNT], tx_busy, data_sent, join_retry_pending;
 } mac_sensor_t;
 
 void mac_sensor_init(mac_sensor_t *s, uint32_t my_id, uint8_t reset_reason);

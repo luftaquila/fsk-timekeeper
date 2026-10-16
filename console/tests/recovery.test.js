@@ -119,7 +119,7 @@ describe("durable run recovery", () => {
 
   it("recovers a deadline that expired while closed using nominal timing without PPS", async () => {
     const { history } = await boot();
-    const run = { schema: 3, usbProto: 5, radioProto: 14, runId: "expired", mode: "sprint", verification: "verified",
+    const run = { schema: 3, usbProto: 6, radioProto: 15, runId: "expired", mode: "sprint", verification: "verified",
       classification: null, armed: false, closed: true, nodes: {}, cursor: 0, crossingTicks: [],
       startTick: "16000000", finishTick: "32000000", calibration: null, durationNs: null,
       finalizeAt: Date.now() - 5000, calibrationEdges: [], startedAt: 1, durable: true };
@@ -326,7 +326,7 @@ it("upgrades an existing version-2 database and migrates its active localStorage
     req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);
   });
   const row={schema:3,runId:"pre-upgrade",mode:"sprint",verification:"pending",classification:"DNS",closed:true,
-    armed:false,nodes:{},cursor:0,crossingTicks:[],usbProto:5,radioProto:14,createdAt:1,durable:true};
+    armed:false,nodes:{},cursor:0,crossingTicks:[],usbProto:6,radioProto:15,createdAt:1,durable:true};
   await put(oldDb,"results",row);oldDb.close();
   localStorage.setItem("tk.run.v3",JSON.stringify(row));
   const {timing,history}=await boot({keepStorage:true});
@@ -338,7 +338,7 @@ it("upgrades an existing version-2 database and migrates its active localStorage
   assert.equal(localStorage.getItem("tk.run.v3"),null);
 });
 
-const reviewedRun = (runId, extra = {}) => ({ schema:3, usbProto:5, radioProto:14, runId, mode:"sprint", verification:"verified",
+const reviewedRun = (runId, extra = {}) => ({ schema:3, usbProto:6, radioProto:15, runId, mode:"sprint", verification:"verified",
   classification:null, armed:false, closed:true, nodes:{}, cursor:0, throughSeq:0, crossingTicks:[], masterBootId:"500",
   startTick:"16000000", finishTick:"32000000", calibration:null, durationNs:null, startedAt:1, durable:true, ...extra });
 const recoveryFile = text => ({ size:new TextEncoder().encode(text).length, text:async()=>text });
@@ -536,4 +536,14 @@ it("retains data and releases the deletion lock when clearing fails", async () =
   assert.equal(history.rows[0].runId, id);
   assert.equal(timing.run.runId, id);
   assert.equal((await getAll(eventLog.getDb(), eventLog.STORE_RESULTS))[0].runId, id);
+});
+
+it("reads completed v14/USB5 results without changing their time or classification", async () => {
+  const { decodeRun } = await import("../src/lib/run-codec.js");
+  const run = reviewedRun("prior-radio", { usbProto: 5, radioProto: 14, classification: "DNF", durationNs: "1234567890" });
+  const decoded = decodeRun(JSON.stringify(run));
+  assert.equal(decoded.protocolChanged, false);
+  assert.deepEqual(decoded.run, run);
+  const open = decodeRun(JSON.stringify({ ...run, closed: false, armed: true }));
+  assert.equal(open.protocolChanged, true); assert.equal(open.run.closed, true); assert.equal(open.run.armed, false);
 });

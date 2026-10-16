@@ -1,4 +1,4 @@
-/* Sealed LoRa packet formats, radio protocol v14 (DESIGN §2.6, §2.8, §2.11).
+/* Sealed LoRa packet formats, radio protocol v15 (DESIGN §2.6, §2.8, §2.11).
  *
  * Wire = [cleartext header | ciphertext payload | 16-byte Poly1305 tag]
  * (secure.h). The type byte carries PROTO_VER in its high nibble, so every
@@ -18,15 +18,18 @@
 /* Low nibble of the type byte. */
 #define PKT_TYPE_BEACON   0x01u
 #define PKT_TYPE_UPLINK   0x02u
+#define PKT_TYPE_JOIN     0x03u
+#define PKT_TYPE_OFFER    0x04u
+#define PKT_TYPE_CONFIRM  0x05u
 
-/* v14: active radio faults; cumulative history in the existing checkpoint union. */
-#define PROTO_VER 14u
+/* v15: mutual admission, per-link keys and explicit admission schedules. */
+#define PROTO_VER 15u
 
 #define SEC_VT(ver, type) ((uint8_t)(((uint8_t)(ver) << 4) | ((uint8_t)(type) & 0x0Fu)))
 #define SEC_VT_TYPE(b)    ((uint8_t)((b) & 0x0Fu))
 #define SEC_VT_VER(b)     ((uint8_t)((b) >> 4))
 
-#define SEC_TYPE_HAS_NODE(t) ((t) == PKT_TYPE_UPLINK)
+#define SEC_TYPE_HAS_NODE(t) ((t) == PKT_TYPE_UPLINK || (t) == PKT_TYPE_JOIN || (t) == PKT_TYPE_CONFIRM)
 
 /* Registry capacity at the master = entries of the beacon's slot table. */
 #define MAX_NODES 5u
@@ -34,15 +37,16 @@
 
 /* ---- Beacon (master -> all) ----------------------------------------------- */
 
-/* Entry k names the complete sender and boot. node_id 0 = free entry.
- * ack_seq is the last evidence packet accepted from exactly that boot. */
+/* Entry k names the complete sender and negotiated connection. node_id 0 = free entry.
+ * ack_seq is the last evidence packet accepted from that sensor boot, acknowledged only on its active connection. */
 typedef struct __attribute__((packed)) {
     uint32_t node_id;
     uint16_t ack_seq;
-    uint64_t boot_id;
+    uint64_t link_id;
 } beacon_slot_t;
 
 #define BEACON_TX_PREV_VALID 0x01u /* m_tx_prev is the TxDone of beacon seq-1 */
+#define BEACON_ADMISSION     0x02u
 
 typedef struct __attribute__((packed)) {
     uint8_t  seq;        /* beacon sequence (wraps at 256) */
@@ -51,6 +55,37 @@ typedef struct __attribute__((packed)) {
     uint8_t  cp_req;     /* checkpoint request id, 0 = none */
     beacon_slot_t slot[MAX_NODES];
 } beacon_pl_t;
+
+/* Six explicit slot roles while admission is open. Low three bits name the
+ * registry entry; the upper bits are the role. Unused slots must be zero. */
+#define SLOT_ROLE_IDLE     0x00u
+#define SLOT_ROLE_DATA     0x08u
+#define SLOT_ROLE_REQUEST  0x10u
+#define SLOT_ROLE_OFFER    0x18u
+#define SLOT_ROLE_CONFIRM  0x20u
+#define SLOT_ROLE(v) ((uint8_t)((v) & 0xf8u))
+#define SLOT_ENTRY(v) ((unsigned)((v) & 7u))
+typedef struct __attribute__((packed)) {
+    beacon_pl_t base;
+    uint8_t schedule[6];
+    uint8_t pending;
+} admission_beacon_t;
+
+typedef struct __attribute__((packed)) {
+    uint64_t master_boot;
+    uint8_t ns[16];
+} join_pl_t;
+typedef struct __attribute__((packed)) {
+    uint32_t node_id;
+    uint64_t sensor_boot;
+    uint8_t ns[16], nm[16];
+    uint64_t link_id;
+    uint8_t beacon_ctr[3];
+} offer_pl_t;
+typedef struct __attribute__((packed)) {
+    uint64_t master_boot;
+    uint8_t nm[16];
+} confirm_pl_t;
 
 /* ---- Uplink (sensor -> master) ------------------------------------------- */
 
@@ -115,11 +150,17 @@ typedef struct __attribute__((packed)) {
 
 #define WIRE_BEACON   SEC_WIRE_LEN(SEC_HDR_DL, sizeof(beacon_pl_t))  /* 109 B, ~92 ms */
 #define WIRE_UPLINK   SEC_WIRE_LEN(SEC_HDR_UL, sizeof(uplink_pl_t))  /* 94 B, ~82 ms */
+#define WIRE_ADMISSION SEC_WIRE_LEN(SEC_HDR_DL, sizeof(admission_beacon_t))
+#define WIRE_JOIN      SEC_WIRE_LEN(SEC_HDR_UL, sizeof(join_pl_t))
+#define WIRE_OFFER     SEC_WIRE_LEN(SEC_HDR_DL, sizeof(offer_pl_t))
+#define WIRE_CONFIRM   SEC_WIRE_LEN(SEC_HDR_UL, sizeof(confirm_pl_t))
 #define WIRE_MAX      128 /* RX buffer size */
 
 static_assert(sizeof(radio_history_t) == 17, "checkpoint history layout");
 static_assert(sizeof(beacon_pl_t) == 81, "beacon payload layout");
 static_assert(sizeof(uplink_pl_t) == 62, "uplink payload layout");
+static_assert(WIRE_ADMISSION == 116 && WIRE_JOIN == 56 && WIRE_OFFER == 83 && WIRE_CONFIRM == 56,
+              "admission airtime contract");
 static_assert(WIRE_UPLINK <= WIRE_MAX && WIRE_BEACON <= WIRE_MAX, "packets must fit the RX buffer");
 
 #endif /* PROTOCOL_H */

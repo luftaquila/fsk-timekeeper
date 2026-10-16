@@ -49,6 +49,10 @@ class NrfHal : public RadioLibHal {
 
     /* A new radio call: its BUSY waits are timed afresh (hang_guard.h). */
     void restartHangCheck();
+    void limit(uint32_t end_us);
+    void unlimit();
+    bool expired() const;
+    bool deadlineHit() const { return _deadlineHit; }
 
   private:
     uint32_t _sck;
@@ -57,6 +61,8 @@ class NrfHal : public RadioLibHal {
     uint32_t _busy;
     bool _spiTimeout;
     hang_guard_t _hang;
+    uint32_t _deadline = 0;
+    bool _limited = false, _deadlineHit = false;
 };
 
 #endif /* RADIO_HAL_H */

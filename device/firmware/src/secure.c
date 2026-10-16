@@ -20,11 +20,65 @@ static uint32_t g_tx_ctr;
 static uint32_t g_prng;
 
 static uint32_t g_rng_retry_ms;
+static uint8_t g_challenges[5][16];
+static unsigned g_challenge_count, g_challenge_fill;
+
+static void put64(uint8_t *p, uint64_t v)
+{
+    for (unsigned i = 0; i < 8u; i++) { p[i] = (uint8_t)(v >> (8u * i)); }
+}
+
+static int control_type(uint8_t type)
+{
+    return type == PKT_TYPE_BEACON || type == PKT_TYPE_JOIN || type == PKT_TYPE_OFFER;
+}
+
+static int payload_ok(uint8_t type, int n)
+{
+    switch (type) {
+    case PKT_TYPE_BEACON: return n == sizeof(beacon_pl_t) || n == sizeof(admission_beacon_t);
+    case PKT_TYPE_UPLINK: return n == sizeof(uplink_pl_t);
+    case PKT_TYPE_JOIN: return n == sizeof(join_pl_t);
+    case PKT_TYPE_OFFER: return n == sizeof(offer_pl_t);
+    case PKT_TYPE_CONFIRM: return n == sizeof(confirm_pl_t);
+    default: return 0;
+    }
+}
+
+static void control_key(uint8_t out[32], uint8_t type, uint64_t boot)
+{
+    uint8_t context[16] = {'F','S','K',PROTO_VER,'C',type,0,0};
+    /* Beacons are tied to the master epoch. Join/offer authenticate bootstrap
+     * traffic; their payload carries the peer's fresh challenge. */
+    put64(context + 8, type == PKT_TYPE_BEACON ? boot : 0);
+    crypto_blake2b_keyed(out, 32, KEY, sizeof(KEY), context, sizeof(context));
+}
+
+int sec_link_keys(sec_link_keys_t *out, uint64_t master_boot, uint32_t node_id,
+                  uint64_t sensor_boot, const uint8_t ns[16], const uint8_t nm[16], uint64_t link_id)
+{
+    if (!g_provisioned || node_id == NODE_MASTER || link_id == 0) { return 0; }
+    uint8_t context[68] = {'F','S','K',PROTO_VER,'L',0,0,0};
+    put64(context + 8, master_boot);
+    for (unsigned i = 0; i < 4; i++) { context[16+i] = (uint8_t)(node_id >> (8*i)); }
+    put64(context + 20, sensor_boot);
+    memcpy(context + 28, ns, 16);
+    memcpy(context + 44, nm, 16);
+    put64(context + 60, link_id);
+    context[5] = PKT_TYPE_UPLINK;
+    crypto_blake2b_keyed(out->data, 32, KEY, sizeof(KEY), context, sizeof(context));
+    context[5] = PKT_TYPE_CONFIRM;
+    crypto_blake2b_keyed(out->confirm, 32, KEY, sizeof(KEY), context, sizeof(context));
+    crypto_wipe(context, sizeof(context));
+    return 1;
+}
 
 void sec_init(void)
 {
     g_have_boot_id = entropy_boot_id(&g_boot_id);
     g_tx_ctr = 0;
+    crypto_wipe(g_challenges, sizeof(g_challenges));
+    g_challenge_count = g_challenge_fill = 0;
     g_rng_retry_ms = board_millis() + 1000u;
     g_prng = (uint32_t)g_boot_id ^ (uint32_t)(g_boot_id >> 32) ^ board_micros() ^ 0x9E3779B9u;
     sec_reload();
@@ -32,11 +86,39 @@ void sec_init(void)
 
 void sec_service(uint32_t now_ms)
 {
-    if (g_have_boot_id || (int32_t)(now_ms - g_rng_retry_ms) < 0) { return; }
-    g_have_boot_id = entropy_boot_id(&g_boot_id);
-    g_rng_retry_ms = board_millis() + 1000u;
-    /* No packet has been sealed in this session yet. Never reset a live counter. */
-    if (g_have_boot_id) { g_prng = (uint32_t)g_boot_id ^ (uint32_t)(g_boot_id >> 32); }
+    if (!g_have_boot_id) {
+        if ((int32_t)(now_ms - g_rng_retry_ms) < 0) { return; }
+        g_have_boot_id = entropy_boot_id(&g_boot_id);
+        g_rng_retry_ms = board_millis() + 1000u;
+        if (g_have_boot_id) { g_prng = (uint32_t)g_boot_id ^ (uint32_t)(g_boot_id >> 32); }
+        return;
+    }
+    if (!g_provisioned || g_challenge_count == 5u) { return; }
+    uint8_t byte;
+    int r = entropy_poll(&byte);
+    if (r < 0) { g_challenge_fill = 0; }
+    if (r > 0) {
+        g_challenges[g_challenge_count][g_challenge_fill++] = byte;
+        if (g_challenge_fill == 16u) { g_challenge_count++; g_challenge_fill = 0; }
+    }
+}
+
+int sec_challenge(uint8_t out[16])
+{
+    if (!g_challenge_count) { return 0; }
+    memcpy(out, g_challenges[0], 16);
+    /* Include the partially collected last entry when shifting the pool. */
+    memmove(g_challenges, g_challenges + 1, (--g_challenge_count) * 16u + g_challenge_fill);
+    return 1;
+}
+
+int sec_counter_exhausted(void) { return g_tx_ctr >= 0xffffffu; }
+uint32_t sec_wire_counter(const uint8_t *p) { return (uint32_t)p[9] | (uint32_t)p[10] << 8 | (uint32_t)p[11] << 16; }
+int sec_accept_counter(uint32_t *high, uint32_t ctr)
+{
+    if (!ctr || ctr > 0xffffffu || ctr <= *high) { return 0; }
+    *high = ctr;
+    return 1;
 }
 
 int sec_boot_ready(void) { return g_have_boot_id; }
@@ -71,13 +153,14 @@ static void build_nonce(uint8_t nonce[24], uint8_t type, uint32_t node_id,
     memcpy(&nonce[14], &ctr, 4);
 }
 
-int sec_seal(uint8_t *out, int out_cap, uint8_t type, uint32_t node_id,
+int sec_seal_key(const uint8_t key[32], uint8_t *out, int out_cap, uint8_t type, uint32_t node_id,
              const void *payload, int payload_len)
 {
     if (!g_provisioned || !g_have_boot_id) { return -4; }
     int has_node = SEC_TYPE_HAS_NODE(type);
     int hdr = has_node ? SEC_HDR_UL : SEC_HDR_DL;
     if (payload_len < 0 || payload_len > WIRE_MAX - hdr - SEC_MAC_LEN) { return -1; }
+    if (!payload_ok(type, payload_len)) { return -1; }
     int wire = hdr + payload_len + SEC_MAC_LEN;
     if (out_cap < wire) { return -1; }
 
@@ -104,15 +187,26 @@ int sec_seal(uint8_t *out, int out_cap, uint8_t type, uint32_t node_id,
 
     crypto_aead_lock(out + hdr,               /* ciphertext */
                      out + hdr + payload_len, /* mac (16) */
-                     KEY, nonce,
+                     key, nonce,
                      out, (size_t)hdr,
                      (const uint8_t *)payload, (size_t)payload_len);
     return wire;
 }
 
+int sec_seal(uint8_t *out, int out_cap, uint8_t type, uint32_t node_id,
+             const void *payload, int payload_len)
+{
+    if (!control_type(type)) { return -5; }
+    uint8_t key[32];
+    control_key(key, type, g_boot_id);
+    int r = sec_seal_key(key, out, out_cap, type, node_id, payload, payload_len);
+    crypto_wipe(key, sizeof(key));
+    return r;
+}
+
 /* Verify and decrypt with a header of hdr bytes (node id in it when has_node)
  * and payload_len bytes of ciphertext before the tag. 0, or -2 on MAC failure. */
-static int open_sealed(const uint8_t *in, int hdr, int has_node, int payload_len,
+static int open_sealed(const uint8_t key[32], const uint8_t *in, int hdr, int has_node, int payload_len,
                        uint8_t *plain, sec_meta_t *meta)
 {
     uint8_t type = SEC_VT_TYPE(in[0]);
@@ -127,7 +221,7 @@ static int open_sealed(const uint8_t *in, int hdr, int has_node, int payload_len
 
     if (crypto_aead_unlock(plain,
                            in + hdr + payload_len, /* mac */
-                           KEY, nonce,
+                           key, nonce,
                            in, (size_t)hdr,
                            in + hdr, (size_t)payload_len) != 0) {
         return -2;
@@ -139,7 +233,7 @@ static int open_sealed(const uint8_t *in, int hdr, int has_node, int payload_len
     return 0;
 }
 
-int sec_unseal(const uint8_t *in, int in_len, sec_meta_t *meta,
+int sec_unseal_key(const uint8_t key[32], const uint8_t *in, int in_len, sec_meta_t *meta,
                void *out_payload, int payload_len)
 {
     if (!g_provisioned) { return -3; }
@@ -150,13 +244,26 @@ int sec_unseal(const uint8_t *in, int in_len, sec_meta_t *meta,
     int has_node = SEC_TYPE_HAS_NODE(SEC_VT_TYPE(vt));
     int hdr = has_node ? SEC_HDR_UL : SEC_HDR_DL;
     if (payload_len < 0 || payload_len > WIRE_MAX - hdr - SEC_MAC_LEN) { return -1; }
+    if (!payload_ok(SEC_VT_TYPE(vt), payload_len)) { return -1; }
     int wire = hdr + payload_len + SEC_MAC_LEN;
     if (in_len != wire) { return -1; }
 
     uint8_t plain[WIRE_MAX];
-    int r = open_sealed(in, hdr, has_node, payload_len, plain, meta);
+    if (!sec_wire_counter(in)) { return -1; }
+    int r = open_sealed(key, in, hdr, has_node, payload_len, plain, meta);
     if (r == 0) { memcpy(out_payload, plain, (size_t)payload_len); }
     crypto_wipe(plain, sizeof(plain));
+    return r;
+}
+
+int sec_unseal(const uint8_t *in, int in_len, sec_meta_t *meta, void *out_payload, int payload_len)
+{
+    if (in_len < SEC_HDR_DL || !control_type(SEC_VT_TYPE(in[0]))) { return -1; }
+    uint64_t boot; memcpy(&boot, in + 1, 8);
+    uint8_t key[32];
+    control_key(key, SEC_VT_TYPE(in[0]), boot);
+    int r = sec_unseal_key(key, in, in_len, meta, out_payload, payload_len);
+    crypto_wipe(key, sizeof(key));
     return r;
 }
 
@@ -190,7 +297,9 @@ int sec_authentic_any_version(const uint8_t *in, int in_len)
     if (len < 0) { return 0; }
     uint8_t plain[WIRE_MAX];
     sec_meta_t meta;
-    int ok = open_sealed(in, hdr, SEC_TYPE_HAS_NODE(SEC_VT_TYPE(in[0])), len, plain, &meta) == 0;
+    int ok;
+    if (ver == PROTO_VER) { ok = sec_unseal(in, in_len, &meta, plain, len) == 0; }
+    else { ok = open_sealed(KEY, in, hdr, SEC_TYPE_HAS_NODE(SEC_VT_TYPE(in[0])), len, plain, &meta) == 0; }
     crypto_wipe(plain, sizeof(plain));
     return ok;
 }

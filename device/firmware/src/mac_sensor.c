@@ -8,17 +8,20 @@
 #include "errlog.h"
 #include "meas.h"
 #include "radio.h"
+#include "mac_radio.h"
+#include "mac_schedule.h"
 
 #define TPM ((uint64_t)TICKS_PER_MS)
 
 /* An uplink let through at SLOT_LATE_MS ends SLOT_GUARD_MS before the LBT listen of the next slot
  * starts, and the last slot ends before the next beacon even when this one went out as late as
- * beacon_channel_ready() allows (retry cutoff, a last CAD, then a drain and optional RSSI listen). */
+ * the absolute beacon channel-access deadline allows. */
 static_assert((SLOT_LATE_MS + TX_SETUP_MS + SLOT_GUARD_MS + LBT_LISTEN_MS) * 1000u + LORA_TOA_US(WIRE_UPLINK) <=
               SLOT_LEN_MS * 1000u, "an uplink must fit its slot");
-static_assert((SLOT_OFFSET_MS + SLOT_COUNT * SLOT_LEN_MS + BEACON_CHANNEL_RETRY_MS + CAD_TIMEOUT_MS + RX_DRAIN_MAX_MS +
-               LBT_LISTEN_MS + TX_SETUP_MS) * 1000u + LORA_TOA_US(WIRE_BEACON) <= BEACON_PERIOD_MS * 1000u,
-              "the slots must end before the next beacon");
+static_assert((SLOT_OFFSET_MS + SLOT_COUNT * SLOT_LEN_MS + BEACON_ACCESS_MS + TX_SETUP_MS) * 1000u +
+              LORA_TOA_US(WIRE_ADMISSION) <= BEACON_PERIOD_MS * 1000u, "the admission frame fits");
+static_assert((SLOT_LATE_MS + TX_SETUP_MS + SLOT_GUARD_MS + LBT_LISTEN_MS) * 1000u +
+              LORA_TOA_US(WIRE_OFFER) <= SLOT_LEN_MS * 1000u, "an offer fits its slot");
 static_assert(LBT_LISTEN_MS < SLOT_OFFSET_MS, "the listen before slot 0 starts after the beacon");
 static_assert(SLOT_COUNT >= 2u && SLOT_COUNT <= 8u, "tx_slots holds every slot in 8 bits");
 static_assert(LORA_SF >= 7 && LORA_SYMBOL_US < 16000u, "LORA_TOA_US covers SF7..SF12 without LDRO");
@@ -37,58 +40,183 @@ void mac_sensor_init(mac_sensor_t *s, uint32_t my_id, uint8_t reset_reason)
     radio_start_rx();
 }
 
-static void on_beacon(mac_sensor_t *s, const uint8_t *buf, int n)
+static int join_authenticated(const sensor_join_t *j)
 {
-    uint64_t l_rx = 0;
-    int l_rx_ok = capture_dio1_get(&l_rx);
-    sec_meta_t m;
-    beacon_pl_t b;
-    if (sec_unseal(buf, n, &m, &b, sizeof(b)) != 0 || m.node_id != NODE_MASTER) { return; }
-    if (!sec_replay(&s->from_master, m.boot_id, m.ctr)) { return; }
-    board_led_toggle();
-    s->last_beacon_ms = board_millis();
-    s->retry.delay_ms = BEACON_LOSS_RESET_MS;
+    return j->phase == SENSOR_JOIN_CONFIRM_READY || j->phase == SENSOR_JOIN_WAIT_ASSIGNMENT;
+}
 
-    if (!s->have_session || m.boot_id != s->master_boot_id) {
-        /* New master session (or first contact): the old timebase is gone and
-         * the new master refuses records bound to it. */
-        s->have_session = 1;
-        s->master_boot_id = m.boot_id;
-        sync_session(&s->sync);
+static void join_cancel(mac_sensor_t *s)
+{
+    memset(&s->join, 0, sizeof(s->join));
+    s->retry_join_ms = board_millis() + (1u + sec_random() % 4u) * BEACON_PERIOD_MS;
+    s->join_retry_pending = 1;
+}
+
+static void join_begin(mac_sensor_t *s, uint64_t boot)
+{
+    if (s->join.phase != SENSOR_JOIN_IDLE || s->join_retry_pending) { return; }
+    uint8_t nonce[16];
+    if (!sec_challenge(nonce)) { return; }
+    memset(&s->join, 0, sizeof(s->join));
+    s->join.phase = SENSOR_JOIN_WAIT_OFFER;
+    s->join.master_boot = boot;
+    s->join.born_ms = board_millis();
+    memcpy(s->join.ns, nonce, 16);
+}
+
+static int data_entry(const beacon_pl_t *b, const uint8_t schedule[SLOT_COUNT], uint32_t id, uint64_t link)
+{
+    for (unsigned j = 0; j < SLOT_COUNT; j++) {
+        unsigned i = SLOT_ENTRY(schedule[j]);
+        if (SLOT_ROLE(schedule[j]) == SLOT_ROLE_DATA && b->slot[i].node_id == id && b->slot[i].link_id == link) {
+            return (int)i;
+        }
+    }
+    return -1;
+}
+
+static void on_offer(mac_sensor_t *s, const uint8_t *buf, int n)
+{
+    sensor_join_t *j = &s->join;
+    if (j->phase == SENSOR_JOIN_IDLE) { return; }
+    offer_pl_t p; sec_meta_t meta;
+    if (sec_unseal(buf, n, &meta, &p, sizeof(p)) || meta.boot_id != j->master_boot ||
+        p.node_id != s->my_id || p.sensor_boot != sec_boot_id() || !p.link_id ||
+        memcmp(p.ns, j->ns, 16) || meta.ctr <= j->offer_ctr) { return; }
+    uint32_t floor = (uint32_t)p.beacon_ctr[0] | (uint32_t)p.beacon_ctr[1] << 8 | (uint32_t)p.beacon_ctr[2] << 16;
+    if (!floor || floor >= meta.ctr || floor < j->beacon_floor) { return; }
+    if (join_authenticated(j) && (j->link_id != p.link_id || memcmp(j->nm, p.nm, 16))) { return; }
+    if (!join_authenticated(j)) {
+        if (!sec_link_keys(&j->keys, j->master_boot, s->my_id, sec_boot_id(), j->ns, p.nm, p.link_id)) { return; }
+        memcpy(j->nm, p.nm, 16); j->link_id = p.link_id;
+        j->phase = SENSOR_JOIN_CONFIRM_READY;
+        sync_init(&j->sync);
+        /* Only the exact advertised beacon may seed this candidate. Its first
+         * RxDone was cached before the offer; duplicate packets never replace it. */
+        if (s->hint_valid && s->hint_boot == j->master_boot && s->hint_ctr == floor) {
+            (void)sync_beacon(&j->sync, s->hint.base.seq, s->hint_rx, 1, 0, 0);
+            j->seen_ctr = floor;
+        }
+    }
+    s->retry.at_ms = board_millis() + BEACON_LOSS_RESET_MS;
+    j->offer_ctr = meta.ctr;
+    j->beacon_floor = floor;
+}
+
+static int beacon_schedule(const admission_beacon_t *b, uint8_t slots[SLOT_COUNT])
+{
+    if (b->base.flags & BEACON_ADMISSION) { memcpy(slots, b->schedule, SLOT_COUNT); }
+    else { mac_normal_schedule(&b->base, slots); }
+    if (!mac_schedule_valid(slots)) { return 0; }
+    for (unsigned k = 0; k < SLOT_COUNT; k++) {
+        unsigned role = SLOT_ROLE(slots[k]), i = SLOT_ENTRY(slots[k]);
+        if (role != SLOT_ROLE_IDLE && role != SLOT_ROLE_REQUEST &&
+            (!b->base.slot[i].node_id || !b->base.slot[i].link_id)) { return 0; }
+    }
+    return 1;
+}
+
+/* Same-clock reauthentication keeps FIFO, sync and capture identity. Only an
+ * authenticated change of master epoch clears records tied to the old clock. */
+static void activate_join(mac_sensor_t *s, int entry, uint32_t ctr)
+{
+    sensor_join_t *j = &s->join;
+    if (!s->have_session || s->master_boot_id != j->master_boot) {
         sq_clear(&s->q);
+        s->sync = j->sync;
         s->timing_ready = 0;
         s->cp_pending = s->cp_answered = 0;
     }
-    /* Held captures get stamped by a new anchor, or become losses once their
-     * anchor is too old for any later one to bracket them. */
-    (void)sync_beacon(&s->sync, b.seq, l_rx, l_rx_ok, (b.flags & BEACON_TX_PREV_VALID) != 0, b.m_tx_prev);
-    sq_resolve(&s->q, &s->sync, capture_now64());
-    if (b.cp_req != 0u && b.cp_req != s->cp_answered) { s->cp_pending = b.cp_req; }
+    s->master_boot_id = j->master_boot; s->link_id = j->link_id;
+    memcpy(s->data_key, j->keys.data, 32);
+    s->have_session = 1; s->entry = entry;
+    memset(&s->from_master, 0, sizeof(s->from_master));
+    s->from_master.max_ctr = ctr;
+    s->last_beacon_ms = board_millis();
+    memset(j, 0, sizeof(*j));
+}
 
-    /* Match the complete identity before applying an ACK or claiming slots.
-     * Unregistered sensors contend only in the last slot. */
-    unsigned live = 0, rank = 0;
-    s->entry = -1;
-    for (unsigned k = 0; k < MAX_NODES; k++) {
-        if (b.slot[k].node_id == 0u) { continue; }
-        if (b.slot[k].node_id == s->my_id && b.slot[k].boot_id == sec_boot_id()) {
-            s->entry = (int)k;
-            rank = live;
-            sq_ack(&s->q, b.slot[k].ack_seq);
+/* Returns 1 only when the candidate becomes the active connection. */
+static int join_beacon(mac_sensor_t *s, const admission_beacon_t *b, const sec_meta_t *meta,
+                       const uint8_t slots[SLOT_COUNT], uint64_t l_rx)
+{
+    sensor_join_t *j = &s->join;
+    if (!join_authenticated(j) || j->master_boot != meta->boot_id || meta->ctr <= j->beacon_floor) { return 0; }
+    if (sec_accept_counter(&j->seen_ctr, meta->ctr)) {
+        if (j->sync.have_prev && l_rx - j->sync.prev_lrx > 255u * BEACON_PERIOD_MS * TPM) { sync_clock_lost(&j->sync); }
+        (void)sync_beacon(&j->sync, b->base.seq, l_rx, 1, b->base.flags & BEACON_TX_PREV_VALID, b->base.m_tx_prev);
+    }
+    int entry = data_entry(&b->base, slots, s->my_id, j->link_id);
+    if (j->phase == SENSOR_JOIN_WAIT_ASSIGNMENT && entry >= 0) {
+        activate_join(s, entry, meta->ctr);
+        return 1;
+    }
+    for (unsigned i = 0; i < MAX_NODES; i++) {
+        if ((b->pending & (1u << i)) && b->base.slot[i].node_id == s->my_id) { return 0; }
+    }
+    join_cancel(s);
+    return 0;
+}
+
+static void select_tx_slots(mac_sensor_t *s, const admission_beacon_t *b,
+                            const uint8_t slots[SLOT_COUNT], int active)
+{
+    s->tx_slots = 0; s->data_sent = 0;
+    unsigned requests[SLOT_COUNT], nrequests = 0;
+    for (unsigned k = 0; k < SLOT_COUNT; k++) {
+        unsigned role = SLOT_ROLE(slots[k]), i = SLOT_ENTRY(slots[k]);
+        if (role == SLOT_ROLE_DATA && active && (int)i == s->entry) { s->tx_slots |= (uint8_t)(1u << k); }
+        if (role == SLOT_ROLE_REQUEST) { requests[nrequests++] = k; }
+        if (role == SLOT_ROLE_CONFIRM && s->join.phase != SENSOR_JOIN_IDLE && b->base.slot[i].node_id == s->my_id) {
+            s->tx_slots |= (uint8_t)(1u << k);
         }
-        live++;
     }
-    /* Without our RxDone the slot times are unknown: stay silent this cycle. */
-    s->tx_slots = 0;
-    if (l_rx_ok && s->entry >= 0) {
-        for (unsigned j = rank; j < SLOT_COUNT - 1u; j += live) { s->tx_slots |= (uint8_t)(1u << j); }
-    } else if (l_rx_ok && (sec_random() & 1u)) {
-        s->tx_slots = (uint8_t)(1u << (SLOT_COUNT - 1u));
+    if (s->join.phase == SENSOR_JOIN_WAIT_OFFER && nrequests &&
+        (nrequests > 1u || (sec_random() & 1u))) {
+        s->tx_slots |= (uint8_t)(1u << requests[sec_random() % nrequests]);
     }
-    s->cycle_rx = l_rx;
-    s->cycle_seq = b.seq;
-    /* At least SLOT_OFFSET_MS before the first slot, subject to the final deadline check. */
-    meas_service(board_millis());
+}
+
+static void on_beacon(mac_sensor_t *s, const uint8_t *buf, int n)
+{
+    uint64_t l_rx;
+    if (!capture_dio1_get(&l_rx)) { return; }
+    admission_beacon_t b = {0}; sec_meta_t meta;
+    int plen = n == WIRE_ADMISSION ? sizeof(b) : sizeof(b.base);
+    if (sec_unseal(buf, n, &meta, &b, plen) || meta.node_id != NODE_MASTER ||
+        !!(b.base.flags & BEACON_ADMISSION) != (n == WIRE_ADMISSION) ||
+        b.base.flags & ~(BEACON_ADMISSION | BEACON_TX_PREV_VALID) || b.pending & ~0x1fu) { return; }
+    uint8_t slots[SLOT_COUNT];
+    if (!beacon_schedule(&b, slots)) { return; }
+    int active = s->have_session && meta.boot_id == s->master_boot_id;
+    if (active) {
+        if (!sec_accept_counter(&s->from_master.max_ctr, meta.ctr)) { return; }
+        s->last_beacon_ms = board_millis();
+        if (s->join.phase != SENSOR_JOIN_IDLE && s->join.master_boot != s->master_boot_id) { join_cancel(s); }
+        if (s->sync.have_prev && l_rx - s->sync.prev_lrx > 255u * BEACON_PERIOD_MS * TPM) { sync_clock_lost(&s->sync); }
+        (void)sync_beacon(&s->sync, b.base.seq, l_rx, 1, b.base.flags & BEACON_TX_PREV_VALID, b.base.m_tx_prev);
+        sq_resolve(&s->q, &s->sync, capture_now64());
+        s->entry = data_entry(&b.base, slots, s->my_id, s->link_id);
+        if (s->entry < 0) { join_begin(s, meta.boot_id); }
+    } else {
+        /* A foreign epoch cannot disturb a recently heard active master. */
+        if (s->have_session && (uint32_t)(board_millis() - s->last_beacon_ms) < SYNC_TTL_MS) { return; }
+        join_begin(s, meta.boot_id);
+        if (s->join.phase == SENSOR_JOIN_IDLE || s->join.master_boot != meta.boot_id) { return; }
+    }
+    if (s->hint_valid && s->hint_boot == meta.boot_id && meta.ctr <= s->hint_ctr) { return; }
+    s->hint = b; s->hint_boot = meta.boot_id; s->hint_ctr = meta.ctr; s->hint_rx = l_rx; s->hint_valid = 1;
+    if (join_beacon(s, &b, &meta, slots, l_rx)) { active = 1; }
+    if (active && s->entry >= 0) {
+        sq_ack(&s->q, b.base.slot[s->entry].ack_seq);
+        if (b.base.cp_req && b.base.cp_req != s->cp_answered) { s->cp_pending = b.base.cp_req; }
+        sq_resolve(&s->q, &s->sync, capture_now64());
+    }
+    select_tx_slots(s, &b, slots, active);
+    memcpy(s->schedule, slots, sizeof(slots));
+    s->cycle_rx = l_rx; s->cycle_seq = b.base.seq;
+    s->retry.delay_ms = BEACON_LOSS_RESET_MS;
+    board_led_toggle();
 }
 
 static void record_capture(mac_sensor_t *s, uint32_t seq, uint64_t tick, int xtal)
@@ -109,7 +237,7 @@ static void record_capture(mac_sensor_t *s, uint32_t seq, uint64_t tick, int xta
 static void record_loss(mac_sensor_t *s, uint32_t first_seq, uint32_t last_seq,
                         uint64_t first_tick, uint64_t last_tick)
 {
-    if (!s->timing_ready) { return; }
+    if (s->have_session && !s->timing_ready) { return; }
     int xtal = board_hfclk_xtal();
     uint64_t m1, m2;
     uint8_t f1, f2;
@@ -190,44 +318,51 @@ static void fill_diag(mac_sensor_t *s, uplink_pl_t *p)
 
 static void slot_tx(mac_sensor_t *s)
 {
-    if (s->tx_slots == 0u) { return; }
+    if (!s->tx_slots) { return; }
     unsigned j = 0;
-    while (!((s->tx_slots >> j) & 1u)) { j++; }
-    uint64_t start = s->cycle_rx + (uint64_t)(SLOT_OFFSET_MS + j * SLOT_LEN_MS) * TPM;
+    while (!(s->tx_slots & (1u << j))) { j++; }
+    uint64_t start = s->cycle_rx + (SLOT_OFFSET_MS + j * SLOT_LEN_MS) * TPM;
     uint64_t late = start + SLOT_LATE_MS * TPM;
-    /* The RSSI listen takes the LBT_LISTEN_MS before the slot, so the slot keeps its time. */
-    uint64_t listen = radio_lbt_enabled() ? LBT_LISTEN_MS * TPM : 0u;
-    uint64_t now = capture_now64();
-    if (now + listen < start) { return; }
-    s->tx_slots &= (uint8_t)~(1u << j); /* one try per slot */
-    if (now > late) { return; }
-
-    /* Listen before talk. The slot is ours, so anything on air is a stranger:
-     * give the slot up rather than wait. The listen comes before the packet is
-     * built, so captures taken during it still ride along. A bare preamble
-     * detection (maybe a stale one) is left to the CAD. */
-    if (listen) {
-        if (radio_lbt_listen() != RADIO_LBT_QUIET) { return; }
-        drain_captures(s);
+    uint64_t listen = radio_lbt_enabled() ? LBT_LISTEN_MS * TPM : 0;
+    if (capture_now64() + listen < start) { return; }
+    s->tx_slots &= (uint8_t)~(1u << j);
+    if (capture_now64() > late) { return; }
+    unsigned role = SLOT_ROLE(s->schedule[j]);
+    if (role == SLOT_ROLE_DATA && (s->data_sent || !s->have_session || s->entry < 0)) { return; }
+    if (role == SLOT_ROLE_CONFIRM && (!join_authenticated(&s->join) ||
+        s->hint_boot != s->join.master_boot || s->hint_ctr < s->join.beacon_floor)) { return; }
+    if (role == SLOT_ROLE_REQUEST && s->join.phase != SENSOR_JOIN_WAIT_OFFER) { return; }
+    mac_radio_limit(late);
+    if (listen && radio_lbt_listen() != RADIO_LBT_QUIET) { radio_unlimit(); return; }
+    drain_captures(s);
+    uplink_pl_t *p = NULL;
+    if (role == SLOT_ROLE_DATA) {
+        p = sq_packet(&s->q, s->master_boot_id);
+        if (!p && checkpoint_due(s)) { p = make_checkpoint(s); }
+        if (!p) { radio_unlimit(); return; }
     }
-    uplink_pl_t *p = sq_packet(&s->q, s->master_boot_id);
-    if (!p && checkpoint_due(s)) { p = make_checkpoint(s); }
-    if (!p) { return; }
-
-    if (radio_rx_settle(0, 0) != RADIO_RX_IDLE) { return; }
-    if (radio_cad() != RADIO_CAD_CLEAR) { return; }
-    if (capture_now64() > late) { radio_start_rx(); return; }
-
-    fill_diag(s, p);
-    uint8_t tx[WIRE_UPLINK];
-    int wlen = sec_seal(tx, sizeof(tx), PKT_TYPE_UPLINK, s->my_id, p, sizeof(*p));
-    if (wlen > 0 && capture_now64() <= late) {
-        s->tx_slots = 0; /* one packet per cycle; the next beacon acks it */
-        uint64_t tx_done;
-        radio_transmit(tx, wlen);
-        (void)capture_dio1_get(&tx_done); /* a TxDone must not pass for the next beacon's RxDone */
+    if (radio_rx_settle(0, 0) != RADIO_RX_IDLE || radio_cad() != RADIO_CAD_CLEAR) { radio_unlimit(); return; }
+    uint8_t tx[WIRE_MAX]; int n = -1;
+    if (role == SLOT_ROLE_DATA) {
+        fill_diag(s, p);
+        n = sec_seal_key(s->data_key, tx, sizeof(tx), PKT_TYPE_UPLINK, s->my_id, p, sizeof(*p));
+    } else if (role == SLOT_ROLE_REQUEST) {
+        join_pl_t r = {.master_boot = s->join.master_boot}; memcpy(r.ns, s->join.ns, 16);
+        n = sec_seal(tx, sizeof(tx), PKT_TYPE_JOIN, s->my_id, &r, sizeof(r));
+    } else if (role == SLOT_ROLE_CONFIRM) {
+        confirm_pl_t c = {.master_boot = s->join.master_boot}; memcpy(c.nm, s->join.nm, 16);
+        n = sec_seal_key(s->join.keys.confirm, tx, sizeof(tx), PKT_TYPE_CONFIRM, s->my_id, &c, sizeof(c));
     }
-    radio_start_rx();
+    uint64_t unused; (void)capture_dio1_get(&unused);
+    uint64_t finish = start + (SLOT_LEN_MS - SLOT_GUARD_MS - LBT_LISTEN_MS) * TPM;
+    if (n > 0 && capture_now64() <= late && radio_tx_start(tx, n, mac_deadline_us(finish)) == 0) {
+        s->tx_busy = 1;
+        if (role == SLOT_ROLE_DATA) { s->data_sent = 1; }
+        if (role == SLOT_ROLE_CONFIRM) { s->join.phase = SENSOR_JOIN_WAIT_ASSIGNMENT; }
+        return;
+    }
+    if (!radio_needs_reset()) { radio_start_rx(); }
+    radio_unlimit();
 }
 
 static void radio_recovery(mac_sensor_t *s)
@@ -246,9 +381,24 @@ static void radio_recovery(mac_sensor_t *s)
 void mac_sensor_step(mac_sensor_t *s)
 {
     (void)capture_now64(); /* at least once per TIMER1 wrap, beacons or not (capture.h) */
+    /* Retire an elapsed backoff even while no beacon asks us to join. An old
+     * deadline must never turn into a future wait after half a millis period. */
+    if (s->join_retry_pending && (int32_t)(board_millis() - s->retry_join_ms) >= 0) {
+        s->join_retry_pending = 0;
+    }
+    if (s->tx_busy) {
+        int done = radio_tx_poll();
+        if (!done) { drain_captures(s); return; }
+        s->tx_busy = 0;
+        uint64_t unused; (void)capture_dio1_get(&unused);
+    }
+    if (s->join.phase != SENSOR_JOIN_IDLE && (uint32_t)(board_millis() - s->join.born_ms) >= JOIN_LIFETIME_MS) { join_cancel(s); }
     uint8_t buf[WIRE_MAX];
+    radio_limit(board_micros() + 7000u);
     int n = radio_needs_reset() ? 0 : radio_receive(buf, sizeof(buf), NULL, NULL);
+    radio_unlimit();
     if (n >= WIRE_BEACON && SEC_VT_TYPE(buf[0]) == PKT_TYPE_BEACON) { on_beacon(s, buf, n); }
+    else if (n == WIRE_OFFER && SEC_VT_TYPE(buf[0]) == PKT_TYPE_OFFER) { on_offer(s, buf, n); }
 
     uint32_t stops = board_hfxo_stops();
     if (!board_hfclk_xtal() || stops != s->hfxo_stops) {
@@ -257,8 +407,9 @@ void mac_sensor_step(mac_sensor_t *s)
          * restart finished before this check. */
         s->hfxo_stops = stops;
         sync_clock_lost(&s->sync);
+        sync_clock_lost(&s->join.sync);
     }
-    if (!s->timing_ready) {
+    if (s->have_session && !s->timing_ready) {
         uint64_t now = capture_now64();
         if (sync_health(&s->sync, now, board_hfclk_xtal()) == HEALTH_EVENT_REQUIRED) {
             s->timing_ready = 1;
@@ -268,5 +419,8 @@ void mac_sensor_step(mac_sensor_t *s)
     drain_captures(s);
     if (radio_needs_reset()) { s->tx_slots = 0; }
     else { slot_tx(s); }
-    radio_recovery(s);
+    if (!s->tx_busy) {
+        uint64_t end = s->cycle_rx + (SLOT_OFFSET_MS + SLOT_COUNT * SLOT_LEN_MS) * TPM;
+        if (!s->tx_slots && capture_now64() >= end) { meas_service(board_millis()); radio_recovery(s); }
+    }
 }

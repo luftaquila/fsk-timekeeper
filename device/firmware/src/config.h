@@ -78,15 +78,15 @@
  * the sensors in the slot table, the last one is free for unregistered sensors (mac_sensor.c). */
 #define BEACON_PERIOD_MS   1000u
 #define SLOT_OFFSET_MS     50u
-#define SLOT_LEN_MS        110u
+#define SLOT_LEN_MS        120u
 #define SLOT_COUNT         6u
 #define SLOT_LATE_MS       10u  /* latest TX start within a slot, CAD included; later -> skip the slot */
 #define TX_SETUP_MS        7u   /* SPI + oscillator startup budget after CAD, until preamble */
 #define SLOT_GUARD_MS      5u   /* spare at the end of a slot for the unmeasured parts of this budget */
-/* Retry cutoff, not a total duration limit: checked after RX drain and optional
- * RSSI listen. At the cutoff skip CAD and permit TX only when RSSI is not loud. */
-#define BEACON_CHANNEL_RETRY_MS 50u
-#define RX_DRAIN_MAX_MS    100u /* longest wait for a reception in progress before a CAD */
+#define BEACON_ACCESS_MS   50u /* absolute frame-start -> TX-call deadline */
+#define JOIN_WINDOW_MS     30000u
+#define JOIN_LIFETIME_MS   10000u
+#define JOIN_MAX_OFFERS    3u
 #define RX_HEADER_WAIT_MS  12u  /* a preamble without a header after this long is noise */
 #define CAD_TIMEOUT_MS     10u  /* ~2.5 ms CAD (4 symbols at SF7/BW250) plus oscillator startup margin */
 

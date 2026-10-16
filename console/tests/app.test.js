@@ -215,7 +215,7 @@ describe("app under jsdom", () => {
       const spy = vi.spyOn(fake, "write").mockImplementation(async (line) => {
         if (!line.startsWith("R ")) return write(line);
         if (code !== "cfgfail") {
-          await device.handleLine(`I FSK-WL 5 ${device.identity.fw} ${device.identity.devid} M 14 923100 7 250.00 16000 0 -3 0`);
+          await device.handleLine(`I FSK-WL 6 ${device.identity.fw} ${device.identity.devid} M 15 923100 7 250.00 16000 0 -3 0`);
         }
         await device.handleLine(`X ${code}`);
         return true;
@@ -242,7 +242,8 @@ describe("app under jsdom", () => {
       assert.match(sensor.text(), /Battery/);
       await sensor.find("select").setValue(role);
       assert.equal(settings.mappingOf(node).role, role);
-      assert.equal(sensor.find("button").exists(), false);
+      assert.equal(sensor.find(".remove-sensor").exists(), false);
+      assert.ok(sensor.text().includes("Release slot"));
       const note = sensor.find(".sensor-note input");
       assert.equal(note.attributes("placeholder"), "Note");
       await note.setValue(`Gate ${node}`);

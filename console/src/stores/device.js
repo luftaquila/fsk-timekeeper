@@ -41,6 +41,8 @@ export const useDeviceStore = defineStore("device", () => {
   const identityOk = computed(() => contract.value.ok);
   const lastLineAt = ref(0);
   const heartbeat = ref(null); // { tick: bigint, wallMs, uptimeMs, beaconSeq, nseen }
+  const admissionNotice = ref("");
+  const admission = reactive({}); // node -> { state, at }, current connection only
   const telemetry = reactive({}); // node_id -> normalized telemetry
   const masterBootId = ref(null);
   const pps = ref(null); // latest P report
@@ -215,11 +217,19 @@ export const useDeviceStore = defineStore("device", () => {
     if (!msg) return;
     if ((msg.type !== "H" && msg.type !== "P") || consoleLines.value.length < CONSOLE_LIMIT) pushConsole("rx", String(raw).trim());
     // Nothing is judged or acked before the master proved the contract; E lines come again.
-    if (["E", "D", "T", "P"].includes(msg.type) && !contract.value.ok) {
+    if (["E", "D", "T", "P", "J"].includes(msg.type) && !contract.value.ok) {
       stats.gated++;
       return;
     }
     switch (msg.type) {
+      case "J":
+        if (msg.state === "REMOVED") {
+          delete admission[msg.node]; delete telemetry[msg.node];
+        } else {
+          admission[msg.node] = { state: msg.state, at: now };
+          // Periodic J reports include LOST nodes. Only live D telemetry restores them.
+        }
+        break;
       case "K":
         if (keyReadState.value === "loading") {
           finishKeyRead(msg.key === null ? "invalid" : msg.key ? "ready" : "empty", msg.key);
@@ -386,6 +396,7 @@ export const useDeviceStore = defineStore("device", () => {
   }
 
   function onErrorLine(msg) {
+    if (msg.reason === "registry_full") admissionNotice.value = "All five sensor slots are in use. Turn off a sensor and wait for it to go offline, or release its slot.";
     if (msg.reason === "badcmd" && keyReadState.value === "loading") {
       finishKeyRead("unsupported");
       return;
@@ -479,7 +490,7 @@ export const useDeviceStore = defineStore("device", () => {
       pushConsole("tx", shown);
       transport.write(line).then((sent) => {
         if (!sent) resolveProvision("timeout");
-      });
+      }).catch(() => resolveProvision("timeout"));
     });
   }
 
@@ -517,6 +528,22 @@ export const useDeviceStore = defineStore("device", () => {
     if (!isRadioConfig(cfg)) return Promise.reject(new Error("Radio settings out of range."));
     const line = radioCommand(cfg);
     return provision("R", line, line, ["cfgfail", "cfgapply", "cfgpending", "badcmd"]);
+  }
+
+  async function admissionCommand(node = null) {
+    const timing = useTimingStore();
+    if (!identityOk.value || identity.value?.role !== "M") throw new Error("Connect a compatible master first.");
+    if (timing.armed || timing.starting || timing.classifying) throw new Error("Stop the measurement first.");
+    if (node != null && (!/^[0-9A-F]{8}$/.test(node) || node === "00000000")) throw new Error("Invalid sensor ID.");
+    admissionNotice.value = "";
+    const cmd = node == null ? "JOIN" : "DROP";
+    const line = node == null ? cmd : `${cmd} ${node}`;
+    const result = await provision(cmd, line, line, ["clock", "badcmd", "notfound"]);
+    if (result === "ok" && node != null) {
+      delete admission[node]; delete telemetry[node];
+      useSettingsStore().removeSensor(node);
+    }
+    return result;
   }
 
   function readClock() {
@@ -577,6 +604,8 @@ export const useDeviceStore = defineStore("device", () => {
   }
 
   function resetSession() {
+    admissionNotice.value = "";
+    for (const node of Object.keys(admission)) delete admission[node];
     // Keep last known values for inspection, but require reports from this session.
     for (const report of Object.values(telemetry)) report.received_at = null;
     finishKeyRead("idle");
@@ -720,6 +749,9 @@ export const useDeviceStore = defineStore("device", () => {
     lastLineAt,
     heartbeat,
     telemetry,
+    admission,
+    admissionNotice,
+    admissionCommand,
     masterBootId,
     pps,
     ppsEdges,

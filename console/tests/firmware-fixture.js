@@ -3,7 +3,7 @@ import { zipSync, strToU8 } from "fflate";
 import { crc16 } from "../src/firmware/protocol";
 import { METADATA_NAME } from "../src/firmware/package";
 
-export function firmwareFixture({ version = "v1.2.3", usb_protocol = 5, radio_protocol = 14 } = {}) {
+export function firmwareFixture({ version = "v1.2.3", usb_protocol = 6, radio_protocol = 15 } = {}) {
   const identity = { schema_version: 1, product: "FSK-WL", board: "supermini-nrf52840", version,
     usb_protocol, radio_protocol, app_start: 0x26000, app_limit: 0xf2000, commit: "a".repeat(40) };
   const binary = new Uint8Array(1024);

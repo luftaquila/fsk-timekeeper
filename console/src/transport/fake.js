@@ -1,4 +1,4 @@
-/* Development fake of the FSK-WL master, USB line protocol v5. Same interface as serial.js.
+/* Development fake of the FSK-WL master, USB line protocol v6. Same interface as serial.js.
  *
  * Each sensor keeps its records (captures, losses, checkpoints) in order; a record reaches the
  * master queue one slot delay after it was made, consecutive captures bundled up to 5 per E
@@ -290,9 +290,18 @@ export function createFakeTransport({ onLine, onDisconnect }) {
         break;
       case "?STATUS":
         emit(heartbeat());
-        for (const [node, s] of sensors) emit(diagLine(node, s));
+        for (const [node, s] of sensors) { emit(diagLine(node, s)); emit(`J ${node} READY`); }
         emit(masterDiag());
         emit("A STATUS OK");
+        break;
+      case "JOIN":
+        emit(masterClockFaulted ? "X clock" : "A JOIN OK");
+        break;
+      case "DROP":
+        if (masterClockFaulted) emit("X clock");
+        else if (t.length !== 2 || !/^[0-9A-F]{8}$/.test(t[1])) emit("X badcmd");
+        else if (!sensors.delete(t[1])) emit("X notfound");
+        else { emit(`J ${t[1]} REMOVED`); emit("A DROP OK"); }
         break;
       case "?KEY":
         emit(`K ${provisioned ? radioKey : "NONE"}`);

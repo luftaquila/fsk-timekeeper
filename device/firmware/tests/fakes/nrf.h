@@ -65,6 +65,17 @@ extern NRF_PPI_Type test_ppi;
 #define GPIOTE_CONFIG_POLARITY_HiToLo 2u
 #define GPIOTE_INTENSET_IN0_Pos 0u
 #define GPIOTE_IRQn 6u
+typedef struct {
+    uint32_t ENABLE, FREQUENCY, CONFIG, EVENTS_END, TASKS_START, TASKS_STOP;
+    struct { uint32_t SCK, MISO, MOSI; } PSEL;
+    struct { uintptr_t PTR; uint32_t MAXCNT; } RXD, TXD;
+} NRF_SPIM_Type;
+extern volatile NRF_SPIM_Type test_spim;
+#define NRF_SPIM0 (&test_spim)
+#define SPIM_ENABLE_ENABLE_Disabled 0u
+#define SPIM_ENABLE_ENABLE_Enabled 7u
+#define SPIM_ENABLE_ENABLE_Pos 0u
+#define SPIM_FREQUENCY_FREQUENCY_M1 0x10000000u
 #define __DMB() ((void)0)
 static inline void NVIC_DisableIRQ(unsigned irq) { (void)irq; }
 static inline void NVIC_SystemReset(void) { }

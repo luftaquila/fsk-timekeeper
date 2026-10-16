@@ -12,10 +12,10 @@ const LINES = readFileSync(resolve(__dirname, "../../device/firmware/tests/usb_l
 describe("firmware-formatted lines", () => {
   it("I: the contract accepts a master and names a sensor-role board", () => {
     const m = parseLine(LINES[0]);
-    assert.equal(m.usbProto, 5);
+    assert.equal(m.usbProto, 6);
     assert.deepEqual(radioOf(m), { freqKhz: 922900, powerDbm: 12, lbt: 1 });
     assert.deepEqual(radioOf(parseLine(LINES[1])), { freqKhz: 803000, powerDbm: -9, lbt: 0 });
-    assert.equal(m.radioProto, 14);
+    assert.equal(m.radioProto, 15);
     assert.equal(m.devid, "0123ABCD89EF4567");
     assert.equal(m.role, "M");
     assert.equal(m.ticksPerMs, 16000);

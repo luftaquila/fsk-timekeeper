@@ -59,18 +59,18 @@ void reg_slot_table(const registry_t *r, uint32_t now_ms, beacon_slot_t out[MAX_
         if (e->used && reg_state(e, now_ms) != PU_STATE_LOST) {
             out[i].node_id = e->id;
             out[i].ack_seq = e->ack_seq;
-            out[i].boot_id = e->sensor_boot;
+            out[i].link_id = e->link_id;
         } else {
             out[i].node_id = 0;
             out[i].ack_seq = 0;
-            out[i].boot_id = 0;
+            out[i].link_id = 0;
         }
     }
 }
 
 void reg_session(registry_t *r)
 {
-    for (unsigned i = 0; i < MAX_NODES; i++) { r->e[i].have_boot = 0; }
+    memset(r, 0, sizeof(*r));
 }
 
 unsigned reg_count(const registry_t *r)

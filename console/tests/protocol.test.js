@@ -30,10 +30,10 @@ describe("parseLine", () => {
     }
   });
   it("parses I v5 and checks the contract", () => {
-    const i = parseLine("I FSK-WL 5 1.0.0 0123456789ABCDEF M 14 922900 7 250.00 16000 4 -9 0");
-    assert.deepEqual(i, { type: "I", product: "FSK-WL", usbProto: 5, fw: "1.0.0", devid: "0123456789ABCDEF", role: "M", radioProto: 14, freqKhz: 922900, sf: 7, bw: 250, ticksPerMs: 16000, resetReason: 4, powerDbm: -9, lbt: 0, v1: false });
+    const i = parseLine("I FSK-WL 6 1.0.0 0123456789ABCDEF M 15 922900 7 250.00 16000 4 -9 0");
+    assert.deepEqual(i, { type: "I", product: "FSK-WL", usbProto: 6, fw: "1.0.0", devid: "0123456789ABCDEF", role: "M", radioProto: 15, freqKhz: 922900, sf: 7, bw: 250, ticksPerMs: 16000, resetReason: 4, powerDbm: -9, lbt: 0, v1: false });
     assert.deepEqual(radioOf(i), { freqKhz: 922900, powerDbm: -9, lbt: 0 });
-    assert.equal(radioOf(parseLine("I FSK-WL 3 1.0.0 0123456789ABCDEF M 14 921.30 7 250.00 16000 4")), null);
+    assert.equal(radioOf(parseLine("I FSK-WL 3 1.0.0 0123456789ABCDEF M 15 921.30 7 250.00 16000 4")), null);
     assert.deepEqual(contractOf(i), { ok: true, reason: null });
     assert.equal(contractOf({ ...i, usbProto: 3 }).reason, CONTRACT_VERSION);
     assert.equal(contractOf({ ...i, role: "S" }).reason, CONTRACT_SENSOR_ROLE);
@@ -142,7 +142,7 @@ describe("parseEventLine", () => {
       ],
     );
     assert.equal(p.rows[0].raw, C_LINE);
-    assert.equal(p.rows[0].usb_proto, 5);
+    assert.equal(p.rows[0].usb_proto, 6);
     assert.equal(rowKey(p.rows[1]), "3735928559:0D2243B0:305419896:capture:43:123456789028345678");
     assert.equal(formatAck(p), `C 17 3735928559 ${C_LINE.slice(-8)}`);
   });
@@ -192,5 +192,15 @@ describe("radio settings", () => {
       assert.equal(isRadioConfig(bad), false, JSON.stringify(bad));
     }
     assert.equal(radioCommand({ freqKhz: 922900, powerDbm: -3, lbt: 1 }), "R 922900 -3 1");
+  });
+});
+
+describe("admission contract", () => {
+  it("parses only full sensor IDs and defined states, and rejects the prior live protocol", () => {
+    for (const state of ["WAIT", "SYNC", "READY", "REMOVED"]) {
+      assert.deepEqual(parseLine(`J 1234ABCD ${state}`), { type: "J", node: "1234ABCD", state });
+    }
+    for (const line of ["J 0 READY", "J 00000000 READY", "J 1234ABCD YES", "J 1234ABCD READY extra"]) assert.equal(parseLine(line), null);
+    assert.equal(contractOf(parseLine("I FSK-WL 5 v1.0.0 0123456789ABCDEF M 14 922900 7 250.00 16000 0 12 1")).ok, false);
   });
 });

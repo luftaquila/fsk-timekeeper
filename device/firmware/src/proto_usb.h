@@ -1,4 +1,4 @@
-/* Master <-> PC USB-CDC line protocol v5 (DESIGN §8). Newline-delimited ASCII,
+/* Master <-> PC USB-CDC line protocol v6 (DESIGN §8). Newline-delimited ASCII,
  * first token = line type. Formatting is dependency-free (newlib-nano has no
  * %f / %llu) so 64-bit ticks survive intact. Node token: "0" = master, sensors
  * = 8 uppercase hex digits. crc = 8 uppercase hex digits of CRC-32/IEEE over the
@@ -26,11 +26,13 @@
  *     P <pps_tick> <utc_s> <ppb> <pps_valid> <fix> <sats> <span_s> <seg> <n>
  *       One report per captured edge; no periodic or ?STATUS replay without a new edge.
  *       ppb/span_s may describe an unqualified display-only estimate; seg gates calibration.
+ *     J <node8hex> <WAIT|SYNC|READY|REMOVED> (admission status; ?STATUS refreshes it)
  *     A <cmd> OK
  *     K <64-hex|NONE>                   (reply to ?KEY over USB only)
  *     X <reason> | X <code> <count> | X fault <pc> <lr> <cause> <cfsr>
  *   PC -> master (K, R, ?KEY, ?ID and PING are also accepted by sensors):
  *     ?ID | ?STATUS | ?KEY | PING | K <64-hex> | T <32-hex> | CP
+ *     JOIN | DROP <node8hex> (master only; bounded admission / release registration)
  *     R <freq_khz> <power_dbm> <0|1>   (store/apply; I reports stored target settings)
  *       A R OK: stored and RX started; X cfgfail: storage failed;
  *       I then X cfgapply: stored, radio startup failed; X cfgpending: stored, bring-up pending
@@ -48,7 +50,7 @@
 extern "C" {
 #endif
 
-#define PU_USB_PROTO 5u
+#define PU_USB_PROTO 6u
 
 /* Reset reason byte (I line, D line, sensor diagnostics). 0 = power-on/brown-out. */
 #define RESET_PIN    0x01u
@@ -122,6 +124,8 @@ void pu_emit_clock(const char *token, uint64_t tick, uint64_t master_boot_id);
 void pu_emit_pps(uint64_t pps_tick, uint32_t utc_s, int32_t ppb, int pps_valid, uint8_t fix,
                  uint8_t sats, uint8_t span_s, uint32_t seg, uint32_t n);
 void pu_emit_ack(const char *cmd);
+enum { PU_JOIN_WAIT, PU_JOIN_SYNC, PU_JOIN_READY, PU_JOIN_REMOVED };
+void pu_emit_join(uint32_t node, int state);
 /* NULL means no valid stored key. Never sent over the radio. */
 void pu_emit_key(const uint8_t *key);
 void pu_emit_err(const char *reason);
@@ -150,6 +154,8 @@ typedef enum {
     PU_CMD_EVENT_ACK, /* C <hseq> <master_boot_id> <crc> (see pu_ack_*) */
     PU_CMD_CLOCK,     /* T <32-hex> (see pu_clock_token) */
     PU_CMD_CHECKPOINT,/* CP */
+    PU_CMD_JOIN,      /* JOIN: open a bounded admission window */
+    PU_CMD_DROP,      /* DROP <node8hex>: release a master registration */
     PU_CMD_BAD,       /* a full line that is not a command */
 } pu_cmd_t;
 
@@ -159,6 +165,7 @@ pu_cmd_t pu_feed(int c);
 /* Arguments of the last parsed command; valid right after pu_feed() returns it. */
 const uint8_t *pu_setkey(void);
 const radio_cfg_t *pu_radio_cfg(void);
+uint32_t pu_drop_node(void);
 uint32_t pu_ack_hseq(void);
 uint64_t pu_ack_boot(void);
 uint32_t pu_ack_crc(void);

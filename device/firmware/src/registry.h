@@ -1,6 +1,6 @@
 /* Master's sensor registry (DESIGN §2.3), pure logic: entry k = slot-table entry k
  * (the sensors deal the uplink slots among the live entries, mac_sensor.c). A sensor
- * is registered on its first authenticated uplink; a LOST entry may be reclaimed. */
+ * is registered after mutual challenge confirmation; a LOST entry may be reclaimed. */
 #ifndef REGISTRY_H
 #define REGISTRY_H
 
@@ -14,10 +14,13 @@ typedef struct {
     uint32_t id;           /* 32-bit sender id */
     int      have_boot;    /* sensor_boot / ack_seq describe the current sensor boot */
     uint64_t sensor_boot;  /* boot_id from the uplink header */
+    uint64_t link_id;
+    uint8_t data_key[32];
+    int have_ack;
     uint16_t ack_seq;      /* last ev_seq taken in order */
     uint32_t heard_ms;     /* last authenticated uplink */
     int      last_state;   /* PU_STATE_* last reported, -1 = none */
-    sec_replay_t rx;       /* replay window for this sensor */
+    sec_rx_counter_t rx;       /* replay window for this sensor */
     uint32_t sec_drop;     /* authenticated but refused by the replay window */
     /* diagnostics of the last uplink */
     float    rssi, snr;
@@ -44,8 +47,7 @@ reg_entry_t *reg_claim(registry_t *r, uint32_t id, uint32_t now_ms, int *why);
 /* Slot table for the next beacon: live entries only (LOST entries are free). */
 void reg_slot_table(const registry_t *r, uint32_t now_ms, beacon_slot_t out[MAX_NODES]);
 
-/* New master session: every sensor keeps its entry and re-syncs its ev_seq with
- * its next uplink. */
+/* New master epoch: erase connection keys, ACKs and receive counters. */
 void reg_session(registry_t *r);
 
 unsigned reg_count(const registry_t *r);

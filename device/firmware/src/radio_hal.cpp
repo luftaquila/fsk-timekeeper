@@ -5,6 +5,7 @@
 #include "board.h"
 #include "errlog.h"
 #include "fault.h"
+#include <string.h>
 
 extern "C" {
 #include "config.h"
@@ -45,6 +46,7 @@ void NrfHal::pinMode(uint32_t pin, uint32_t mode)
 
 void NrfHal::digitalWrite(uint32_t pin, uint32_t value)
 {
+    if (expired()) { _deadlineHit = true; return; }
     if (pin == RADIOLIB_NC) {
         return;
     }
@@ -53,6 +55,9 @@ void NrfHal::digitalWrite(uint32_t pin, uint32_t value)
 
 uint32_t NrfHal::digitalRead(uint32_t pin)
 {
+    /* End vendor BUSY loops without issuing another command. spiTransfer then
+     * returns failed status; track() holds the physical radio in reset. */
+    if (expired()) { _deadlineHit = true; return 0; }
     if (pin == RADIOLIB_NC) {
         return 0;
     }
@@ -67,6 +72,7 @@ void NrfHal::delay(RadioLibTime_t ms)
     uint32_t start = board_micros();
     uint32_t target = ms * 1000UL;
     while ((uint32_t)(board_micros() - start) < target) {
+        if (expired()) { _deadlineHit = true; break; }
     }
 }
 
@@ -74,6 +80,7 @@ void NrfHal::delayMicroseconds(RadioLibTime_t us)
 {
     uint32_t start = board_micros();
     while ((uint32_t)(board_micros() - start) < (uint32_t)us) {
+        if (expired()) { _deadlineHit = true; break; }
     }
 }
 
@@ -99,8 +106,9 @@ long NrfHal::pulseIn(uint32_t, uint32_t, RadioLibTime_t)
  * timeout will never end. PC = the waiting RadioLib code. */
 void NrfHal::yield(void)
 {
+    if (expired()) { _deadlineHit = true; return; }
     if (hang_guard_poll(&_hang, gpio_read(_busy) != 0u, board_millis(), RADIO_HANG_MS)) {
-        fault_hang((uint32_t)__builtin_return_address(0), FAULT_CAUSE_RADIO);
+        fault_hang((uintptr_t)__builtin_return_address(0), FAULT_CAUSE_RADIO);
     }
 }
 
@@ -108,6 +116,10 @@ void NrfHal::restartHangCheck(void)
 {
     hang_guard_reset(&_hang);
 }
+
+void NrfHal::limit(uint32_t end_us) { _deadline = end_us; _limited = true; _deadlineHit = false; }
+void NrfHal::unlimit() { _limited = false; _deadlineHit = false; }
+bool NrfHal::expired() const { return _limited && (int32_t)(board_micros() - _deadline) >= 0; }
 
 void NrfHal::spiBegin(void)
 {
@@ -134,24 +146,34 @@ void NrfHal::spiBeginTransaction(void) {}
 
 void NrfHal::spiTransfer(uint8_t* out, size_t len, uint8_t* in)
 {
+    if (expired()) {
+        _deadlineHit = _spiTimeout = true;
+        if (in) { memset(in, 0xff, len); }
+        return;
+    }
     hang_guard_reset(&_hang); /* the radio is taking commands */
     if (len == 0) {
         return;
     }
-    NRF_SPIM0->TXD.PTR = (uint32_t)out;
+    if (NRF_SPIM0->ENABLE == SPIM_ENABLE_ENABLE_Disabled) { spiBegin(); }
+    NRF_SPIM0->TXD.PTR = (uintptr_t)out;
     NRF_SPIM0->TXD.MAXCNT = len;
-    NRF_SPIM0->RXD.PTR = (uint32_t)in;
+    NRF_SPIM0->RXD.PTR = (uintptr_t)in;
     NRF_SPIM0->RXD.MAXCNT = len;
     NRF_SPIM0->EVENTS_END = 0;
     NRF_SPIM0->TASKS_START = 1;
     uint32_t t0 = board_micros();
     while (NRF_SPIM0->EVENTS_END == 0) {
-        if ((uint32_t)(board_micros() - t0) >= SPI_TRANSFER_MAX_US) {
+        if (expired() || (uint32_t)(board_micros() - t0) >= SPI_TRANSFER_MAX_US) {
             /* RadioLib sees garbage status and fails the command; the radio
              * layer counts this as a no-response. */
             NRF_SPIM0->TASKS_STOP = 1;
+            /* Revoke EasyDMA before its caller releases the stack buffers. */
+            NRF_SPIM0->ENABLE = SPIM_ENABLE_ENABLE_Disabled;
             el_note(EL_HW_TIMEOUT);
             _spiTimeout = true;
+            _deadlineHit = expired();
+            if (in) { memset(in, 0xff, len); }
             return;
         }
     }

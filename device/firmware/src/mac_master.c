@@ -10,6 +10,7 @@
 #include "radio.h"
 #include "meas.h"
 #include "secure.h"
+#include "mac_radio.h"
 
 #define TPM ((uint64_t)TICKS_PER_MS)
 #define BEACON_PERIOD_TICKS ((uint64_t)BEACON_PERIOD_MS * TPM)
@@ -22,6 +23,7 @@ void mac_master_init(mac_master_t *m, mq_t *q)
     m->next_beacon = capture_now64();
     m->last_report_ms = board_millis();
     retry_init(&m->retry, board_millis(), RADIO_BOOT_RETRY_MS);
+    mac_master_join_open(m);
     radio_start_rx();
 }
 
@@ -33,8 +35,12 @@ void mac_master_checkpoint(mac_master_t *m)
 
 void mac_master_session(mac_master_t *m)
 {
+    if (m->tx_state != MASTER_TX_IDLE) { radio_tx_abort(); }
     reg_session(&m->reg);
     m->m_tx_valid = 0;
+    m->cycle_ready = 0;
+    m->tx_state = MASTER_TX_IDLE;
+    master_admission_session(&m->admission, board_millis());
 }
 
 static void emit_sensor(const reg_entry_t *e, uint32_t now_ms)
@@ -55,7 +61,9 @@ static void emit_sensor(const reg_entry_t *e, uint32_t now_ms)
     d.sec_drop = e->sec_drop;
     d.provisioned = 1; /* it authenticated */
     d.health = e->diag.health;
-    d.sync_age_ms = e->diag.sync_age_ms;
+    uint32_t age = (uint32_t)e->diag.sync_age_ms + now_ms - e->heard_ms;
+    d.sync_age_ms = age > UINT16_MAX ? UINT16_MAX : (uint16_t)age;
+    if (age > SYNC_TTL_MS) { d.health &= (uint8_t)~HEALTH_SYNC_VALID; }
     d.capture_overflow = e->diag.capture_overflow;
     d.fifo_drop = e->diag.fifo_drop;
     d.err_flags = e->diag.err_flags;
@@ -79,6 +87,41 @@ void mac_master_report(mac_master_t *m, int changed_only)
         if (changed_only && st == e->last_state) { continue; }
         e->last_state = st;
         emit_sensor(e, now);
+        pu_emit_join(e->id, st == PU_STATE_OK && (uint32_t)e->diag.sync_age_ms + now - e->heard_ms <= SYNC_TTL_MS && (e->diag.health & HEALTH_EVENT_REQUIRED) == HEALTH_EVENT_REQUIRED ? PU_JOIN_READY : PU_JOIN_SYNC);
+    }
+    if (!changed_only) {
+        for (unsigned i = 0; i < MAX_NODES; i++) {
+            if (m->admission.pending[i].phase != ADMISSION_EMPTY) { pu_emit_join(m->admission.pending[i].id, PU_JOIN_WAIT); }
+        }
+    }
+}
+
+void mac_master_join_open(mac_master_t *m)
+{
+    master_admission_open(&m->admission, board_millis());
+}
+
+int mac_master_forget(mac_master_t *m, uint32_t id)
+{
+    int found = master_admission_forget(&m->admission, &m->reg, id, board_millis());
+    if (found) { pu_emit_join(id, PU_JOIN_REMOVED); }
+    return found;
+}
+
+static void on_admission(mac_master_t *m, const uint8_t *buf, int n)
+{
+    uint32_t id = 0;
+    switch (master_admission_receive(&m->admission, &m->reg, buf, n, board_millis(), &id)) {
+    case ADMISSION_WAIT: pu_emit_join(id, PU_JOIN_WAIT); break;
+    case ADMISSION_ACCEPTED: {
+        const reg_entry_t *e = reg_lookup(&m->reg, id);
+        if (e) { emit_sensor(e, board_millis()); }
+        pu_emit_join(id, PU_JOIN_SYNC);
+        break;
+    }
+    case ADMISSION_FULL: el_note(EL_REGISTRY_FULL); break;
+    case ADMISSION_AUTH_FAILED: m->auth_drop++; break;
+    case ADMISSION_IGNORED: break;
     }
 }
 
@@ -90,33 +133,19 @@ static void on_uplink(mac_master_t *m, const uint8_t *buf, int n, float rssi, fl
         if (sec_authentic_any_version(buf, n)) { m->ver_drop++; }
         return;
     }
-    if (SEC_VT_TYPE(buf[0]) != PKT_TYPE_UPLINK || n < WIRE_UPLINK) { return; }
-    sec_meta_t meta;
-    uplink_pl_t u;
-    if (sec_unseal(buf, n, &meta, &u, sizeof(u)) != 0) { m->auth_drop++; return; }
-
-    /* Reject other master sessions before allocating entries or changing replay state. */
-    if (u.master_boot_id != sec_boot_id()) { m->auth_drop++; return; }
-
+    if (SEC_VT_TYPE(buf[0]) == PKT_TYPE_JOIN || SEC_VT_TYPE(buf[0]) == PKT_TYPE_CONFIRM) {
+        on_admission(m, buf, n); return;
+    }
+    if (SEC_VT_TYPE(buf[0]) != PKT_TYPE_UPLINK || n != WIRE_UPLINK) { return; }
+    uint32_t id; memcpy(&id, buf + 12, 4);
+    reg_entry_t *e = reg_lookup(&m->reg, id);
+    if (!e || !e->have_boot || !e->link_id) { m->auth_drop++; return; }
+    sec_meta_t meta; uplink_pl_t u;
+    if (sec_unseal_key(e->data_key, buf, n, &meta, &u, sizeof(u)) ||
+        meta.boot_id != e->sensor_boot || u.master_boot_id != sec_boot_id()) { m->auth_drop++; return; }
+    if (!sec_accept_counter(&e->rx.max_ctr, meta.ctr)) { e->sec_drop++; return; }
     uint32_t now_ms = board_millis();
-    reg_entry_t *e = reg_lookup(&m->reg, meta.node_id);
-    if (!e) {
-        int why = 0;
-        e = reg_claim(&m->reg, meta.node_id, now_ms, &why);
-        if (!e) {
-            el_note(EL_REGISTRY_FULL);
-            return;
-        }
-    }
-    if (!sec_replay(&e->rx, meta.boot_id, meta.ctr)) { e->sec_drop++; return; }
-
-    if (!e->have_boot || e->sensor_boot != meta.boot_id) {
-        /* First uplink of this sensor boot (or of this master session): its
-         * oldest unacked packet is what arrives first. */
-        e->have_boot = 1;
-        e->sensor_boot = meta.boot_id;
-        e->ack_seq = (uint16_t)(u.ev_seq - 1u);
-    }
+    if (!e->have_ack) { e->ack_seq = (uint16_t)(u.ev_seq - 1u); e->have_ack = 1; }
     e->heard_ms = now_ms;
     e->rssi = rssi;
     e->snr = snr;
@@ -138,6 +167,7 @@ static void on_uplink(mac_master_t *m, const uint8_t *buf, int n, float rssi, fl
     }
     e->last_state = reg_state(e, now_ms);
     emit_sensor(e, now_ms);
+    pu_emit_join(e->id, (e->diag.health & HEALTH_EVENT_REQUIRED) == HEALTH_EVENT_REQUIRED ? PU_JOIN_READY : PU_JOIN_SYNC);
 }
 
 static void receive_one(mac_master_t *m)
@@ -148,57 +178,83 @@ static void receive_one(mac_master_t *m)
     if (n > 0) { on_uplink(m, buf, n, rssi, snr); }
 }
 
-/* Finish a reception, optionally listen to RSSI, then check CAD. Retry a busy
- * channel until BEACON_CHANNEL_RETRY_MS has elapsed. This cutoff is checked
- * after drain/listen, so total duration can exceed it. At the cutoff omit CAD
- * and allow TX unless RSSI is loud; a CAD error always rejects this beacon.
- * Sensor sync uses the actual TxDone, including any channel-access delay. */
-static int beacon_channel_ready(mac_master_t *m)
+static int beacon_channel_ready(mac_master_t *m, uint64_t deadline)
 {
-    uint32_t t0 = board_millis();
-    for (;;) {
-        if (radio_rx_settle(RX_HEADER_WAIT_MS, RX_DRAIN_MAX_MS) == RADIO_RX_PACKET) { receive_one(m); }
-        int loud = radio_lbt_enabled() && radio_lbt_listen() != RADIO_LBT_QUIET;
-        if ((uint32_t)(board_millis() - t0) >= BEACON_CHANNEL_RETRY_MS) { return !loud; }
-        if (loud) { continue; }
+    /* Leave enough time to perform both enabled checks; never bypass CAD. */
+    uint64_t checks = (CAD_TIMEOUT_MS + (radio_lbt_enabled() ? LBT_LISTEN_MS : 0u)) * TPM;
+    mac_radio_limit(deadline);
+    while (capture_now64() + checks < deadline) {
+        uint32_t remain = (uint32_t)((deadline - capture_now64() - checks) / TPM);
+        int rx = radio_rx_settle(RX_HEADER_WAIT_MS, remain);
+        if (rx == RADIO_RX_BUSY) { return 0; }
+        if (rx == RADIO_RX_PACKET) { receive_one(m); }
+        if (radio_needs_reset() || capture_now64() + checks >= deadline) { return 0; }
+        if (radio_lbt_enabled() && radio_lbt_listen() != RADIO_LBT_QUIET) { continue; }
         int cad = radio_cad();
         if (cad == RADIO_CAD_ERROR) { return 0; }
-        if (cad == RADIO_CAD_CLEAR) { return 1; }
+        if (cad == RADIO_CAD_CLEAR) { return capture_now64() < deadline; }
     }
+    return 0;
 }
 
 static void send_beacon(mac_master_t *m)
 {
-    if (!beacon_channel_ready(m)) {
-        m->m_tx_valid = 0;
-        m->seq++;
-        radio_start_rx();
-        return;
-    }
-    beacon_pl_t b;
-    b.seq = m->seq;
-    b.flags = m->m_tx_valid ? BEACON_TX_PREV_VALID : 0u;
-    b.m_tx_prev = m->m_tx_last;
-    b.cp_req = m->cp_left ? m->cp_id : 0u;
-    if (m->cp_left) { m->cp_left--; }
-    reg_slot_table(&m->reg, board_millis(), b.slot);
-
-    uint8_t tx[WIRE_BEACON];
-    int wlen = sec_seal(tx, sizeof(tx), PKT_TYPE_BEACON, NODE_MASTER, &b, sizeof(b));
-    m->m_tx_valid = 0;
-    if (wlen > 0) {
-        uint64_t cap;
-        (void)capture_dio1_get(&cap); /* drop an older DIO1 edge (CAD done, RxDone) */
-        if (radio_transmit(tx, wlen) == 0 && capture_dio1_get(&cap)) {
-            m->m_tx_last = cap;
-            m->m_tx_valid = 1;
-        } else {
-            el_note(EL_BEACON_FAIL);
+    uint64_t deadline = m->next_beacon + BEACON_ACCESS_MS * TPM;
+    admission_beacon_t b = {0};
+    b.base.seq = m->seq++;
+    b.base.flags = m->m_tx_valid ? BEACON_TX_PREV_VALID : 0u;
+    b.base.m_tx_prev = m->m_tx_last;
+    b.base.cp_req = m->cp_left ? m->cp_id : 0u;
+    m->m_tx_valid = m->cycle_ready = 0;
+    master_admission_schedule(&m->admission, &m->reg, board_millis(), &b, m->schedule);
+    if (!beacon_channel_ready(m, deadline)) { radio_unlimit(); return; }
+    uint8_t tx[WIRE_ADMISSION];
+    int plen = (b.base.flags & BEACON_ADMISSION) ? (int)sizeof(b) : (int)sizeof(b.base);
+    int n = sec_seal(tx, sizeof(tx), PKT_TYPE_BEACON, NODE_MASTER, &b, plen);
+    uint64_t cap;
+    (void)capture_dio1_get(&cap);
+    if (n > 0 && capture_now64() <= deadline) {
+        uint64_t finish = deadline + (TX_SETUP_MS + SLOT_GUARD_MS) * TPM +
+                          (uint64_t)LORA_TOA_US((unsigned)n) * (TPM / 1000u);
+        if (radio_tx_start(tx, n, mac_deadline_us(finish)) == 0) {
+            m->tx_state = MASTER_TX_BEACON;
+            m->beacon_ctr = sec_wire_counter(tx);
+            if (m->cp_left) { m->cp_left--; }
+            return;
         }
-        board_led_toggle();
     }
-    radio_start_rx();
-    m->seq++;
+    if (!radio_needs_reset()) { radio_start_rx(); }
+    radio_unlimit();
+}
+
+static void send_offer(mac_master_t *m)
+{
+    if (!m->cycle_ready) { return; }
+    for (unsigned j = 0; j < SLOT_COUNT; j++) {
+        if (m->slot_done & (1u << j) || SLOT_ROLE(m->schedule[j]) != SLOT_ROLE_OFFER) { continue; }
+        unsigned i = SLOT_ENTRY(m->schedule[j]);
+        uint64_t start = m->cycle_tx + (SLOT_OFFSET_MS + j * SLOT_LEN_MS) * TPM;
+        uint64_t late = start + SLOT_LATE_MS * TPM;
+        uint64_t listen = radio_lbt_enabled() ? LBT_LISTEN_MS * TPM : 0;
+        if (capture_now64() + listen < start) { return; }
+        m->slot_done |= (uint8_t)(1u << j);
+        offer_pl_t offer;
+        if (!master_admission_offer(&m->admission, i, m->beacon_ctr, &offer) || capture_now64() > late) { continue; }
+        mac_radio_limit(late);
+        if ((listen && radio_lbt_listen() != RADIO_LBT_QUIET) || radio_rx_settle(0, 0) != RADIO_RX_IDLE ||
+            radio_cad() != RADIO_CAD_CLEAR) { radio_unlimit(); continue; }
+        uint8_t tx[WIRE_OFFER];
+        int n = sec_seal(tx, sizeof(tx), PKT_TYPE_OFFER, 0, &offer, sizeof(offer));
+        uint64_t unused; (void)capture_dio1_get(&unused);
+        uint64_t finish = start + (SLOT_LEN_MS - SLOT_GUARD_MS - LBT_LISTEN_MS) * TPM;
+        if (n > 0 && capture_now64() <= late && radio_tx_start(tx, n, mac_deadline_us(finish)) == 0) {
+            master_admission_offer_started(&m->admission, i,
+                j + 1u < SLOT_COUNT && SLOT_ROLE(m->schedule[j+1]) == SLOT_ROLE_CONFIRM);
+            m->tx_state = MASTER_TX_OFFER; return;
+        }
+        if (!radio_needs_reset()) { radio_start_rx(); }
+        radio_unlimit();
+    }
 }
 
 static void radio_recovery(mac_master_t *m)
@@ -214,18 +270,39 @@ static void radio_recovery(mac_master_t *m)
 
 int mac_master_step(mac_master_t *m)
 {
+    if (m->tx_state != MASTER_TX_IDLE) {
+        int done = radio_tx_poll();
+        if (!done) { return 0; }
+        master_tx_state_t completed = m->tx_state;
+        m->tx_state = MASTER_TX_IDLE;
+        uint64_t cap;
+        int have = capture_dio1_get(&cap);
+        if (completed == MASTER_TX_BEACON && done > 0 && have) {
+            m->m_tx_last = m->cycle_tx = cap;
+            m->m_tx_valid = m->cycle_ready = 1;
+            m->slot_done = 0;
+            m->retry.delay_ms = RADIO_BOOT_RETRY_MS;
+            board_led_toggle();
+        }
+        if (completed == MASTER_TX_BEACON && done < 0) { el_note(EL_BEACON_FAIL); }
+    }
+    if (!radio_needs_reset()) {
+        radio_limit(board_micros() + 7000u);
+        receive_one(m);
+        radio_unlimit();
+    }
     int sent = 0;
-    uint64_t now = capture_now64();
-    if (now >= m->next_beacon) {
+    if (capture_now64() >= m->next_beacon) {
         if (!radio_needs_reset()) { send_beacon(m); }
-        else { m->m_tx_valid = 0; m->seq++; }
-        meas_service(board_millis());
+        else { m->m_tx_valid = m->cycle_ready = 0; m->seq++; }
         m->next_beacon += BEACON_PERIOD_TICKS;
         if (m->next_beacon <= capture_now64()) { m->next_beacon = capture_now64() + BEACON_PERIOD_TICKS; }
         sent = 1;
-        if (m->m_tx_valid) { m->retry.delay_ms = RADIO_BOOT_RETRY_MS; } /* the radio works again */
     }
-    if (!radio_needs_reset()) { receive_one(m); }
-    radio_recovery(m);
+    if (m->tx_state == MASTER_TX_IDLE && !radio_needs_reset()) { send_offer(m); }
+    if (m->tx_state == MASTER_TX_IDLE && m->cycle_ready && capture_now64() >= m->cycle_tx + (SLOT_OFFSET_MS + SLOT_COUNT * SLOT_LEN_MS) * TPM) {
+        meas_service(board_millis()); m->cycle_ready = 0;
+    }
+    if (m->tx_state == MASTER_TX_IDLE && !m->cycle_ready) { radio_recovery(m); }
     return sent;
 }

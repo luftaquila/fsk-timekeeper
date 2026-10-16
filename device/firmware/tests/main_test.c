@@ -9,7 +9,8 @@
 static int xtal = 1, boot_ready = 1, ready = 1, radio_fault;
 static uint32_t stops, now;
 static uint64_t boot = UINT64_C(9007199254740993);
-static unsigned sessions, inits, checkpoints, capture_inits;
+static unsigned sessions, inits, checkpoints, capture_inits, joins, drops;
+static int exhausted;
 static char output[16000];
 NRF_GPIO_Type test_gpio[2];
 uint32_t board_millis(void) { return now; }
@@ -39,9 +40,10 @@ int radio_start_rx(void) {
     return 0;
 }
 int radio_cfg_write(const radio_cfg_t *c) { (void)c; cfg_writes++; return cfg_fail ? -1 : 0; }
-void sec_init(void) { boot++; inits++; boot_ready = ready = 0; }
+void sec_init(void) { exhausted = 0; boot++; inits++; boot_ready = ready = 0; }
 uint64_t sec_boot_id(void) { return boot; }
 int sec_boot_ready(void) { return boot_ready; }
+int sec_counter_exhausted(void) { return exhausted; }
 int sec_ready(void) { return ready; }
 int sec_provisioned(void) { return 1; }
 void sec_reload(void) {}
@@ -57,6 +59,8 @@ int keystore_write(const uint8_t key[KEYSTORE_KEY_LEN]) {
     memcpy(stored_key, key, sizeof stored_key); has_key = 1;
     return 0;
 }
+void mac_master_join_open(mac_master_t *m) { (void)m; joins++; }
+int mac_master_forget(mac_master_t *m, uint32_t id) { (void)m; drops++; return id == 0x1234ABCDu; }
 void mac_master_session(mac_master_t *m) { (void)m; sessions++; }
 void mac_master_checkpoint(mac_master_t *m) { (void)m; checkpoints++; }
 void mac_master_report(mac_master_t *m, int changed) { (void)m; (void)changed; }
@@ -100,6 +104,24 @@ static pu_cmd_t feed(const char *line)
 }
 
 /* R stores the settings, reconfigures the running radio and answers I, then A R. */
+static void admission_commands(void)
+{
+    boot_ready = ready = xtal = 1; radio_fault = init_pending = 0;
+    assert(feed("JOIN\n") == PU_CMD_JOIN); command(PU_CMD_JOIN);
+    assert(joins == 1 && strstr(output, "A JOIN OK"));
+    assert(feed("DROP 1234ABCD\n") == PU_CMD_DROP && pu_drop_node() == 0x1234ABCDu);
+    command(PU_CMD_DROP); assert(drops == 1 && strstr(output, "A DROP OK"));
+    assert(feed("DROP 87654321\n") == PU_CMD_DROP);
+    command(PU_CMD_DROP); assert(strstr(output, "X notfound"));
+    assert(feed("DROP 00000000\n") == PU_CMD_BAD && feed("DROP 1234\n") == PU_CMD_BAD && feed("JOIN extra\n") == PU_CMD_BAD);
+    radio_fault = 1; command(PU_CMD_JOIN); assert(joins == 1 && strstr(output, "X clock")); radio_fault = 0;
+    mq_init(&g_queue); exhausted = 1; uint64_t old = boot;
+    unsigned count = sessions;
+    assert(!master_clock_check() && sessions == count + 1 && boot != old && mq_depth(&g_queue) == 1);
+    boot_ready = ready = 1;
+    puts("PASS main_admission_and_counter_rollover");
+}
+
 static void radio_settings(void)
 {
     radio_fault = 0;
@@ -107,7 +129,7 @@ static void radio_settings(void)
     command(PU_CMD_RADIO);
     assert(cfg_writes == 1 && rx_starts == 1);
     assert(radio_cfg.freq_khz == 922100u && radio_cfg.power_dbm == -3 && radio_cfg.lbt == 0u);
-    assert(strstr(output, " M 14 922100 7 250.00 16000 0 -3 0\n") && strstr(output, "A R OK\n"));
+    assert(strstr(output, " M 15 922100 7 250.00 16000 0 -3 0\n") && strstr(output, "A R OK\n"));
     cfg_fail = 1;
     assert(feed("R 930000 22 1\n") == PU_CMD_RADIO);
     command(PU_CMD_RADIO);
@@ -280,5 +302,6 @@ int main(void)
     assert(!strstr(output, "X fault "));
     puts("PASS main_deferred_boot_fault");
     queue_pressure_report();
+    admission_commands();
     return 0;
 }

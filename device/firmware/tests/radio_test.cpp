@@ -14,7 +14,7 @@ NRF_GPIO_Type test_gpio[2];
 /* ---- clock --------------------------------------------------------------- */
 static uint64_t now_us;
 
-extern "C" uint32_t board_micros(void) { return (uint32_t)now_us; }
+extern "C" uint32_t board_micros(void) { return (uint32_t)++now_us; }
 /* Every poll moves time on, so polling loops end as they do on hardware. */
 extern "C" uint32_t board_millis(void) { now_us += 1u; return (uint32_t)(now_us / 1000u); }
 extern "C" void board_delay_ms(uint32_t ms) { now_us += (uint64_t)ms * 1000u; }
@@ -128,12 +128,13 @@ void NrfHal::term(void) {}
 void NrfHal::pinMode(uint32_t, uint32_t) {}
 void NrfHal::digitalWrite(uint32_t pin, uint32_t value)
 {
+    if (expired()) { _deadlineHit = true; return; }
     if (pin == PIN_LORA_NRST) {
         if (nrst_level == 0u && value != 0u) { chip_reset(); } /* released from reset */
         nrst_level = value;
     }
 }
-uint32_t NrfHal::digitalRead(uint32_t pin) { return pin == RADIOLIB_NC ? 0u : gpio_read(pin); }
+uint32_t NrfHal::digitalRead(uint32_t pin) { if (expired()) { _deadlineHit = true; return 0; } return pin == RADIOLIB_NC ? 0u : gpio_read(pin); }
 void NrfHal::attachInterrupt(uint32_t, void (*)(void), uint32_t) {}
 void NrfHal::detachInterrupt(uint32_t) {}
 void NrfHal::delay(RadioLibTime_t ms) { now_us += (uint64_t)ms * 1000u; }
@@ -146,6 +147,7 @@ void NrfHal::spiBegin(void) {}
 void NrfHal::spiBeginTransaction(void) {}
 void NrfHal::spiTransfer(uint8_t *out, size_t len, uint8_t *in)
 {
+    if (expired()) { _deadlineHit = _spiTimeout = true; memset(in, 0xff, len); return; }
     chip_transfer(out, in, len);
     now_us += len * 8u; /* 1 Mbps */
 }
@@ -154,6 +156,9 @@ void NrfHal::spiEnd(void) {}
 static bool spim_timed_out;
 bool NrfHal::takeSpiTimeout(void) { bool value = spim_timed_out; spim_timed_out = false; return value; }
 void NrfHal::restartHangCheck(void) {}
+void NrfHal::limit(uint32_t end_us) { _deadline = end_us; _limited = true; _deadlineHit = false; }
+void NrfHal::unlimit(void) { _limited = _deadlineHit = false; }
+bool NrfHal::expired() const { return _limited && (int32_t)(board_micros() - _deadline) >= 0; }
 
 /* ---- scenarios ------------------------------------------------------------ */
 static void power_on(void)
@@ -167,7 +172,37 @@ int main(int argc, char **argv)
 {
     assert(argc == 2);
     const char *scenario = argv[1];
-    if (!strcmp(scenario, "probe_frame")) {
+    if (!strcmp(scenario, "tx_missing_irq")) {
+        power_on(); assert(radio_begin() == 0 && radio_start_rx() == 0);
+        uint8_t packet[94] = {0}; uint32_t end = board_micros() + 110000;
+        assert(radio_tx_start(packet, sizeof(packet), end) == 0);
+        assert(radio_tx_poll() == 0);
+        now_us = end; auto commands = chip.frames.size();
+        assert(radio_tx_poll() < 0 && radio_needs_reset());
+        assert(chip.frames.size() == commands); /* reset uses GPIO, no stuck SPI */
+        assert(test_gpio[PIN_LORA_NRST / 32].OUTCLR & (1u << (PIN_LORA_NRST % 32)));
+        assert(radio_tx_start(packet, sizeof(packet), end + 200000) < 0);
+        assert(radio_begin() == 0 && radio_start_rx() == 0 && !radio_needs_reset());
+    } else if (!strcmp(scenario, "tx_busy_deadline")) {
+        power_on(); assert(radio_begin() == 0 && radio_start_rx() == 0);
+        chip.busy = true; set_line(PIN_LORA_BUSY, true);
+        uint8_t packet[94] = {0}; uint32_t start = board_micros();
+        assert(radio_tx_start(packet, sizeof(packet), start + 110000) < 0);
+        assert((uint32_t)(board_micros() - start) < 7200 && radio_needs_reset());
+    } else if (!strcmp(scenario, "rx_access_deadline")) {
+        power_on(); assert(radio_begin() == 0 && radio_start_rx() == 0);
+        chip.irq_flags = RADIOLIB_SX126X_IRQ_HEADER_VALID;
+        uint32_t start = board_micros(); radio_limit(start + 30000);
+        assert(radio_rx_settle(12, 10000) == RADIO_RX_BUSY);
+        assert(board_micros() - start < 31200 && chip.mode == RADIOLIB_SX126X_STATUS_MODE_RX);
+        radio_unlimit(); assert(!radio_needs_reset());
+    } else if (!strcmp(scenario, "cad_access_deadline")) {
+        power_on(); assert(radio_begin() == 0 && radio_start_rx() == 0);
+        uint32_t start = board_micros(); radio_limit(start + 4000);
+        assert(radio_cad() == RADIO_CAD_ERROR);
+        assert(board_micros() - start < 4200 && radio_needs_reset());
+        radio_unlimit();
+    } else if (!strcmp(scenario, "probe_frame")) {
         /* first boot: RadioLib's Module still has its default framing */
         power_on();
         assert(radio_answers());
@@ -331,7 +366,8 @@ int main(int argc, char **argv)
         set_line(PIN_LORA_DIO1, false);
         assert(radio_transmit(tx, sizeof tx) != 0);
         assert(active_faults & (1u << EL_TX_FAIL));
-        assert(radio_start_rx() == 0);
+        assert(radio_needs_reset());
+        assert(radio_begin() == 0 && radio_start_rx() == 0);
         assert(active_faults & (1u << EL_TX_FAIL)); /* RX is not proof of TX */
         set_line(PIN_LORA_DIO1, true);
         assert(radio_transmit(tx, sizeof tx) == 0);
