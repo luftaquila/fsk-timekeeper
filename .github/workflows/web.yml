@@ -1,4 +1,4 @@
-# Deploy the exact hosted-console build published with a release, including retries.
+# Deploy a published release, or build the selected ref for a manual console update.
 name: Build web application
 
 on:
@@ -10,8 +10,8 @@ on:
   workflow_dispatch:
     inputs:
       release-tag:
-        description: Published release tag to deploy
-        required: true
+        description: Published release tag (leave empty to build the selected ref)
+        required: false
         type: string
 
 permissions:
@@ -30,7 +30,27 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-24.04
     steps:
+      - name: Checkout console
+        if: inputs.release-tag == ''
+        uses: actions/checkout@v6
+      - name: Setup Node
+        if: inputs.release-tag == ''
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: console/package-lock.json
+      - name: Build and test console
+        if: inputs.release-tag == ''
+        working-directory: console
+        run: |
+          npm ci
+          npm test
+          npm run build
+          printf '%s\n' "$GITHUB_SHA" > dist/build-sha.txt
+          mv dist ../site
       - name: Download and verify the published release
+        if: inputs.release-tag != ''
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
