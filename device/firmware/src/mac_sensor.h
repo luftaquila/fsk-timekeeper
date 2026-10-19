@@ -46,6 +46,13 @@ typedef struct {
     /* current beacon cycle */
     uint64_t cycle_rx;       /* its RxDone, local ticks */
     uint8_t  cycle_seq;
+    uint8_t  cycle_wire_len;
+    uint32_t cycle_ctr;
+    struct {
+        uint64_t l_rx, l_tx;
+        uint32_t link;
+        uint8_t seq, entry, pending, valid;
+    } roundtrip; /* at most one DATA TxDone per frame; consumed by the next beacon */
     uint8_t  tx_slots;       /* bit j: slot j is ours and still ahead; 0 once a packet went out */
     int      entry;          /* own entry in the slot table, -1 = not registered */
     uint8_t  cp_pending, cp_answered;

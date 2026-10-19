@@ -91,7 +91,7 @@ async function mapSprint(device, settings) {
 describe("pipeline with the fake master", () => {
   it("tracks initial synchronization by sensor and master boot across reconnects", async () => {
     const { device } = await boot();
-    const identity = "I FSK-WL 7 1.0.0 0123456789ABCDEF M 16 922900 7 250.00 16000 0 12 1";
+    const identity = "I FSK-WL 7 1.0.0 0123456789ABCDEF M 17 922900 7 250.00 16000 0 12 1";
     const report = ({ skew = 0, valid = 1, sensorBoot = 8002, masterBoot = 8001 } = {}) =>
       `D 0250FEB2 OK 0 0 0 0 -60.00 8.00 0 300 4000 0 1 1 ${skew} XTAL 100 0 0 0 0 0 0 0 0 ${sensorBoot} ${masterBoot} 0 0 0 0 ${valid}`;
     const health = () => timingHealth(device.telemetry["0250FEB2"]);
@@ -127,7 +127,7 @@ describe("pipeline with the fake master", () => {
 
   it("invalidates retained reports across USB sessions until new telemetry arrives", async () => {
     const { device } = await boot();
-    const identity = "I FSK-WL 7 1.0.0 0123456789ABCDEF M 16 922900 7 250.00 16000 0 12 1";
+    const identity = "I FSK-WL 7 1.0.0 0123456789ABCDEF M 17 922900 7 250.00 16000 0 12 1";
     const report = "D 0250FEB2 OK 0 0 0 0 -60.00 8.00 0 300 4000 0 1 1 1 XTAL 100 0 0 0 0 0 0 0 0 8002 8001 0 0 0 0 1";
     await device.handleLine(identity);
     await device.handleLine(report);
@@ -142,7 +142,7 @@ describe("pipeline with the fake master", () => {
   });
   it("keeps removed sensors hidden through cached LOST reports and restores them on reception", async () => {
     const { device, settings } = await boot();
-    await device.handleLine("I FSK-WL 7 1.0.0 0123456789ABCDEF M 16 922900 7 250.00 16000 0 12 1");
+    await device.handleLine("I FSK-WL 7 1.0.0 0123456789ABCDEF M 17 922900 7 250.00 16000 0 12 1");
     settings.setMapping("0250FEB2", { role: "start", note: "old gate" });
     settings.removeSensor("0250FEB2");
     const report = (state) => `D 0250FEB2 ${state} 0 0 0 0 -60.00 8.00 0 300 4000 0 1 1 1 XTAL 100 0 0 0 0 0 0 0 0 8002 8001 0 0 0 0 1`;
@@ -185,7 +185,7 @@ describe("pipeline with the fake master", () => {
 
   it("expires PPS by new edge arrival, ignoring zero/replayed ticks across reconnects", async () => {
     const { device } = await boot();
-    const identity = "I FSK-WL 7 1.0.0 0123456789ABCDEF M 16 922900 7 250.00 16000 0 12 1";
+    const identity = "I FSK-WL 7 1.0.0 0123456789ABCDEF M 17 922900 7 250.00 16000 0 12 1";
     await device.handleLine(identity);
     await device.handleLine("T 00000000000000000000000000000000 0 1234");
     let now = Date.now();
@@ -229,7 +229,7 @@ describe("pipeline with the fake master", () => {
 
   it("keeps no-fix drift reports out of calibration even when a segment is supplied", async () => {
     const { device } = await boot();
-    await device.handleLine("I FSK-WL 7 1.0.0 0123456789ABCDEF M 16 922900 7 250.00 16000 0 12 1");
+    await device.handleLine("I FSK-WL 7 1.0.0 0123456789ABCDEF M 17 922900 7 250.00 16000 0 12 1");
     await device.handleLine("T 00000000000000000000000000000000 0 1234");
     for (const valid of [0, 1]) {
       await device.handleLine(`P ${16000800 * (valid + 1)} 0 50000 ${valid} 0 0 8 1 ${valid}`);
@@ -329,7 +329,7 @@ describe("pipeline with the fake master", () => {
 
   it("persists checkpoint history even when a transient cleared before telemetry, and deduplicates replay/reload", async () => {
     const { device } = await boot();
-    const identity = "I FSK-WL 7 1.0.0 0123456789ABCDEF M 16 922900 7 250.00 16000 0 12 1";
+    const identity = "I FSK-WL 7 1.0.0 0123456789ABCDEF M 17 922900 7 250.00 16000 0 12 1";
     await device.handleLine(identity);
     const diag = (flags, boot = "7001") =>
       `D 0250FEB2 OK 0 0 0 0 -60.00 8.00 0 300 4000 0 1 1 1 XTAL 100 0 0 0 0 ${flags} 0 0 0 ${boot} 8001 0 0 0 0 1`;
@@ -427,7 +427,7 @@ describe("pipeline with the fake master", () => {
     await device.handleLine(first);
     assert.equal(device.dropped.reasons.unknown_line, 1);
     assert.ok(device.logEntries.some((e) => e.code === "unknown_line" && e.text === first));
-    await device.handleLine("I FSK-WL 7 1.0.0 0123456789ABCDEF M 16 922900 7 250.00 16000 0 12 1");
+    await device.handleLine("I FSK-WL 7 1.0.0 0123456789ABCDEF M 17 922900 7 250.00 16000 0 12 1");
     for (const line of ["D malformed", "P malformed", "E malformed"]) await device.handleLine(line);
     await waitFor(() => ["tel_format", "pps", "event_unreadable"].every((code) => device.logEntries.some((e) => e.code === code)));
     const secret = "ab".repeat(32);

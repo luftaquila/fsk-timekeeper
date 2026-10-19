@@ -16,7 +16,7 @@
 /* An uplink let through at SLOT_LATE_MS ends SLOT_GUARD_MS before the LBT listen of the next slot
  * starts, and the last slot ends before the next beacon even when this one went out as late as
  * the absolute beacon channel-access deadline allows. */
-static_assert((SLOT_LATE_MS + TX_SETUP_MS + SLOT_GUARD_MS + LBT_LISTEN_MS) * 1000u + LORA_TOA_US(WIRE_UPLINK) <=
+static_assert((SLOT_LATE_MS + TX_SETUP_MS + SLOT_GUARD_MS + LBT_LISTEN_MS) * 1000u + LORA_TOA_US(WIRE_UPLINK_ADMISSION) <=
               SLOT_LEN_MS * 1000u, "an uplink must fit its slot");
 static_assert((SLOT_OFFSET_MS + SLOT_COUNT * SLOT_LEN_MS + BEACON_ACCESS_MS + TX_SETUP_MS) * 1000u +
               LORA_TOA_US(WIRE_ADMISSION) <= BEACON_PERIOD_MS * 1000u, "the admission frame fits");
@@ -24,6 +24,7 @@ static_assert((SLOT_LATE_MS + TX_SETUP_MS + SLOT_GUARD_MS + LBT_LISTEN_MS) * 100
               LORA_TOA_US(WIRE_OFFER) <= SLOT_LEN_MS * 1000u, "an offer fits its slot");
 static_assert(LBT_LISTEN_MS < SLOT_OFFSET_MS, "the listen before slot 0 starts after the beacon");
 static_assert(SLOT_COUNT >= 2u && SLOT_COUNT <= 8u, "tx_slots holds every slot in 8 bits");
+static_assert(CHECKPOINT_PERIOD_BEACONS == MAX_NODES, "two-way selection follows periodic checkpoints");
 static_assert(LORA_SF >= 7 && LORA_SYMBOL_US < 16000u, "LORA_TOA_US covers SF7..SF12 without LDRO");
 
 void mac_sensor_init(mac_sensor_t *s, uint32_t my_id, uint8_t reset_reason)
@@ -94,7 +95,8 @@ static void on_offer(mac_sensor_t *s, const uint8_t *buf, int n)
         /* Only the exact advertised beacon may seed this candidate. Its first
          * RxDone was cached before the offer; duplicate packets never replace it. */
         if (s->hint_valid && s->hint_boot == j->master_boot && s->hint_ctr == floor) {
-            (void)sync_beacon(&j->sync, s->hint.base.seq, s->hint_rx, 1, 0, 0);
+            (void)sync_beacon(&j->sync, s->hint.base.seq, s->hint_rx, 1, 0, 0,
+                              !!(s->hint.base.flags & BEACON_ADMISSION));
             j->seen_ctr = floor;
         }
     }
@@ -128,6 +130,7 @@ static void activate_join(mac_sensor_t *s, int entry, uint32_t ctr)
         s->cp_pending = s->cp_answered = 0;
     }
     s->master_boot_id = j->master_boot; s->link_id = j->link_id;
+    memset(&s->roundtrip, 0, sizeof(s->roundtrip));
     memcpy(s->data_key, j->keys.data, 32);
     s->have_session = 1; s->entry = entry;
     memset(&s->from_master, 0, sizeof(s->from_master));
@@ -144,7 +147,8 @@ static int join_beacon(mac_sensor_t *s, const admission_beacon_t *b, const sec_m
     if (!join_authenticated(j) || j->master_boot != meta->boot_id || meta->ctr <= j->beacon_floor) { return 0; }
     if (sec_accept_counter(&j->seen_ctr, meta->ctr)) {
         if (j->sync.have_prev && l_rx - j->sync.prev_lrx > 255u * BEACON_PERIOD_MS * TPM) { sync_clock_lost(&j->sync); }
-        (void)sync_beacon(&j->sync, b->base.seq, l_rx, 1, b->base.flags & BEACON_TX_PREV_VALID, b->base.m_tx_prev);
+        (void)sync_beacon(&j->sync, b->base.seq, l_rx, 1, b->base.flags & BEACON_TX_PREV_VALID, b->base.m_tx_prev,
+                          !!(b->base.flags & BEACON_ADMISSION));
     }
     int entry = data_entry(&b->base, slots, s->my_id, j->link_id);
     if (j->phase == SENSOR_JOIN_WAIT_ASSIGNMENT && entry >= 0) {
@@ -185,7 +189,9 @@ static void on_beacon(mac_sensor_t *s, const uint8_t *buf, int n)
     int plen = n == WIRE_ADMISSION ? sizeof(b) : sizeof(b.base);
     if (sec_unseal(buf, n, &meta, &b, plen) || meta.node_id != NODE_MASTER ||
         !!(b.base.flags & BEACON_ADMISSION) != (n == WIRE_ADMISSION) ||
-        b.base.flags & ~(BEACON_ADMISSION | BEACON_TX_PREV_VALID) || b.pending & ~0x1fu) { return; }
+        b.base.flags & ~(BEACON_ADMISSION | BEACON_TX_PREV_VALID | BEACON_RX_PREV_VALID) || b.pending & ~0x1fu ||
+        ((b.base.flags & BEACON_RX_PREV_VALID) &&
+         (!(b.base.flags & BEACON_TX_PREV_VALID) || b.base.rx_entry >= MAX_NODES))) { return; }
     uint8_t slots[SLOT_COUNT];
     if (!beacon_schedule(&b, slots)) { return; }
     int active = s->have_session && meta.boot_id == s->master_boot_id;
@@ -194,7 +200,16 @@ static void on_beacon(mac_sensor_t *s, const uint8_t *buf, int n)
         s->last_beacon_ms = board_millis();
         if (s->join.phase != SENSOR_JOIN_IDLE && s->join.master_boot != s->master_boot_id) { join_cancel(s); }
         if (s->sync.have_prev && l_rx - s->sync.prev_lrx > 255u * BEACON_PERIOD_MS * TPM) { sync_clock_lost(&s->sync); }
-        (void)sync_beacon(&s->sync, b.base.seq, l_rx, 1, b.base.flags & BEACON_TX_PREV_VALID, b.base.m_tx_prev);
+        (void)sync_beacon(&s->sync, b.base.seq, l_rx, 1, b.base.flags & BEACON_TX_PREV_VALID, b.base.m_tx_prev,
+                          !!(b.base.flags & BEACON_ADMISSION));
+        if (s->roundtrip.valid && b.base.flags & BEACON_RX_PREV_VALID &&
+            l_rx > s->roundtrip.l_tx && l_rx - s->roundtrip.l_tx < 2u * BEACON_PERIOD_MS * TPM &&
+            b.base.seq == (uint8_t)(s->roundtrip.seq + 1u) && b.base.rx_entry == s->roundtrip.entry &&
+            s->roundtrip.link == s->link_id && b.base.slot[b.base.rx_entry].link_id == s->link_id &&
+            b.base.slot[b.base.rx_entry].node_id == s->my_id) {
+            (void)sync_roundtrip(&s->sync, b.base.m_tx_prev, s->roundtrip.l_rx, s->roundtrip.l_tx, b.base.m_rx_prev);
+        }
+        s->roundtrip.valid = 0;
         sq_resolve(&s->q, &s->sync, capture_now64());
         s->entry = data_entry(&b.base, slots, s->my_id, s->link_id);
         if (s->entry < 0) { join_begin(s, meta.boot_id); }
@@ -215,6 +230,7 @@ static void on_beacon(mac_sensor_t *s, const uint8_t *buf, int n)
     select_tx_slots(s, &b, slots, active);
     memcpy(s->schedule, slots, sizeof(slots));
     s->cycle_rx = l_rx; s->cycle_seq = b.base.seq;
+    s->cycle_ctr = meta.ctr; s->cycle_wire_len = (uint8_t)n;
     s->retry.delay_ms = BEACON_LOSS_RESET_MS;
     board_led_toggle();
 }
@@ -274,7 +290,7 @@ static void drain_captures(mac_sensor_t *s)
  * cycle: one packet per cycle, so an earlier one would hold that cycle's captures back a beacon. */
 static int checkpoint_due(const mac_sensor_t *s)
 {
-    if (s->cp_pending || s->entry < 0) { return 1; }
+    if (s->cp_pending || s->entry < 0 || !s->sync.cur.have) { return 1; }
     return s->tx_slots == 0u && (uint8_t)(s->cycle_seq % CHECKPOINT_PERIOD_BEACONS) ==
                                 (uint8_t)((unsigned)s->entry % CHECKPOINT_PERIOD_BEACONS);
 }
@@ -336,16 +352,24 @@ static void slot_tx(mac_sensor_t *s)
     if (listen && radio_lbt_listen() != RADIO_LBT_QUIET) { radio_unlimit(); return; }
     drain_captures(s);
     uplink_pl_t *p = NULL;
+    uplink_pl_t probe = {.kind = UL_KIND_SYNC, .flags = EVENT_TIME_UNKNOWN, .master_boot_id = s->master_boot_id};
     if (role == SLOT_ROLE_DATA) {
         p = sq_packet(&s->q, s->master_boot_id);
-        if (!p && checkpoint_due(s)) { p = make_checkpoint(s); }
+        if (!p && checkpoint_due(s)) {
+            p = make_checkpoint(s);
+            /* Held captures need a fresh two-way anchor before they can leave
+             * the FIFO. A probe carries no checkpoint/evidence and cannot ACK
+             * past them; it uses this same scheduled transmission opportunity. */
+            if (!p) { p = &probe; }
+        }
         if (!p) { radio_unlimit(); return; }
     }
     if (radio_rx_settle(0, 0) != RADIO_RX_IDLE || radio_cad() != RADIO_CAD_CLEAR) { radio_unlimit(); return; }
     uint8_t tx[WIRE_MAX]; int n = -1;
     if (role == SLOT_ROLE_DATA) {
         fill_diag(s, p);
-        n = sec_seal_key(s->data_key, tx, sizeof(tx), PKT_TYPE_UPLINK, s->my_id, p, sizeof(*p));
+        p->beacon_ctr = s->cycle_ctr;
+        n = sec_seal_uplink(s->data_key, tx, sizeof(tx), s->my_id, p, sizeof(*p), s->cycle_wire_len);
     } else if (role == SLOT_ROLE_REQUEST) {
         join_pl_t r = {.master_boot = s->join.master_boot}; memcpy(r.ns, s->join.ns, 16);
         n = sec_seal(tx, sizeof(tx), PKT_TYPE_JOIN, s->my_id, &r, sizeof(r));
@@ -357,7 +381,12 @@ static void slot_tx(mac_sensor_t *s)
     uint64_t finish = start + (SLOT_LEN_MS - SLOT_GUARD_MS - LBT_LISTEN_MS) * TPM;
     if (n > 0 && capture_now64() <= late && radio_tx_start(tx, n, mac_deadline_us(finish)) == 0) {
         s->tx_busy = 1;
-        if (role == SLOT_ROLE_DATA) { s->data_sent = 1; }
+        if (role == SLOT_ROLE_DATA) {
+            s->data_sent = 1;
+            s->roundtrip.l_rx = s->cycle_rx; s->roundtrip.seq = s->cycle_seq;
+            s->roundtrip.entry = (uint8_t)s->entry; s->roundtrip.link = s->link_id;
+            s->roundtrip.pending = 1; s->roundtrip.valid = 0;
+        }
         if (role == SLOT_ROLE_CONFIRM) { s->join.phase = SENSOR_JOIN_WAIT_ASSIGNMENT; }
         return;
     }
@@ -375,6 +404,7 @@ static void radio_recovery(mac_sensor_t *s)
     int ok = radio_begin() == 0 && radio_start_rx() == 0;
     el_radio_recovery_end(ok);
     s->tx_slots = 0;
+    memset(&s->roundtrip, 0, sizeof(s->roundtrip));
     retry_later(&s->retry, board_millis(), RADIO_RESET_BACKOFF_MAX_MS);
 }
 
@@ -390,7 +420,13 @@ void mac_sensor_step(mac_sensor_t *s)
         int done = radio_tx_poll();
         if (!done) { drain_captures(s); return; }
         s->tx_busy = 0;
-        uint64_t unused; (void)capture_dio1_get(&unused);
+        uint64_t cap;
+        int have = capture_dio1_get(&cap);
+        if (s->roundtrip.pending) {
+            s->roundtrip.valid = done > 0 && have;
+            if (s->roundtrip.valid) { s->roundtrip.l_tx = cap; }
+            s->roundtrip.pending = 0;
+        }
     }
     if (s->join.phase != SENSOR_JOIN_IDLE && (uint32_t)(board_millis() - s->join.born_ms) >= JOIN_LIFETIME_MS) { join_cancel(s); }
     uint8_t buf[WIRE_MAX];
@@ -408,6 +444,7 @@ void mac_sensor_step(mac_sensor_t *s)
         s->hfxo_stops = stops;
         sync_clock_lost(&s->sync);
         sync_clock_lost(&s->join.sync);
+        memset(&s->roundtrip, 0, sizeof(s->roundtrip));
     }
     if (s->have_session && !s->timing_ready) {
         uint64_t now = capture_now64();

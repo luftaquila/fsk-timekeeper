@@ -69,10 +69,6 @@
 
 #define TICKS_PER_MS 16000u /* TIMER1 runs at 16 MHz */
 
-/* Fixed TxDone->RxDone air delay in ticks (DESIGN §2.9). Cancels in
- * sensor-to-sensor intervals; 0 until measured. */
-#define T_AIR_REF_TICKS 0u
-
 /* Frame timing (DESIGN §2.8): a beacon every BEACON_PERIOD_MS on a TIMER1 grid; slot j starts
  * SLOT_OFFSET_MS + j * SLOT_LEN_MS after its RxDone. Slots 0..SLOT_COUNT-2 are dealt in turn to
  * the sensors in the slot table, the last one is free for unregistered sensors (mac_sensor.c). */

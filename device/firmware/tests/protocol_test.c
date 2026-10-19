@@ -11,7 +11,8 @@ static void uplink_packing(void)
         .master_boot_id = UINT64_C(0xfedcba9876543210), .capture_seq = 0x89abcdef,
         .tick = UINT64_C(0x010203040506), .sync_age_ms = 0x7788,
         .u.edges = {5, {0x11223344, 0x55667788, 0x99aabbcc, 0xddeeff00}},
-        .diag = {7, 0x0102, -18, 0x0304, 5, 0x0607, -10, 0x0809, 0x0a0b, 0x0c0d, 14}
+        .diag = {7, 0x0102, -18, 0x0304, 5, 0x0607, -10, 0x0809, 0x0a0b, 0x0c0d, 14},
+        .beacon_ctr = 0xa1b2c3
     }, out;
     /* Independent byte layout: combined kind/flags, full boot id, six tick bytes,
      * unchanged edge deltas and signed diagnostics. */
@@ -19,7 +20,7 @@ static void uplink_packing(void)
         0x5f,0x34,0x12,0x10,0x32,0x54,0x76,0x98,0xba,0xdc,0xfe,0xef,0xcd,0xab,0x89,
         6,5,4,3,2,1,0x88,0x77,5,0x44,0x33,0x22,0x11,0x88,0x77,0x66,0x55,
         0xcc,0xbb,0xaa,0x99,0,0xff,0xee,0xdd,
-        7,2,1,0xee,0xff,4,3,5,7,6,0xf6,0xff,9,8,0x0b,0x0a,0x0d,0x0c,14
+        7,2,1,0xee,0xff,4,3,5,7,6,0xf6,0xff,9,8,0x0b,0x0a,0x0d,0x0c,14,0xc3,0xb2,0xa1
     };
     uint8_t wire[PL_UPLINK];
     assert(protocol_encode(wire, sizeof(wire), PKT_TYPE_UPLINK, &u, sizeof(u)) == sizeof(wire));
@@ -56,6 +57,8 @@ static void uplink_packing(void)
     assert(protocol_decode(&out, sizeof(out), PKT_TYPE_UPLINK, wire, sizeof(wire) - 1) < 0);
     u.kind = 4;
     assert(protocol_encode(wire, sizeof(wire), PKT_TYPE_UPLINK, &u, sizeof(u)) < 0);
+    u.kind = UL_KIND_SYNC; u.beacon_ctr = 0x1000000;
+    assert(protocol_encode(wire, sizeof(wire), PKT_TYPE_UPLINK, &u, sizeof(u)) < 0);
     puts("PASS compact_uplink_values_and_48bit_ticks");
 }
 
@@ -63,7 +66,8 @@ static void beacon_packing(void)
 {
     admission_beacon_t a = {
         .base = {.seq = 0x12, .flags = 3, .m_tx_prev = PROTO_TICK_MAX, .cp_req = 0x34,
-                 .slot = {{0xfedc0001, 0x5678, UINT32_MAX}}},
+                 .slot = {{0xfedc0001, 0x5678, UINT32_MAX}},
+                 .m_rx_prev = UINT64_C(0x010203040506), .rx_entry = 4},
         .schedule = {SLOT_ROLE_IDLE, SLOT_ROLE_REQUEST, SLOT_ROLE_DATA,
                      SLOT_ROLE_DATA | 4, SLOT_ROLE_OFFER, SLOT_ROLE_CONFIRM | 4}, .pending = 0x1f
     }, out;
@@ -73,6 +77,8 @@ static void beacon_packing(void)
     const uint8_t schedule[] = {0x20,0x08,0x73,0x20,0x1f}; /* [0,1,2,6,7,16] in 5-bit fields */
     assert(protocol_encode(wire, sizeof(wire), PKT_TYPE_BEACON, &a, sizeof(a)) == PL_ADMISSION);
     assert(!memcmp(wire, prefix, sizeof(prefix)) && !memcmp(wire + PL_BEACON, schedule, sizeof(schedule)));
+    const uint8_t reply[] = {6,5,4,3,2,1,4};
+    assert(!memcmp(wire + 59, reply, sizeof(reply)));
     assert(protocol_decode(&out, sizeof(out), PKT_TYPE_BEACON, wire, sizeof(wire)) == 0);
     assert(!memcmp(&a, &out, sizeof(a)));
     for (unsigned slot = 0; slot < 6; slot++) {
@@ -114,12 +120,17 @@ static void beacon_packing(void)
 
 int main(void)
 {
-    for (unsigned ver = 1; ver <= 16; ver++) {
+    unsigned seen[256] = {0};
+    for (unsigned ver = 1; ver <= 32; ver++) {
         for (unsigned type = 1; type <= 5; type++) {
+            assert(!seen[SEC_VT(ver, type)]++);
             assert(SEC_VT_VER(SEC_VT(ver, type)) == ver && SEC_VT_TYPE(SEC_VT(ver, type)) == type);
+            if (ver <= 16) { assert(SEC_VT(ver, type) == (uint8_t)((ver << 4) | type)); }
         }
     }
     assert(SEC_VT(15, PKT_TYPE_BEACON) == 0xf1 && SEC_VT(16, PKT_TYPE_BEACON) == 0x01);
+    assert(SEC_VT(17, PKT_TYPE_BEACON) == 0x19 && SEC_VT(17, PKT_TYPE_CONFIRM) == 0x1d);
+    assert(SEC_VT(32, PKT_TYPE_BEACON) == 0x09);
     assert(protocol_payload_size(PKT_TYPE_BEACON, -1) < 0 && protocol_payload_size(0, sizeof(beacon_pl_t)) < 0);
     uplink_packing(); beacon_packing();
     return 0;

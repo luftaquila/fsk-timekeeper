@@ -30,6 +30,9 @@ typedef struct {
     master_admission_t admission;
     uint64_t cycle_tx;
     uint32_t beacon_ctr;
+    uint64_t reply_rx;
+    uint32_t reply_link;
+    uint8_t cycle_seq, cycle_wire_len, reply_entry, reply_valid;
     master_tx_state_t tx_state;
     uint8_t schedule[SLOT_COUNT], cycle_ready, slot_done;
 } mac_master_t;

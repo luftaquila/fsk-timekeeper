@@ -39,6 +39,7 @@ void mac_master_session(mac_master_t *m)
     reg_session(&m->reg);
     m->m_tx_valid = 0;
     m->cycle_ready = 0;
+    m->reply_valid = 0;
     m->tx_state = MASTER_TX_IDLE;
     master_admission_session(&m->admission, board_millis());
 }
@@ -114,7 +115,8 @@ static void on_admission(mac_master_t *m, const uint8_t *buf, int n)
     }
 }
 
-static void on_uplink(mac_master_t *m, const uint8_t *buf, int n, float rssi, float snr)
+static void on_uplink(mac_master_t *m, const uint8_t *buf, int n, float rssi, float snr,
+                       int have_rx, uint64_t rx_tick)
 {
     if (SEC_VT_VER(buf[0]) != PROTO_VER) {
         /* Another version counts only when the fleet key opens it: a foreign
@@ -125,7 +127,7 @@ static void on_uplink(mac_master_t *m, const uint8_t *buf, int n, float rssi, fl
     if (SEC_VT_TYPE(buf[0]) == PKT_TYPE_JOIN || SEC_VT_TYPE(buf[0]) == PKT_TYPE_CONFIRM) {
         on_admission(m, buf, n); return;
     }
-    if (SEC_VT_TYPE(buf[0]) != PKT_TYPE_UPLINK || n != WIRE_UPLINK) { return; }
+    if (SEC_VT_TYPE(buf[0]) != PKT_TYPE_UPLINK || (n != WIRE_UPLINK && n != WIRE_UPLINK_ADMISSION)) { return; }
     uint32_t id; memcpy(&id, buf + 12, 4);
     reg_entry_t *e = reg_lookup(&m->reg, id);
     if (!e || !e->have_boot || !e->link_id) { m->auth_drop++; return; }
@@ -133,8 +135,23 @@ static void on_uplink(mac_master_t *m, const uint8_t *buf, int n, float rssi, fl
     if (sec_unseal_key(e->data_key, buf, n, &meta, &u, sizeof(u)) ||
         meta.boot_id != e->sensor_boot || u.master_boot_id != sec_boot_id()) { m->auth_drop++; return; }
     if (!sec_accept_counter(&e->rx.max_ctr, meta.ctr)) { e->sec_drop++; return; }
+    /* Prefer the entry whose periodic checkpoint falls in this frame; otherwise
+     * return the first matching uplink (also lets a new/returning sensor sync).
+     * The beacon counter prevents an old uplink being paired with a new frame. */
+    unsigned entry = (unsigned)(e - m->reg.e);
+    if (have_rx && m->cycle_ready && n == m->cycle_wire_len && u.beacon_ctr == m->beacon_ctr &&
+        (!m->reply_valid || (entry == m->cycle_seq % CHECKPOINT_PERIOD_BEACONS && m->reply_entry != entry))) {
+        for (unsigned j = 0; j < SLOT_COUNT; j++) {
+            if (m->schedule[j] != (SLOT_ROLE_DATA | entry)) { continue; }
+            uint64_t start = m->cycle_tx + (SLOT_OFFSET_MS + j * SLOT_LEN_MS) * TPM;
+            /* Keep the existing guard for the two radio event delays. */
+            if (rx_tick < start || rx_tick > start + (SLOT_LEN_MS - LBT_LISTEN_MS) * TPM) { continue; }
+            m->reply_rx = rx_tick; m->reply_entry = (uint8_t)entry;
+            m->reply_link = e->link_id; m->reply_valid = 1;
+            break;
+        }
+    }
     uint32_t now_ms = board_millis();
-    if (!e->have_ack) { e->ack_seq = (uint16_t)(u.ev_seq - 1u); e->have_ack = 1; }
     e->heard_ms = now_ms;
     e->rssi = rssi;
     e->snr = snr;
@@ -145,15 +162,18 @@ static void on_uplink(mac_master_t *m, const uint8_t *buf, int n, float rssi, fl
         e->lat_ms = now_t > u.tick ? (uint32_t)((now_t - u.tick) / TPM) : 0u;
     }
 
-    int16_t d = (int16_t)(uint16_t)(u.ev_seq - e->ack_seq);
-    if (d > 0 && u.ev_seq < e->ack_seq) { d--; } /* the sensor skips 0 when ev_seq wraps */
-    if (d > 0) {
-        /* The sensor only drops a packet the beacon acked, so a jump means a
-         * wrongly applied ACK: take it (the console sees any seq gap) rather
-         * than stall the sensor forever. */
-        if (d > 1) { el_note(EL_ACK_GAP); }
-        /* Queue full: leave ack_seq; the sensor re-sends next cycle. */
-        if (mq_push_uplink(m->q, e->id, e->sensor_boot, &u, rssi, snr)) { e->ack_seq = u.ev_seq; }
+    if (u.kind != UL_KIND_SYNC) {
+        if (!e->have_ack) { e->ack_seq = (uint16_t)(u.ev_seq - 1u); e->have_ack = 1; }
+        int16_t d = (int16_t)(uint16_t)(u.ev_seq - e->ack_seq);
+        if (d > 0 && u.ev_seq < e->ack_seq) { d--; } /* the sensor skips 0 when ev_seq wraps */
+        if (d > 0) {
+            /* The sensor only drops a packet the beacon acked, so a jump means a
+             * wrongly applied ACK: take it (the console sees any seq gap) rather
+             * than stall the sensor forever. */
+            if (d > 1) { el_note(EL_ACK_GAP); }
+            /* Queue full: leave ack_seq; the sensor re-sends next cycle. */
+            if (mq_push_uplink(m->q, e->id, e->sensor_boot, &u, rssi, snr)) { e->ack_seq = u.ev_seq; }
+        }
     }
     e->last_state = reg_state(e, now_ms);
     emit_sensor(e, now_ms);
@@ -165,7 +185,11 @@ static void receive_one(mac_master_t *m)
     uint8_t buf[WIRE_MAX];
     float rssi = 0, snr = 0;
     int n = radio_receive(buf, sizeof(buf), &rssi, &snr);
-    if (n > 0) { on_uplink(m, buf, n, rssi, snr); }
+    if (n > 0) {
+        uint64_t cap = 0;
+        int have = capture_dio1_get(&cap);
+        on_uplink(m, buf, n, rssi, snr, have, cap);
+    }
 }
 
 static int beacon_channel_ready(mac_master_t *m, uint64_t deadline)
@@ -195,8 +219,14 @@ static void send_beacon(mac_master_t *m)
     b.base.flags = m->m_tx_valid ? BEACON_TX_PREV_VALID : 0u;
     b.base.m_tx_prev = m->m_tx_last;
     b.base.cp_req = m->cp_left ? m->cp_id : 0u;
-    m->m_tx_valid = m->cycle_ready = 0;
     master_admission_schedule(&m->admission, &m->reg, board_millis(), &b, m->schedule);
+    if (m->m_tx_valid && m->reply_valid && m->reply_entry < MAX_NODES &&
+        m->reg.e[m->reply_entry].link_id == m->reply_link &&
+        b.base.slot[m->reply_entry].link_id == m->reply_link) {
+        b.base.flags |= BEACON_RX_PREV_VALID;
+        b.base.m_rx_prev = m->reply_rx; b.base.rx_entry = m->reply_entry;
+    }
+    m->m_tx_valid = m->cycle_ready = m->reply_valid = 0;
     if (!beacon_channel_ready(m, deadline)) { radio_unlimit(); return; }
     uint8_t tx[WIRE_ADMISSION];
     int plen = (b.base.flags & BEACON_ADMISSION) ? (int)sizeof(b) : (int)sizeof(b.base);
@@ -209,6 +239,7 @@ static void send_beacon(mac_master_t *m)
         if (radio_tx_start(tx, n, mac_deadline_us(finish)) == 0) {
             m->tx_state = MASTER_TX_BEACON;
             m->beacon_ctr = sec_wire_counter(tx);
+            m->cycle_seq = b.base.seq; m->cycle_wire_len = (uint8_t)n;
             if (m->cp_left) { m->cp_left--; }
             return;
         }
@@ -284,7 +315,7 @@ int mac_master_step(mac_master_t *m)
     int sent = 0;
     if (capture_now64() >= m->next_beacon) {
         if (!radio_needs_reset()) { send_beacon(m); }
-        else { m->m_tx_valid = m->cycle_ready = 0; m->seq++; }
+        else { m->m_tx_valid = m->cycle_ready = m->reply_valid = 0; m->seq++; }
         m->next_beacon += BEACON_PERIOD_TICKS;
         if (m->next_beacon <= capture_now64()) { m->next_beacon = capture_now64() + BEACON_PERIOD_TICKS; }
         sent = 1;

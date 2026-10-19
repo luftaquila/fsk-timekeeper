@@ -99,6 +99,7 @@ static int n_nodes;
 static node_t *cur;
 static uint64_t now_global;
 static uint32_t seal_delay_us;
+static uint32_t down_delay_us, up_delay_us, admission_delay_us;
 static int cad_error;
 static int lbt_on = RADIO_DEF_LBT;
 static mq_t mq;
@@ -114,6 +115,14 @@ static uint64_t local_tick(const node_t *n, uint64_t true_us)
 static uint32_t airtime_us(int len) { return LORA_TOA_US((unsigned)len); }
 
 static int is_beacon(const tx_t *x) { return SEC_VT_TYPE(x->data[0]) == PKT_TYPE_BEACON; }
+
+/* DIO1 receive latency, independently of TxDone and the receiver's clock.
+ * Equal packet lengths share the format-dependent part in both directions. */
+static uint64_t receive_done(const tx_t *x)
+{
+    return x->end_us + (x->src == 0 ? down_delay_us : up_delay_us) +
+           (x->len == WIRE_ADMISSION ? admission_delay_us : 0u);
+}
 
 static int collided(unsigned i)
 {
@@ -132,7 +141,7 @@ static void deliver(node_t *r)
     unsigned from = air_n > 400u ? air_n - 400u : 0u;
     for (unsigned i = from; i < air_n; i++) {
         tx_t *x = &air[i];
-        if (x->src == r->idx || (x->seen >> r->idx) & 1u || x->end_us > r->now_us) { continue; }
+        if (x->src == r->idx || (x->seen >> r->idx) & 1u || receive_done(x) > r->now_us) { continue; }
         x->seen |= 1u << r->idx;
         if (!r->rx_on || r->rx_since_us > x->start_us || collided(i)) { continue; }
         if (mix(i * 131u + (unsigned)r->idx) % 100u < r->loss_pct) { continue; }
@@ -142,7 +151,7 @@ static void deliver(node_t *r)
         r->pkt_len = x->len;
         r->have_pkt = 1;
         r->dio1 = 1;
-        r->dio1_tick = local_tick(r, x->end_us);
+        r->dio1_tick = local_tick(r, receive_done(x));
     }
 }
 
@@ -151,7 +160,7 @@ static const tx_t *on_air(const node_t *r)
     unsigned from = air_n > 64u ? air_n - 64u : 0u;
     for (unsigned i = from; i < air_n; i++) {
         const tx_t *x = &air[i];
-        if (x->src != r->idx && x->start_us <= r->now_us && x->end_us > r->now_us) { return x; }
+        if (x->src != r->idx && x->start_us <= r->now_us && receive_done(x) > r->now_us) { return x; }
     }
     return NULL;
 }
@@ -307,11 +316,11 @@ int radio_rx_settle(uint32_t header_wait_ms, uint32_t max_ms)
         }
         cur->now_us = header_at;
     }
-    if (max_ms == 0 || x->end_us > cur->now_us + (uint64_t)max_ms * 1000u) {
+    if (max_ms == 0 || receive_done(x) > cur->now_us + (uint64_t)max_ms * 1000u) {
         if (max_ms) { cur->now_us += (uint64_t)max_ms * 1000u; }
         return RADIO_RX_BUSY;
     }
-    cur->now_us = x->end_us;
+    cur->now_us = receive_done(x);
     deliver(cur);
     return cur->have_pkt ? RADIO_RX_PACKET : RADIO_RX_IDLE;
 }
@@ -357,6 +366,7 @@ int radio_lbt_listen(void)
 /* Real production AEAD and KDF; only boot/counter/RNG hardware is per-node. */
 #define sec_seal real_sec_seal
 #define sec_seal_key real_sec_seal_key
+#define sec_seal_uplink real_sec_seal_uplink
 #define sec_boot_id real_sec_boot_id
 #define sec_random real_sec_random
 #define sec_challenge real_sec_challenge
@@ -364,6 +374,7 @@ int radio_lbt_listen(void)
 #include "../src/secure.c"
 #undef sec_seal
 #undef sec_seal_key
+#undef sec_seal_uplink
 #undef sec_boot_id
 #undef sec_random
 #undef sec_challenge
@@ -395,6 +406,11 @@ int sec_seal_key(const uint8_t key[32], uint8_t *out, int cap, uint8_t type, uin
 {
     seal_context(p, len, type);
     int r = real_sec_seal_key(key, out, cap, type, id, p, len); cur->tx_ctr = g_tx_ctr; return r;
+}
+int sec_seal_uplink(const uint8_t key[32], uint8_t *out, int cap, uint32_t id, const void *p, int len, int wire_len)
+{
+    seal_context(p, len, PKT_TYPE_UPLINK);
+    int r = real_sec_seal_uplink(key, out, cap, id, p, len, wire_len); cur->tx_ctr = g_tx_ctr; return r;
 }
 
 /* ---- host: parses E lines, checks their crc, acks ------------------------ */
@@ -567,11 +583,14 @@ static void run(uint64_t end_us, hook_t hook)
 static void check_slots(uint64_t from_us)
 {
     uint64_t last_beacon_end = 0;
+    uint32_t beacon_ctr = 0;
+    int beacon_len = 0;
     admission_beacon_t b = {0}; uint8_t slots[SLOT_COUNT] = {0};
     for (unsigned i = 0; i < air_n; i++) {
         const tx_t *x = &air[i];
         if (is_beacon(x)) {
             last_beacon_end = x->end_us; memcpy(&b, x->plain, sizeof(b));
+            beacon_ctr = sec_wire_counter(x->data); beacon_len = x->len;
             if (b.base.flags & BEACON_ADMISSION) { memcpy(slots, b.schedule, sizeof(slots)); }
             else { mac_normal_schedule(&b.base, slots); }
             assert(mac_schedule_valid(slots)); continue;
@@ -587,7 +606,11 @@ static void check_slots(uint64_t from_us)
         unsigned role = SLOT_ROLE(slots[k]), entry = SLOT_ENTRY(slots[k]);
         unsigned type = SEC_VT_TYPE(x->data[0]);
         uint32_t id = nodes[x->src].sender_id;
-        if (type == PKT_TYPE_UPLINK) { assert(role == SLOT_ROLE_DATA && b.base.slot[entry].node_id == id); }
+        if (type == PKT_TYPE_UPLINK) {
+            const uplink_pl_t *u = (const uplink_pl_t *)x->plain;
+            assert(role == SLOT_ROLE_DATA && b.base.slot[entry].node_id == id);
+            assert(x->len == beacon_len && u->beacon_ctr == beacon_ctr);
+        }
         else if (type == PKT_TYPE_JOIN) { assert(role == SLOT_ROLE_REQUEST); }
         else if (type == PKT_TYPE_CONFIRM) { assert(role == SLOT_ROLE_CONFIRM && b.base.slot[entry].node_id == id); }
         else { assert(type == PKT_TYPE_OFFER && role == SLOT_ROLE_OFFER && x->src == 0); }
@@ -682,6 +705,53 @@ static void random_edges(int node, uint64_t from_us, uint64_t to_us, unsigned me
             for (unsigned b = 1; b <= 8; b++) { edge_at(node, t + b * 9000u + (seed >> 20) % 3000u); }
         }
     }
+}
+
+static unsigned delay_checks;
+static int64_t delay_max_error;
+static void delay_hook(uint64_t us)
+{
+    /* Reopen admission while three admitted sensors keep measuring, so the
+     * estimator crosses both packet lengths after it has already converged. */
+    if (n_nodes == 4 && ((us >= 80000000u && us < 100000000u) ||
+                         (us >= 180000000u && us < 185000000u))) {
+        mm.admission.join_until_ms = (uint32_t)(us / 1000u) + 1000u;
+        mm.admission.request_seen = 1;
+    }
+    if (us < 40000000u || us % 100000u) { return; }
+    int64_t expected = ((int64_t)up_delay_us - down_delay_us) * 8;
+    for (int i = 1; i < n_nodes; i++) {
+        const sync_t *s = &nodes[i].s.sync;
+        uint64_t local = local_tick(&nodes[i], us);
+        assert((sync_health(s, local, 1) & HEALTH_EVENT_REQUIRED) == HEALTH_EVENT_REQUIRED);
+        int64_t err = (int64_t)(sync_to_master(s, local) - local_tick(&nodes[0], us)) - expected;
+        if (err < 0) { err = -err; }
+        if (err > delay_max_error) { delay_max_error = err; }
+        if (err > 6) {
+            fprintf(stderr, "delay model node %d at %llu: error %lld ticks\n", i,
+                    (unsigned long long)us, (long long)err);
+            abort();
+        }
+        delay_checks++;
+    }
+}
+
+static void radio_delay(unsigned count, int asymmetric)
+{
+    down_delay_us = 144; up_delay_us = asymmetric ? 122 : 144;
+    admission_delay_us = 37;
+    add_node(1, 0, 0, 0);
+    const int32_t ppm[] = {-79, -31, 17, 43, 79};
+    for (unsigned i = 0; i < count; i++) { add_node(0, 0x12340001u + i, ppm[i], 0); }
+    run(270000000u, delay_hook); /* includes the 8-bit beacon sequence wrap */
+    check_slots(0);
+    unsigned normal = 0, admission = 0;
+    for (unsigned i = 0; i < air_n; i++) if (SEC_VT_TYPE(air[i].data[0]) == PKT_TYPE_UPLINK) {
+        if (air[i].len == WIRE_UPLINK) { normal++; } else { admission++; }
+    }
+    assert(normal && admission && delay_checks > 5000);
+    printf("PASS radio_delay_%u_%s (%u checks, max model error %lld ticks)\n", count,
+           asymmetric ? "asymmetric" : "symmetric", delay_checks, (long long)delay_max_error);
 }
 
 static void steady(void)
@@ -997,6 +1067,39 @@ static tx_t recorded(unsigned type)
 {
     for (unsigned i = 0; i < air_n; i++) if (SEC_VT_TYPE(air[i].data[0]) == type) return air[i];
     fprintf(stderr, "No packet type %u\n", type); abort();
+}
+static void roundtrip_binding(void)
+{
+    add_node(1, 0, 0, 0); add_node(0, 0x123443b0u, 0, 0);
+    run(15900000u, NULL);
+    reg_entry_t *e = reg_lookup(&mm.reg, nodes[1].sender_id);
+    assert(e && nodes[1].s.timing_ready);
+    uint16_t ack = e->ack_seq; int have_ack = e->have_ack;
+    unsigned depth = mq_depth(&mq);
+    unsigned entry = (unsigned)(e - mm.reg.e);
+    uint8_t wire[WIRE_MAX];
+    uplink_pl_t u = {.kind = UL_KIND_SYNC, .flags = EVENT_TIME_UNKNOWN,
+                     .master_boot_id = nodes[0].boot_id, .ev_seq = 500};
+    memset(mm.schedule, 0, sizeof(mm.schedule)); mm.schedule[0] = SLOT_ROLE_DATA | entry;
+    mm.cycle_ready = 1; mm.cycle_wire_len = WIRE_UPLINK; mm.reply_valid = 0;
+    mm.cycle_tx = local_tick(&nodes[0], now_global) - (SLOT_OFFSET_MS + 50u) * TICKS_PER_MS;
+    for (unsigned attempt = 0; attempt < 4; attempt++) {
+        u.beacon_ctr = mm.beacon_ctr + (attempt == 0 ? 1u : 0u);
+        cur = &nodes[1];
+        int n = sec_seal_uplink(cur->s.data_key, wire, sizeof(wire), cur->sender_id,
+                               &u, sizeof(u), attempt == 1 ? WIRE_UPLINK_ADMISSION : WIRE_UPLINK);
+        assert(n > 0);
+        if (attempt == 2) { mm.cycle_ready = 0; }
+        if (attempt == 3) { mm.cycle_ready = 1; }
+        replay_wire(0, wire, n);
+        assert(!!mm.reply_valid == (attempt == 3));
+        assert(e->ack_seq == ack && e->have_ack == have_ack && mq_depth(&mq) == depth);
+    }
+    assert(mm.reply_entry == entry && mm.reply_link == e->link_id);
+    uint64_t reply = mm.reply_rx;
+    replay_wire(0, wire, WIRE_UPLINK); /* replay cannot change the selected capture */
+    assert(mm.reply_rx == reply);
+    puts("PASS roundtrip_frame_length_counter_and_probe_ack_binding");
 }
 static void session_replay(void)
 {
@@ -1469,6 +1572,10 @@ int main(int argc, char **argv)
     else if (!strcmp(argv[1], "join_uptime")) { join_uptime(); }
     else if (!strcmp(argv[1], "join_backoff")) { join_backoff(); }
     else if (!strcmp(argv[1], "steady")) { steady(); }
+    else if (!strcmp(argv[1], "radio_delay_3")) { radio_delay(3, 0); }
+    else if (!strcmp(argv[1], "radio_delay_5")) { radio_delay(5, 0); }
+    else if (!strcmp(argv[1], "radio_asymmetry")) { radio_delay(3, 1); }
+    else if (!strcmp(argv[1], "roundtrip_binding")) { roundtrip_binding(); }
     else if (!strcmp(argv[1], "status_reports")) { status_reports(); }
     else if (!strcmp(argv[1], "init_recovery")) { init_recovery(); }
     else if (!strcmp(argv[1], "latency")) { latency(1); }

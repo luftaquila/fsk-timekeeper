@@ -146,8 +146,8 @@ static void build_nonce(uint8_t nonce[24], uint8_t type, uint32_t node_id,
     memcpy(&nonce[14], &ctr, 4);
 }
 
-int sec_seal_key(const uint8_t key[32], uint8_t *out, int out_cap, uint8_t type, uint32_t node_id,
-             const void *payload, int payload_len)
+static int seal_key(const uint8_t key[32], uint8_t *out, int out_cap, uint8_t type, uint32_t node_id,
+                    const void *payload, int payload_len, int padded_wire)
 {
     if (!g_provisioned || !g_have_boot_id) { return -4; }
     int has_node = SEC_TYPE_HAS_NODE(type);
@@ -155,6 +155,11 @@ int sec_seal_key(const uint8_t key[32], uint8_t *out, int out_cap, uint8_t type,
     int packed_len = protocol_payload_size(type, payload_len);
     if (packed_len < 0 || packed_len > WIRE_MAX - hdr - SEC_MAC_LEN) { return -1; }
     int wire = hdr + packed_len + SEC_MAC_LEN;
+    if (padded_wire) {
+        if (type != PKT_TYPE_UPLINK || (padded_wire != WIRE_UPLINK && padded_wire != WIRE_UPLINK_ADMISSION)) { return -1; }
+        wire = padded_wire;
+    }
+    int sealed_len = wire - hdr - SEC_MAC_LEN;
     if (out_cap < wire) { return -1; }
 
     /* The 24-bit wire counter never wraps: refuse instead of reusing a nonce. */
@@ -164,6 +169,7 @@ int sec_seal_key(const uint8_t key[32], uint8_t *out, int out_cap, uint8_t type,
         crypto_wipe(plain, sizeof(plain));
         return -1;
     }
+    memset(plain + packed_len, 0, (size_t)(sealed_len - packed_len));
     uint32_t ctr = ++g_tx_ctr;
 
     /* Downlink packets are always from the master: both sides feed NODE_MASTER
@@ -184,12 +190,25 @@ int sec_seal_key(const uint8_t key[32], uint8_t *out, int out_cap, uint8_t type,
     build_nonce(nonce, type, nid, g_boot_id, ctr);
 
     crypto_aead_lock(out + hdr,               /* ciphertext */
-                     out + hdr + packed_len,  /* mac (16) */
+                     out + hdr + sealed_len,  /* mac (16) */
                      key, nonce,
                      out, (size_t)hdr,
-                     plain, (size_t)packed_len);
+                     plain, (size_t)sealed_len);
     crypto_wipe(plain, sizeof(plain));
     return wire;
+}
+
+int sec_seal_key(const uint8_t key[32], uint8_t *out, int out_cap, uint8_t type, uint32_t node_id,
+                 const void *payload, int payload_len)
+{
+    return seal_key(key, out, out_cap, type, node_id, payload, payload_len, 0);
+}
+
+int sec_seal_uplink(const uint8_t key[32], uint8_t *out, int out_cap, uint32_t node_id,
+                    const void *payload, int payload_len, int wire_len)
+{
+    if (wire_len != WIRE_UPLINK && wire_len != WIRE_UPLINK_ADMISSION) { return -1; }
+    return seal_key(key, out, out_cap, PKT_TYPE_UPLINK, node_id, payload, payload_len, wire_len);
 }
 
 int sec_seal(uint8_t *out, int out_cap, uint8_t type, uint32_t node_id,
@@ -245,12 +264,16 @@ int sec_unseal_key(const uint8_t key[32], const uint8_t *in, int in_len, sec_met
     int packed_len = protocol_payload_size(SEC_VT_TYPE(vt), payload_len);
     if (packed_len < 0 || packed_len > WIRE_MAX - hdr - SEC_MAC_LEN) { return -1; }
     int wire = hdr + packed_len + SEC_MAC_LEN;
-    if (in_len != wire) { return -1; }
+    if (in_len != wire && !(SEC_VT_TYPE(vt) == PKT_TYPE_UPLINK && in_len == WIRE_UPLINK_ADMISSION)) { return -1; }
+    int sealed_len = in_len - hdr - SEC_MAC_LEN;
 
     uint8_t plain[WIRE_MAX];
     if (!sec_wire_counter(in)) { return -1; }
     sec_meta_t decoded_meta;
-    int r = open_sealed(key, in, hdr, has_node, packed_len, plain, &decoded_meta);
+    int r = open_sealed(key, in, hdr, has_node, sealed_len, plain, &decoded_meta);
+    if (r == 0) {
+        for (int i = packed_len; i < sealed_len; i++) { if (plain[i]) { r = -1; break; } }
+    }
     if (r == 0) { r = protocol_decode(out_payload, payload_len, SEC_VT_TYPE(vt), plain, packed_len); }
     if (r == 0) { *meta = decoded_meta; }
     crypto_wipe(plain, sizeof(plain));

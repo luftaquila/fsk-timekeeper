@@ -28,13 +28,20 @@ void sync_clock_lost(sync_t *s)
     s->hist_n = 0;
     s->hist_i = 0;
     s->skew_valid = 0;
+    s->skew_num = 0;
+    s->skew_den = 0;
 }
 
 static void skew_update(sync_t *s)
 {
     if (s->hist_n < 2u) { return; }
     unsigned newest = (s->hist_i + SYNC_HIST - 1u) % SYNC_HIST;
-    unsigned oldest = (s->hist_n < SYNC_HIST) ? 0u : s->hist_i;
+    unsigned oldest = newest, matching = 0;
+    for (unsigned n = 0; n < s->hist_n; n++) {
+        unsigned i = (newest + SYNC_HIST - n) % SYNC_HIST;
+        if (s->air_hist[i] == s->air_hist[newest]) { oldest = i; matching++; }
+    }
+    if (matching < 2u) { return; }
     int64_t doff = s->off_hist[newest] - s->off_hist[oldest];
     int64_t dl = (int64_t)(s->lrx_hist[newest] - s->lrx_hist[oldest]);
     if (dl < (int64_t)SKEW_MIN_DL_TICKS) { return; }
@@ -42,21 +49,26 @@ static void skew_update(sync_t *s)
     /* Report the real value (an RC fallback reads ~10000 ppm); trust it for
      * stamping only when it is a plausible crystal drift. */
     s->skew_ppm = (int32_t)(cand > 32767 ? 32767 : (cand < -32768 ? -32768 : cand));
-    s->skew_valid = (s->hist_n >= SKEW_MIN_SAMPLES) && (cand <= SKEW_CLAMP_PPM) && (cand >= -SKEW_CLAMP_PPM);
+    if (cand > SKEW_CLAMP_PPM || cand < -SKEW_CLAMP_PPM) { s->skew_valid = 0; return; }
+    /* A format transition does not change the crystal. Retain the last valid
+     * rate until enough samples of the new length replace it. Clock loss clears it. */
+    if (matching >= SKEW_MIN_SAMPLES) {
+        s->skew_num = doff;
+        s->skew_den = (uint64_t)dl;
+        s->skew_valid = 1;
+    }
 }
 
-int sync_beacon(sync_t *s, uint8_t seq, uint64_t l_rx, int l_rx_ok, int m_tx_ok, uint64_t m_tx_prev)
+int sync_beacon(sync_t *s, uint8_t seq, uint64_t l_rx, int l_rx_ok, int m_tx_ok, uint64_t m_tx_prev,
+                uint8_t air_class)
 {
     int anchored = 0;
     if (s->have_prev) {
         if (seq == (uint8_t)(s->prev_seq + 1u)) {
             if (s->prev_lrx_ok && m_tx_ok) {
-                s->before = s->cur;
-                s->cur.have = 1;
-                s->cur.local = s->prev_lrx;
-                s->cur.off = m_tx_prev + T_AIR_REF_TICKS - s->prev_lrx;
-                s->off_hist[s->hist_i] = (int64_t)s->cur.off;
+                s->off_hist[s->hist_i] = (int64_t)(m_tx_prev - s->prev_lrx);
                 s->lrx_hist[s->hist_i] = s->prev_lrx;
+                s->air_hist[s->hist_i] = s->prev_air_class;
                 s->hist_i = (s->hist_i + 1u) % SYNC_HIST;
                 if (s->hist_n < SYNC_HIST) { s->hist_n++; }
                 skew_update(s);
@@ -73,7 +85,25 @@ int sync_beacon(sync_t *s, uint8_t seq, uint64_t l_rx, int l_rx_ok, int m_tx_ok,
     s->prev_seq = seq;
     s->prev_lrx = l_rx;
     s->prev_lrx_ok = l_rx_ok;
+    s->prev_air_class = air_class;
     return anchored;
+}
+
+int sync_roundtrip(sync_t *s, uint64_t m_tx, uint64_t l_rx, uint64_t l_tx, uint64_t m_rx)
+{
+    if (l_tx <= l_rx || m_rx <= m_tx) { return 0; }
+    uint64_t dl = l_tx - l_rx, dm = m_rx - m_tx;
+    uint64_t max_span = (uint64_t)(SLOT_OFFSET_MS + SLOT_COUNT * SLOT_LEN_MS) * TICKS_PER_MS;
+    if (dl > max_span || dm > max_span) { return 0; }
+    /* Sanity bound from the allowed crystal rate and slot guard, not a delay
+     * calibration. Both clocks must advance over the same sub-second exchange. */
+    uint64_t rate_error = dl * SKEW_CLAMP_PPM / 1000000u + ANCHOR_JITTER_TICKS;
+    if (dm + rate_error < dl || dm > dl + rate_error + 2u * SLOT_GUARD_MS * TICKS_PER_MS) { return 0; }
+    uint64_t local = l_rx + dl / 2u;
+    if (s->cur.have && local <= s->cur.local) { return 0; }
+    s->before = s->cur;
+    s->cur = (sync_anchor_t){.have = 1, .local = local, .off = m_tx + dm / 2u - local};
+    return 1;
 }
 
 uint16_t sync_age_ms(const sync_t *s, uint64_t at)
@@ -98,9 +128,9 @@ uint64_t sync_to_master(const sync_t *s, uint64_t local)
     uint64_t mt = s->cur.off + local;
     /* Correct the drift since the anchor only forward of it, within the valid
      * sync window, and only with a validated skew (|skew| <= SKEW_CLAMP_PPM). */
-    if (s->skew_valid && local >= s->cur.local &&
+    if (s->skew_valid && s->skew_den && local >= s->cur.local &&
         (local - s->cur.local) <= (uint64_t)SKEW_MAX_EXTRAP_MS * TICKS_PER_MS) {
-        int64_t corr = (int64_t)(local - s->cur.local) * s->skew_ppm / 1000000;
+        int64_t corr = (int64_t)(local - s->cur.local) * s->skew_num / (int64_t)s->skew_den;
         if (corr >= 0) { mt += (uint64_t)corr; }
         else           { mt -= (uint64_t)(-corr); }
     }

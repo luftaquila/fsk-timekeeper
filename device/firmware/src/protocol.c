@@ -67,6 +67,7 @@ int protocol_encode(uint8_t *out, int cap, uint8_t type, const void *model, int 
         out[0] = b->seq; out[1] = b->flags;
         put48(out + 2, b->m_tx_prev); out[8] = b->cp_req;
         memcpy(out + 9, b->slot, sizeof(b->slot));
+        put48(out + 59, b->m_rx_prev); out[65] = b->rx_entry;
         if (n == PL_ADMISSION) {
             const admission_beacon_t *a = model;
             uint32_t packed = 0;
@@ -80,7 +81,7 @@ int protocol_encode(uint8_t *out, int cap, uint8_t type, const void *model, int 
         }
     } else if (type == PKT_TYPE_UPLINK) {
         const uplink_pl_t *u = model;
-        if (u->kind > UL_KIND_CHECKPOINT || (u->flags & ~UL_PACK_FLAGS)) { return -1; }
+        if (u->kind > UL_KIND_CHECKPOINT || (u->flags & ~UL_PACK_FLAGS) || u->beacon_ctr > 0xffffffu) { return -1; }
         /* Flag bits 4/5 are unused; store the two-bit kind there. */
         out[0] = (uint8_t)(u->flags | (u->kind << 4));
         memcpy(out + 1, &u->ev_seq, 2);
@@ -94,6 +95,7 @@ int protocol_encode(uint8_t *out, int cap, uint8_t type, const void *model, int 
             memset(out + 33, 0, 7); /* unused tail of the fixed-size union */
         }
         memcpy(out + 40, &u->diag, sizeof(u->diag));
+        for (unsigned i = 0; i < 3; i++) { out[59 + i] = (uint8_t)(u->beacon_ctr >> (8u * i)); }
     } else {
         memcpy(out, model, (size_t)n);
     }
@@ -109,6 +111,7 @@ int protocol_decode(void *model, int model_len, uint8_t type, const uint8_t *in,
         a.base.seq = in[0]; a.base.flags = in[1];
         a.base.m_tx_prev = get48(in + 2); a.base.cp_req = in[8];
         memcpy(a.base.slot, in + 9, sizeof(a.base.slot));
+        a.base.m_rx_prev = get48(in + 59); a.base.rx_entry = in[65];
         if (n == PL_ADMISSION) {
             uint32_t packed = 0;
             for (unsigned i = 0; i < 4; i++) { packed |= (uint32_t)in[PL_BEACON + i] << (8u * i); }
@@ -137,6 +140,7 @@ int protocol_decode(void *model, int model_len, uint8_t type, const uint8_t *in,
             u.u.loss.end_tick = get48(in + 27);
         }
         memcpy(&u.diag, in + 40, sizeof(u.diag));
+        for (unsigned i = 0; i < 3; i++) { u.beacon_ctr |= (uint32_t)in[59 + i] << (8u * i); }
         memcpy(model, &u, sizeof(u));
     } else {
         memcpy(model, in, (size_t)n);

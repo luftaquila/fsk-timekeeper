@@ -30,7 +30,7 @@ static void packets(void)
     u.u.edges.count = 1;
     uint8_t wire[WIRE_MAX], second[WIRE_MAX];
     int n = sec_seal_key(KEY, wire, sizeof wire, PKT_TYPE_UPLINK, 0x123443b0u, &u, sizeof u);
-    assert(n == WIRE_UPLINK && n == 91);
+    assert(n == WIRE_UPLINK && n == 94);
     uplink_pl_t out;
     sec_meta_t meta;
     assert(sec_unseal_key(KEY, wire, n, &meta, &out, sizeof out) == 0);
@@ -59,7 +59,7 @@ static void packets(void)
     assert(sec_unseal_key(KEY, wire, n, &meta, &out, INT_MAX) == -1);
     beacon_pl_t b = {0}, bout;
     n = sec_seal(wire, sizeof wire, PKT_TYPE_BEACON, 0, &b, sizeof b);
-    assert(n == 87 && sec_unseal(wire, n, &meta, &bout, sizeof bout) == 0);
+    assert(n == 94 && sec_unseal(wire, n, &meta, &bout, sizeof bout) == 0);
     assert(sec_authentic_any_version(wire, n));
     g_tx_ctr = 0xfffffeu;
     assert(sec_seal(wire, sizeof wire, PKT_TYPE_BEACON, 0, &b, sizeof b) == n);
@@ -103,22 +103,23 @@ static void legacy_authentication(void)
     beacon_pl_t out; sec_meta_t meta;
     assert(sec_unseal(wire, sizeof wire, &meta, &out, sizeof out) != 0);
     wire[59] ^= 1; assert(!sec_authentic_any_version(wire, sizeof wire));
-    /* The deployed v15 control keys include their version. They remain readable
-     * for mismatch diagnostics, never as live v16 packets. */
+    /* Old control keys include their version. Diagnose v15, compact-only v16,
+     * and the temporary two-way v16 build, but never accept them as v17. */
     const uint8_t types[] = {PKT_TYPE_BEACON, PKT_TYPE_JOIN, PKT_TYPE_OFFER};
-    const int lengths[] = {81, 24, 55};
-    for (unsigned i = 0; i < 3; i++) {
-        uint8_t old[WIRE_MAX] = {SEC_VT(15, types[i])}, plain[81] = {0}, key[32];
+    const uint8_t versions[] = {15, 16, 16};
+    const int lengths[][3] = {{81, 24, 55}, {59, 24, 51}, {66, 24, 51}};
+    for (unsigned v = 0; v < 3; v++) for (unsigned i = 0; i < 3; i++) {
+        uint8_t old[WIRE_MAX] = {SEC_VT(versions[v], types[i])}, plain[81] = {0}, key[32];
         uint64_t boot64 = UINT64_C(0x123456789abcdef0);
         uint32_t node = types[i] == PKT_TYPE_JOIN ? 0xabcd1234u : 0;
-        int hdr = node ? 16 : 12, size = hdr + lengths[i] + 16;
+        int hdr = node ? 16 : 12, size = hdr + lengths[v][i] + 16;
         memcpy(old + 1, &boot64, 8); old[9] = 1;
         if (node) { memcpy(old + 12, &node, 4); }
-        uint8_t context[16] = {'F','S','K',15,'C',types[i],0,0};
+        uint8_t context[16] = {'F','S','K',versions[v],'C',types[i],0,0};
         if (types[i] == PKT_TYPE_BEACON) { memcpy(context + 8, &boot64, 8); }
         crypto_blake2b_keyed(key, 32, KEY, sizeof(KEY), context, sizeof(context));
         build_nonce(nonce, types[i], node, boot64, 1);
-        crypto_aead_lock(old + hdr, old + hdr + lengths[i], key, nonce, old, (size_t)hdr, plain, (size_t)lengths[i]);
+        crypto_aead_lock(old + hdr, old + hdr + lengths[v][i], key, nonce, old, (size_t)hdr, plain, (size_t)lengths[v][i]);
         assert(sec_authentic_any_version(old, size));
         assert(sec_unseal(old, size, &meta, &out, sizeof(out)) == -4);
         old[size - 1] ^= 1; assert(!sec_authentic_any_version(old, size));
@@ -131,7 +132,7 @@ static void connection_keys(void)
     sec_init();
     uint8_t ns[16] = {1}, nm[16] = {2}; sec_link_keys_t k, changed;
     assert(sec_link_keys(&k, 123, 456, 789, ns, nm, 1));
-    static const uint8_t expected[32] = {0x6a, 0x2f, 0x29, 0xe0, 0xfd, 0xa5, 0x2d, 0x2e, 0x52, 0xbd, 0x79, 0x30, 0x69, 0x79, 0x99, 0xe2, 0x03, 0xe0, 0xf3, 0xdb, 0x17, 0x66, 0xa8, 0x29, 0x4e, 0x08, 0x57, 0xfa, 0x78, 0x72, 0xc3, 0x00};
+    static const uint8_t expected[32] = {0x94, 0x45, 0x2b, 0x82, 0x00, 0xc0, 0xa5, 0xe4, 0x37, 0x88, 0x27, 0x63, 0x26, 0xbd, 0x04, 0x79, 0xf7, 0x1b, 0xd0, 0x07, 0xb0, 0x6b, 0x58, 0x7b, 0xfc, 0xf2, 0xa7, 0xce, 0x9c, 0x4b, 0xec, 0x88};
     assert(!memcmp(k.data, expected, 32)); /* independent Python hashlib vector */
     assert(memcmp(k.data, k.confirm, 32));
     for (unsigned field = 0; field < 6; field++) {
@@ -200,6 +201,37 @@ static void compact_payload_validation(void)
     puts("PASS secure_compact_payload_validation");
 }
 
+static void authenticated_padding(void)
+{
+    sec_init();
+    uplink_pl_t u = {.kind = UL_KIND_SYNC, .beacon_ctr = 0xffffff}, out;
+    uint8_t wire[WIRE_MAX], plain[WIRE_UPLINK_ADMISSION - SEC_HDR_UL - SEC_MAC_LEN], nonce[24];
+    sec_meta_t meta;
+    int n = sec_seal_uplink(KEY, wire, sizeof(wire), 123, &u, sizeof(u), WIRE_ADMISSION);
+    assert(n == WIRE_ADMISSION && sec_unseal_key(KEY, wire, n, &meta, &out, sizeof(out)) == 0);
+    assert(!memcmp(&u, &out, sizeof(u)));
+    uplink_pl_t saved = out;
+    for (int i = 0; i < n; i++) {
+        wire[i] ^= 1;
+        assert(sec_unseal_key(KEY, wire, n, &meta, &out, sizeof(out)) < 0);
+        assert(!memcmp(&out, &saved, sizeof(out)) && meta.ctr == 1);
+        wire[i] ^= 1;
+    }
+    assert(protocol_encode(plain, sizeof(plain), PKT_TYPE_UPLINK, &u, sizeof(u)) == PL_UPLINK);
+    memset(plain + PL_UPLINK, 0, sizeof(plain) - PL_UPLINK);
+    plain[PL_UPLINK] = 1; /* valid tag, noncanonical padding must still fail */
+    build_nonce(nonce, PKT_TYPE_UPLINK, 123, g_boot_id, 1);
+    crypto_aead_lock(wire + SEC_HDR_UL, wire + n - SEC_MAC_LEN, KEY, nonce,
+                     wire, SEC_HDR_UL, plain, sizeof(plain));
+    assert(sec_unseal_key(KEY, wire, n, &meta, &out, sizeof(out)) == -1);
+    assert(!memcmp(&out, &saved, sizeof(out)) && meta.ctr == 1);
+    uint32_t ctr = g_tx_ctr;
+    assert(sec_seal_uplink(KEY, wire, sizeof(wire), 123, &u, sizeof(u), WIRE_ADMISSION - 1) == -1);
+    assert(sec_seal_uplink(KEY, wire, WIRE_ADMISSION - 1, 123, &u, sizeof(u), WIRE_ADMISSION) == -1);
+    assert(g_tx_ctr == ctr);
+    puts("PASS secure_authenticated_equal_length_padding");
+}
+
 static void challenge_pool(void)
 {
     sec_init(); uint8_t nonce[16], last[16] = {0};
@@ -218,4 +250,4 @@ static void challenge_pool(void)
     puts("PASS secure_nonblocking_challenge_pool");
 }
 
-int main(void) { packets(); rng_recovery(); legacy_authentication(); connection_keys(); compact_payload_validation(); challenge_pool(); return 0; }
+int main(void) { packets(); rng_recovery(); legacy_authentication(); connection_keys(); compact_payload_validation(); authenticated_padding(); challenge_pool(); return 0; }

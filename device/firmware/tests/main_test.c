@@ -125,7 +125,7 @@ static void radio_settings(void)
     command(PU_CMD_RADIO);
     assert(cfg_writes == 1 && rx_starts == 1);
     assert(radio_cfg.freq_khz == 922100u && radio_cfg.power_dbm == -3 && radio_cfg.lbt == 0u);
-    assert(strstr(output, " M 16 922100 7 250.00 16000 0 -3 0\n") && strstr(output, "A R OK\n"));
+    assert(strstr(output, " M 17 922100 7 250.00 16000 0 -3 0\n") && strstr(output, "A R OK\n"));
     cfg_fail = 1;
     assert(feed("R 930000 22 1\n") == PU_CMD_RADIO);
     command(PU_CMD_RADIO);

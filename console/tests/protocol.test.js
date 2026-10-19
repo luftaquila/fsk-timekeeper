@@ -37,13 +37,14 @@ describe("parseLine", () => {
     }
   });
   it("parses I v7 and checks the contract", () => {
-    const i = parseLine("I FSK-WL 7 1.0.0 0123456789ABCDEF M 16 922900 7 250.00 16000 4 -9 0");
-    assert.deepEqual(i, { type: "I", product: "FSK-WL", usbProto: 7, fw: "1.0.0", devid: "0123456789ABCDEF", role: "M", radioProto: 16, freqKhz: 922900, sf: 7, bw: 250, ticksPerMs: 16000, resetReason: 4, powerDbm: -9, lbt: 0, v1: false });
+    const i = parseLine("I FSK-WL 7 1.0.0 0123456789ABCDEF M 17 922900 7 250.00 16000 4 -9 0");
+    assert.deepEqual(i, { type: "I", product: "FSK-WL", usbProto: 7, fw: "1.0.0", devid: "0123456789ABCDEF", role: "M", radioProto: 17, freqKhz: 922900, sf: 7, bw: 250, ticksPerMs: 16000, resetReason: 4, powerDbm: -9, lbt: 0, v1: false });
     assert.deepEqual(radioOf(i), { freqKhz: 922900, powerDbm: -9, lbt: 0 });
     assert.equal(radioOf(parseLine("I FSK-WL 3 1.0.0 0123456789ABCDEF M 15 921.30 7 250.00 16000 4")), null);
     assert.deepEqual(contractOf(i), { ok: true, reason: null });
     assert.equal(contractOf({ ...i, usbProto: 3 }).reason, CONTRACT_VERSION);
     assert.equal(contractOf({ ...i, role: "S" }).reason, CONTRACT_SENSOR_ROLE);
+    assert.equal(contractOf({ ...i, radioProto: 16 }).reason, CONTRACT_VERSION);
     assert.equal(contractOf({ ...i, radioProto: 15 }).reason, CONTRACT_VERSION);
     assert.equal(contractOf({ ...i, radioProto: 11 }).reason, CONTRACT_VERSION);
     assert.equal(contractOf({ ...i, radioProto: 12, usbProto: 2 }).reason, CONTRACT_VERSION);

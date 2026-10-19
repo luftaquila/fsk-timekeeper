@@ -28,7 +28,7 @@ import { USB_PRODUCT } from "./constants";
 import { MASTER_TICKS_PER_MS } from "./event-timing";
 
 export const NODE_MASTER = "0";
-export const RADIO_PROTO_VERSION = 16;
+export const RADIO_PROTO_VERSION = 17;
 export const USB_PROTO_VERSION = 7;
 
 // What the Ra-01SH is rated for (firmware config.h); the board stores what R sends.

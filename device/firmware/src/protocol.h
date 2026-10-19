@@ -1,7 +1,7 @@
-/* Sealed LoRa packet formats, radio protocol v16 (DESIGN §2.6, §2.8, §2.11).
+/* Sealed LoRa packet formats, radio protocol v17 (DESIGN §2.6, §2.8, §2.11).
  *
  * Wire = [cleartext header | ciphertext payload | 16-byte Poly1305 tag]
- * (secure.h). The type byte carries the version in its high nibble, so every
+ * (secure.h). The first byte carries both version and type, so every
  * packet is version-checked before decryption. The header carries the sender's
  * node_id only on uplinks; the master is the implicit sender of beacons.
  *
@@ -15,20 +15,23 @@
 #include <stdint.h>
 #include "radio_health.h"
 
-/* Low nibble of the type byte. */
+/* Low three bits of the first byte. */
 #define PKT_TYPE_BEACON   0x01u
 #define PKT_TYPE_UPLINK   0x02u
 #define PKT_TYPE_JOIN     0x03u
 #define PKT_TYPE_OFFER    0x04u
 #define PKT_TYPE_CONFIRM  0x05u
 
-/* v16: 32-bit link ids, 48-bit ticks, packed schedules and uplink kind/flags.
- * Version nibble 0 represents v16; deployed v1..v15 keep their old encoding. */
-#define PROTO_VER 16u
+/* v16 compacted fields; v17 adds authenticated equal-length two-way samples.
+ * Preserve all v1..v16 byte encodings (high nibble 0 means v16). Previously
+ * unused type bit 3 extends the version to v17..v32 without another wire byte.
+ * Only packet types 1..5 have ever been assigned. */
+#define PROTO_VER 17u
 
-#define SEC_VT(ver, type) ((uint8_t)(((uint8_t)(ver) << 4) | ((uint8_t)(type) & 0x0Fu)))
-#define SEC_VT_TYPE(b)    ((uint8_t)((b) & 0x0Fu))
-#define SEC_VT_VER(b)     ((uint8_t)(((((uint8_t)(b) >> 4) + 15u) & 0x0fu) + 1u))
+#define SEC_VT(ver, type) ((uint8_t)(((uint8_t)(ver) << 4) | \
+                         ((((uint8_t)(ver) - 1u) & 0x10u) >> 1) | ((uint8_t)(type) & 0x07u)))
+#define SEC_VT_TYPE(b)    ((uint8_t)((b) & 0x07u))
+#define SEC_VT_VER(b)     ((uint8_t)(((((uint8_t)(b) >> 4) + 15u) & 0x0fu) + 1u + (((b) & 0x08u) << 1)))
 
 #define SEC_TYPE_HAS_NODE(t) ((t) == PKT_TYPE_UPLINK || (t) == PKT_TYPE_JOIN || (t) == PKT_TYPE_CONFIRM)
 
@@ -48,6 +51,7 @@ typedef struct __attribute__((packed)) {
 
 #define BEACON_TX_PREV_VALID 0x01u /* m_tx_prev is the TxDone of beacon seq-1 */
 #define BEACON_ADMISSION     0x02u
+#define BEACON_RX_PREV_VALID 0x04u /* m_rx_prev is a matching uplink of beacon seq-1 */
 
 typedef struct __attribute__((packed)) {
     uint8_t  seq;        /* beacon sequence (wraps at 256) */
@@ -55,6 +59,8 @@ typedef struct __attribute__((packed)) {
     uint64_t m_tx_prev;  /* master TxDone tick of beacon seq-1 */
     uint8_t  cp_req;     /* checkpoint request id, 0 = none */
     beacon_slot_t slot[MAX_NODES];
+    uint64_t m_rx_prev;  /* master's RxDone of the selected sensor's previous-frame uplink */
+    uint8_t  rx_entry;   /* registry entry of that sensor; valid only with RX_PREV_VALID */
 } beacon_pl_t;
 
 /* Six explicit slot roles while admission is open. Low three bits name the
@@ -90,6 +96,7 @@ typedef struct __attribute__((packed)) {
 
 /* ---- Uplink (sensor -> master) ------------------------------------------- */
 
+#define UL_KIND_SYNC       0u /* diagnostics/two-way probe only; never advances the evidence ACK */
 #define UL_KIND_EDGES      1u /* capture_seq..capture_seq+count-1 at tick, tick+dt[0], ... */
 #define UL_KIND_LOSS       2u /* capture_seq..end_seq lost between tick and end_tick */
 #define UL_KIND_CHECKPOINT 3u /* through tick, the last capture is capture_seq */
@@ -138,6 +145,7 @@ typedef struct __attribute__((packed)) {
         } loss;
     } u;
     ul_diag_t diag;
+    uint32_t beacon_ctr; /* current beacon's authenticated 24-bit counter; refreshed on retries */
 } uplink_pl_t;
 
 /* ---- Wire sizes ---------------------------------------------------------- */
@@ -147,9 +155,9 @@ typedef struct __attribute__((packed)) {
  * cover 203.6 days; supported uptime is at most one day, with no epoch extension.
  * Random boot ids are NOT ticks and retain all 64 bits. */
 #define PROTO_TICK_MAX UINT64_C(0xffffffffffff)
-#define PL_BEACON     59
-#define PL_ADMISSION  64
-#define PL_UPLINK     59
+#define PL_BEACON     66
+#define PL_ADMISSION  71
+#define PL_UPLINK     62
 #define PL_JOIN       24
 #define PL_OFFER      51
 #define PL_CONFIRM    24
@@ -172,18 +180,21 @@ int protocol_decode(void *model, int model_len, uint8_t type, const uint8_t *in,
 #define WIRE_BEACON    SEC_WIRE_LEN(SEC_HDR_DL, PL_BEACON)
 #define WIRE_UPLINK    SEC_WIRE_LEN(SEC_HDR_UL, PL_UPLINK)
 #define WIRE_ADMISSION SEC_WIRE_LEN(SEC_HDR_DL, PL_ADMISSION)
+/* Admission uplinks append five authenticated zero bytes, matching that beacon. */
+#define WIRE_UPLINK_ADMISSION WIRE_ADMISSION
 #define WIRE_JOIN      SEC_WIRE_LEN(SEC_HDR_UL, PL_JOIN)
 #define WIRE_OFFER     SEC_WIRE_LEN(SEC_HDR_DL, PL_OFFER)
 #define WIRE_CONFIRM   SEC_WIRE_LEN(SEC_HDR_UL, PL_CONFIRM)
 #define WIRE_MAX      128 /* RX buffer size */
 
 static_assert(sizeof(radio_history_t) == 17, "checkpoint history layout");
-static_assert(PROTO_VER >= 1 && PROTO_VER <= 16, "version nibble exhausted");
-static_assert(sizeof(beacon_slot_t) == 10 && sizeof(beacon_pl_t) == 61, "beacon model layout");
-static_assert(sizeof(uplink_pl_t) == 62, "uplink payload layout");
+static_assert(PROTO_VER >= 1 && PROTO_VER <= 32, "version field exhausted");
+static_assert(PKT_TYPE_CONFIRM <= 7, "packet types must fit three bits");
+static_assert(sizeof(beacon_slot_t) == 10 && sizeof(beacon_pl_t) == 70, "beacon model layout");
+static_assert(sizeof(uplink_pl_t) == 66, "uplink model layout");
 static_assert(sizeof(join_pl_t) == PL_JOIN && sizeof(offer_pl_t) == PL_OFFER && sizeof(confirm_pl_t) == PL_CONFIRM,
               "unpacked admission payload layout");
-static_assert(WIRE_BEACON == 87 && WIRE_UPLINK == 91 && WIRE_ADMISSION == 92 &&
+static_assert(WIRE_BEACON == 94 && WIRE_UPLINK == WIRE_BEACON && WIRE_ADMISSION == 99 &&
               WIRE_JOIN == 56 && WIRE_OFFER == 79 && WIRE_CONFIRM == 56,
               "admission airtime contract");
 static_assert(WIRE_UPLINK <= WIRE_MAX && WIRE_BEACON <= WIRE_MAX, "packets must fit the RX buffer");
