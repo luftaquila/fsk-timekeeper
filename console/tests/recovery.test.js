@@ -119,7 +119,7 @@ describe("durable run recovery", () => {
 
   it("recovers a deadline that expired while closed using nominal timing without PPS", async () => {
     const { history } = await boot();
-    const run = { schema: 3, usbProto: 7, radioProto: 15, runId: "expired", mode: "sprint", verification: "verified",
+    const run = { schema: 3, usbProto: 7, radioProto: 16, runId: "expired", mode: "sprint", verification: "verified",
       classification: null, armed: false, closed: true, nodes: {}, cursor: 0, crossingTicks: [],
       startTick: "16000000", finishTick: "32000000", calibration: null, durationNs: null,
       finalizeAt: Date.now() - 5000, calibrationEdges: [], startedAt: 1, durable: true };

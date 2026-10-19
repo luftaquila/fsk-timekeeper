@@ -64,7 +64,7 @@ static void join_begin(mac_sensor_t *s, uint64_t boot)
     memcpy(s->join.ns, nonce, 16);
 }
 
-static int data_entry(const beacon_pl_t *b, const uint8_t schedule[SLOT_COUNT], uint32_t id, uint64_t link)
+static int data_entry(const beacon_pl_t *b, const uint8_t schedule[SLOT_COUNT], uint32_t id, uint32_t link)
 {
     for (unsigned j = 0; j < SLOT_COUNT; j++) {
         unsigned i = SLOT_ENTRY(schedule[j]);

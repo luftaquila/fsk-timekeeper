@@ -15,7 +15,7 @@ describe("firmware-formatted lines", () => {
     assert.equal(m.usbProto, 7);
     assert.deepEqual(radioOf(m), { freqKhz: 922900, powerDbm: 12, lbt: 1 });
     assert.deepEqual(radioOf(parseLine(LINES[1])), { freqKhz: 803000, powerDbm: -9, lbt: 0 });
-    assert.equal(m.radioProto, 15);
+    assert.equal(m.radioProto, 16);
     assert.equal(m.devid, "0123ABCD89EF4567");
     assert.equal(m.role, "M");
     assert.equal(m.ticksPerMs, 16000);

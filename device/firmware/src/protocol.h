@@ -1,7 +1,7 @@
-/* Sealed LoRa packet formats, radio protocol v15 (DESIGN §2.6, §2.8, §2.11).
+/* Sealed LoRa packet formats, radio protocol v16 (DESIGN §2.6, §2.8, §2.11).
  *
  * Wire = [cleartext header | ciphertext payload | 16-byte Poly1305 tag]
- * (secure.h). The type byte carries PROTO_VER in its high nibble, so every
+ * (secure.h). The type byte carries the version in its high nibble, so every
  * packet is version-checked before decryption. The header carries the sender's
  * node_id only on uplinks; the master is the implicit sender of beacons.
  *
@@ -22,12 +22,13 @@
 #define PKT_TYPE_OFFER    0x04u
 #define PKT_TYPE_CONFIRM  0x05u
 
-/* v15: mutual admission, per-link keys and explicit admission schedules. */
-#define PROTO_VER 15u
+/* v16: 32-bit link ids, 48-bit ticks, packed schedules and uplink kind/flags.
+ * Version nibble 0 represents v16; deployed v1..v15 keep their old encoding. */
+#define PROTO_VER 16u
 
 #define SEC_VT(ver, type) ((uint8_t)(((uint8_t)(ver) << 4) | ((uint8_t)(type) & 0x0Fu)))
 #define SEC_VT_TYPE(b)    ((uint8_t)((b) & 0x0Fu))
-#define SEC_VT_VER(b)     ((uint8_t)((b) >> 4))
+#define SEC_VT_VER(b)     ((uint8_t)(((((uint8_t)(b) >> 4) + 15u) & 0x0fu) + 1u))
 
 #define SEC_TYPE_HAS_NODE(t) ((t) == PKT_TYPE_UPLINK || (t) == PKT_TYPE_JOIN || (t) == PKT_TYPE_CONFIRM)
 
@@ -42,7 +43,7 @@
 typedef struct __attribute__((packed)) {
     uint32_t node_id;
     uint16_t ack_seq;
-    uint64_t link_id;
+    uint32_t link_id;
 } beacon_slot_t;
 
 #define BEACON_TX_PREV_VALID 0x01u /* m_tx_prev is the TxDone of beacon seq-1 */
@@ -79,7 +80,7 @@ typedef struct __attribute__((packed)) {
     uint32_t node_id;
     uint64_t sensor_boot;
     uint8_t ns[16], nm[16];
-    uint64_t link_id;
+    uint32_t link_id;
     uint8_t beacon_ctr[3];
 } offer_pl_t;
 typedef struct __attribute__((packed)) {
@@ -141,6 +142,26 @@ typedef struct __attribute__((packed)) {
 
 /* ---- Wire sizes ---------------------------------------------------------- */
 
+/* Models above retain 64-bit arithmetic for ticks and unpacked fields for MAC
+ * users. Only the authenticated radio payload is compacted. At 16 MHz, 48 bits
+ * cover 203.6 days; supported uptime is at most one day, with no epoch extension.
+ * Random boot ids are NOT ticks and retain all 64 bits. */
+#define PROTO_TICK_MAX UINT64_C(0xffffffffffff)
+#define PL_BEACON     59
+#define PL_ADMISSION  64
+#define PL_UPLINK     59
+#define PL_JOIN       24
+#define PL_OFFER      51
+#define PL_CONFIRM    24
+
+/* Return encoded payload size, or -1 for an unknown type/model size. */
+int protocol_payload_size(uint8_t type, int model_len);
+/* Encode/decode the model, with explicit lengths; -1 rejects invalid packing.
+ * Decode leaves the output untouched on failure. Encode returns bytes written;
+ * decode returns 0. Callers must authenticate before decoding received bytes. */
+int protocol_encode(uint8_t *out, int cap, uint8_t type, const void *model, int model_len);
+int protocol_decode(void *model, int model_len, uint8_t type, const uint8_t *in, int len);
+
 /* Cleartext header: vt(1) + boot_id(8) + ctr(3), plus node_id(4) on uplinks. */
 #define SEC_HDR_DL    12
 #define SEC_HDR_UL    16
@@ -148,18 +169,22 @@ typedef struct __attribute__((packed)) {
 
 #define SEC_WIRE_LEN(hdr, pl) ((hdr) + (int)(pl) + SEC_MAC_LEN)
 
-#define WIRE_BEACON   SEC_WIRE_LEN(SEC_HDR_DL, sizeof(beacon_pl_t))  /* 109 B, ~92 ms */
-#define WIRE_UPLINK   SEC_WIRE_LEN(SEC_HDR_UL, sizeof(uplink_pl_t))  /* 94 B, ~82 ms */
-#define WIRE_ADMISSION SEC_WIRE_LEN(SEC_HDR_DL, sizeof(admission_beacon_t))
-#define WIRE_JOIN      SEC_WIRE_LEN(SEC_HDR_UL, sizeof(join_pl_t))
-#define WIRE_OFFER     SEC_WIRE_LEN(SEC_HDR_DL, sizeof(offer_pl_t))
-#define WIRE_CONFIRM   SEC_WIRE_LEN(SEC_HDR_UL, sizeof(confirm_pl_t))
+#define WIRE_BEACON    SEC_WIRE_LEN(SEC_HDR_DL, PL_BEACON)
+#define WIRE_UPLINK    SEC_WIRE_LEN(SEC_HDR_UL, PL_UPLINK)
+#define WIRE_ADMISSION SEC_WIRE_LEN(SEC_HDR_DL, PL_ADMISSION)
+#define WIRE_JOIN      SEC_WIRE_LEN(SEC_HDR_UL, PL_JOIN)
+#define WIRE_OFFER     SEC_WIRE_LEN(SEC_HDR_DL, PL_OFFER)
+#define WIRE_CONFIRM   SEC_WIRE_LEN(SEC_HDR_UL, PL_CONFIRM)
 #define WIRE_MAX      128 /* RX buffer size */
 
 static_assert(sizeof(radio_history_t) == 17, "checkpoint history layout");
-static_assert(sizeof(beacon_pl_t) == 81, "beacon payload layout");
+static_assert(PROTO_VER >= 1 && PROTO_VER <= 16, "version nibble exhausted");
+static_assert(sizeof(beacon_slot_t) == 10 && sizeof(beacon_pl_t) == 61, "beacon model layout");
 static_assert(sizeof(uplink_pl_t) == 62, "uplink payload layout");
-static_assert(WIRE_ADMISSION == 116 && WIRE_JOIN == 56 && WIRE_OFFER == 83 && WIRE_CONFIRM == 56,
+static_assert(sizeof(join_pl_t) == PL_JOIN && sizeof(offer_pl_t) == PL_OFFER && sizeof(confirm_pl_t) == PL_CONFIRM,
+              "unpacked admission payload layout");
+static_assert(WIRE_BEACON == 87 && WIRE_UPLINK == 91 && WIRE_ADMISSION == 92 &&
+              WIRE_JOIN == 56 && WIRE_OFFER == 79 && WIRE_CONFIRM == 56,
               "admission airtime contract");
 static_assert(WIRE_UPLINK <= WIRE_MAX && WIRE_BEACON <= WIRE_MAX, "packets must fit the RX buffer");
 

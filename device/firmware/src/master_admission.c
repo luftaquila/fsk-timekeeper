@@ -49,7 +49,7 @@ static admission_result_t on_join(master_admission_t *a, registry_t *r, const ui
         }
     }
     if (slot < 0) { return ADMISSION_FULL; }
-    if (a->pending[slot].phase != ADMISSION_EMPTY || a->next_link == UINT64_MAX) { return ADMISSION_IGNORED; }
+    if (a->pending[slot].phase != ADMISSION_EMPTY) { return ADMISSION_IGNORED; }
     join_pending_t candidate = {0};
     if (!sec_challenge(candidate.nm)) { return ADMISSION_IGNORED; }
     candidate.id = meta.node_id; candidate.sensor_boot = meta.boot_id;

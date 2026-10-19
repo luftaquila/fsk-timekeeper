@@ -25,7 +25,8 @@ typedef enum {
 
 typedef struct {
     sensor_join_phase_t phase;
-    uint64_t master_boot, link_id;
+    uint64_t master_boot;
+    uint32_t link_id;
     uint32_t born_ms, offer_ctr, beacon_floor, seen_ctr;
     uint8_t ns[16], nm[16];
     sec_link_keys_t keys;
@@ -51,7 +52,7 @@ typedef struct {
     uint32_t last_beacon_ms;
     retry_t retry;
     uint32_t hfxo_stops;     /* board_hfxo_stops() already handled */
-    uint64_t link_id;
+    uint32_t link_id;
     uint8_t data_key[32];
     sensor_join_t join;
     admission_beacon_t hint;

@@ -17,7 +17,8 @@ typedef enum {
 
 typedef struct {
     uint32_t id, born_ms;
-    uint64_t sensor_boot, link_id;
+    uint64_t sensor_boot;
+    uint32_t link_id;
     uint8_t ns[16], nm[16];
     sec_link_keys_t keys;
     admission_phase_t phase;
@@ -30,7 +31,7 @@ typedef struct {
     join_pending_t pending[MAX_NODES];
     join_seen_t seen[8];
     uint8_t seen_count, seen_next, round_robin, quiet_frames, request_seen;
-    uint64_t next_link;
+    uint32_t next_link; /* sequential within a master epoch; at most one day of operation */
     uint32_t join_until_ms;
 } master_admission_t;
 

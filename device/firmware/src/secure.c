@@ -33,29 +33,22 @@ static int control_type(uint8_t type)
     return type == PKT_TYPE_BEACON || type == PKT_TYPE_JOIN || type == PKT_TYPE_OFFER;
 }
 
-static int payload_ok(uint8_t type, int n)
+static void control_key_version(uint8_t out[32], uint8_t type, uint64_t boot, uint8_t version)
 {
-    switch (type) {
-    case PKT_TYPE_BEACON: return n == sizeof(beacon_pl_t) || n == sizeof(admission_beacon_t);
-    case PKT_TYPE_UPLINK: return n == sizeof(uplink_pl_t);
-    case PKT_TYPE_JOIN: return n == sizeof(join_pl_t);
-    case PKT_TYPE_OFFER: return n == sizeof(offer_pl_t);
-    case PKT_TYPE_CONFIRM: return n == sizeof(confirm_pl_t);
-    default: return 0;
-    }
-}
-
-static void control_key(uint8_t out[32], uint8_t type, uint64_t boot)
-{
-    uint8_t context[16] = {'F','S','K',PROTO_VER,'C',type,0,0};
+    uint8_t context[16] = {'F','S','K',version,'C',type,0,0};
     /* Beacons are tied to the master epoch. Join/offer authenticate bootstrap
      * traffic; their payload carries the peer's fresh challenge. */
     put64(context + 8, type == PKT_TYPE_BEACON ? boot : 0);
     crypto_blake2b_keyed(out, 32, KEY, sizeof(KEY), context, sizeof(context));
 }
 
+static void control_key(uint8_t out[32], uint8_t type, uint64_t boot)
+{
+    control_key_version(out, type, boot, PROTO_VER);
+}
+
 int sec_link_keys(sec_link_keys_t *out, uint64_t master_boot, uint32_t node_id,
-                  uint64_t sensor_boot, const uint8_t ns[16], const uint8_t nm[16], uint64_t link_id)
+                  uint64_t sensor_boot, const uint8_t ns[16], const uint8_t nm[16], uint32_t link_id)
 {
     if (!g_provisioned || node_id == NODE_MASTER || link_id == 0) { return 0; }
     uint8_t context[68] = {'F','S','K',PROTO_VER,'L',0,0,0};
@@ -64,7 +57,7 @@ int sec_link_keys(sec_link_keys_t *out, uint64_t master_boot, uint32_t node_id,
     put64(context + 20, sensor_boot);
     memcpy(context + 28, ns, 16);
     memcpy(context + 44, nm, 16);
-    put64(context + 60, link_id);
+    put64(context + 60, link_id); /* retain the KDF layout, zero-extend the 32-bit link */
     context[5] = PKT_TYPE_UPLINK;
     crypto_blake2b_keyed(out->data, 32, KEY, sizeof(KEY), context, sizeof(context));
     context[5] = PKT_TYPE_CONFIRM;
@@ -159,13 +152,18 @@ int sec_seal_key(const uint8_t key[32], uint8_t *out, int out_cap, uint8_t type,
     if (!g_provisioned || !g_have_boot_id) { return -4; }
     int has_node = SEC_TYPE_HAS_NODE(type);
     int hdr = has_node ? SEC_HDR_UL : SEC_HDR_DL;
-    if (payload_len < 0 || payload_len > WIRE_MAX - hdr - SEC_MAC_LEN) { return -1; }
-    if (!payload_ok(type, payload_len)) { return -1; }
-    int wire = hdr + payload_len + SEC_MAC_LEN;
+    int packed_len = protocol_payload_size(type, payload_len);
+    if (packed_len < 0 || packed_len > WIRE_MAX - hdr - SEC_MAC_LEN) { return -1; }
+    int wire = hdr + packed_len + SEC_MAC_LEN;
     if (out_cap < wire) { return -1; }
 
     /* The 24-bit wire counter never wraps: refuse instead of reusing a nonce. */
     if (g_tx_ctr >= 0xFFFFFFu) { return -3; }
+    uint8_t plain[WIRE_MAX];
+    if (protocol_encode(plain, sizeof(plain), type, payload, payload_len) != packed_len) {
+        crypto_wipe(plain, sizeof(plain));
+        return -1;
+    }
     uint32_t ctr = ++g_tx_ctr;
 
     /* Downlink packets are always from the master: both sides feed NODE_MASTER
@@ -186,10 +184,11 @@ int sec_seal_key(const uint8_t key[32], uint8_t *out, int out_cap, uint8_t type,
     build_nonce(nonce, type, nid, g_boot_id, ctr);
 
     crypto_aead_lock(out + hdr,               /* ciphertext */
-                     out + hdr + payload_len, /* mac (16) */
+                     out + hdr + packed_len,  /* mac (16) */
                      key, nonce,
                      out, (size_t)hdr,
-                     (const uint8_t *)payload, (size_t)payload_len);
+                     plain, (size_t)packed_len);
+    crypto_wipe(plain, sizeof(plain));
     return wire;
 }
 
@@ -243,15 +242,17 @@ int sec_unseal_key(const uint8_t key[32], const uint8_t *in, int in_len, sec_met
     if (SEC_VT_VER(vt) != PROTO_VER) { return -4; }
     int has_node = SEC_TYPE_HAS_NODE(SEC_VT_TYPE(vt));
     int hdr = has_node ? SEC_HDR_UL : SEC_HDR_DL;
-    if (payload_len < 0 || payload_len > WIRE_MAX - hdr - SEC_MAC_LEN) { return -1; }
-    if (!payload_ok(SEC_VT_TYPE(vt), payload_len)) { return -1; }
-    int wire = hdr + payload_len + SEC_MAC_LEN;
+    int packed_len = protocol_payload_size(SEC_VT_TYPE(vt), payload_len);
+    if (packed_len < 0 || packed_len > WIRE_MAX - hdr - SEC_MAC_LEN) { return -1; }
+    int wire = hdr + packed_len + SEC_MAC_LEN;
     if (in_len != wire) { return -1; }
 
     uint8_t plain[WIRE_MAX];
     if (!sec_wire_counter(in)) { return -1; }
-    int r = open_sealed(key, in, hdr, has_node, payload_len, plain, meta);
-    if (r == 0) { memcpy(out_payload, plain, (size_t)payload_len); }
+    sec_meta_t decoded_meta;
+    int r = open_sealed(key, in, hdr, has_node, packed_len, plain, &decoded_meta);
+    if (r == 0) { r = protocol_decode(out_payload, payload_len, SEC_VT_TYPE(vt), plain, packed_len); }
+    if (r == 0) { *meta = decoded_meta; }
     crypto_wipe(plain, sizeof(plain));
     return r;
 }
@@ -298,8 +299,18 @@ int sec_authentic_any_version(const uint8_t *in, int in_len)
     uint8_t plain[WIRE_MAX];
     sec_meta_t meta;
     int ok;
-    if (ver == PROTO_VER) { ok = sec_unseal(in, in_len, &meta, plain, len) == 0; }
-    else { ok = open_sealed(KEY, in, hdr, SEC_TYPE_HAS_NODE(SEC_VT_TYPE(in[0])), len, plain, &meta) == 0; }
+    if (ver >= 15u) {
+        /* Diagnostic authentication needs no payload decoding. v15 and later
+         * control keys bind the version; per-link DATA/CONFIRM keys are private
+         * to their handshake and cannot be diagnosed using only the fleet key. */
+        uint8_t type = SEC_VT_TYPE(in[0]);
+        if (!control_type(type)) { return 0; }
+        uint64_t boot; memcpy(&boot, in + 1, 8);
+        uint8_t key[32];
+        control_key_version(key, type, boot, (uint8_t)ver);
+        ok = open_sealed(key, in, hdr, SEC_TYPE_HAS_NODE(type), len, plain, &meta) == 0;
+        crypto_wipe(key, sizeof(key));
+    } else { ok = open_sealed(KEY, in, hdr, SEC_TYPE_HAS_NODE(SEC_VT_TYPE(in[0])), len, plain, &meta) == 0; }
     crypto_wipe(plain, sizeof(plain));
     return ok;
 }

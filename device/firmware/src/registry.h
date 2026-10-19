@@ -14,7 +14,7 @@ typedef struct {
     uint32_t id;           /* 32-bit sender id */
     int      have_boot;    /* sensor_boot / ack_seq describe the current sensor boot */
     uint64_t sensor_boot;  /* boot_id from the uplink header */
-    uint64_t link_id;
+    uint32_t link_id;
     uint8_t data_key[32];
     int have_ack;
     uint16_t ack_seq;      /* last ev_seq taken in order */

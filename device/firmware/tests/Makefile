@@ -22,7 +22,7 @@ RADIOLIB_OBJ := $(patsubst $(RADIOLIB)/%.cpp,$(OUT)/radiolib/%.o,$(RADIOLIB_SRC)
 
 QUEUE_SRC := $(SRC)/sensor_queue.c $(SRC)/sync.c $(SRC)/master_queue.c $(SRC)/registry.c \
 	$(SRC)/proto_usb.c $(SRC)/errlog.c $(SRC)/crc32.c
-MAC_SRC := $(SRC)/mac_sensor.c $(SRC)/mac_master.c $(SRC)/master_admission.c $(QUEUE_SRC)
+MAC_SRC := $(SRC)/mac_sensor.c $(SRC)/mac_master.c $(SRC)/master_admission.c $(SRC)/protocol.c $(QUEUE_SRC)
 LINES_SRC := $(SRC)/proto_usb.c $(SRC)/master_queue.c $(SRC)/errlog.c $(SRC)/crc32.c
 HEADERS := $(wildcard $(SRC)/*.h)
 
@@ -30,7 +30,7 @@ HEADERS := $(wildcard $(SRC)/*.h)
 # usb_lines.txt is what the console's firmware-lines test parses. After a line format
 # change, regenerate it here: ../build/host/usb-lines > usb_lines.txt
 test: $(OUT)/gps-test $(OUT)/sync-test $(OUT)/queue-test $(OUT)/fault-test $(OUT)/mac-sim $(OUT)/radio-test \
-    $(OUT)/secure-test $(OUT)/capture-test $(OUT)/main-test $(OUT)/hal-test \
+    $(OUT)/secure-test $(OUT)/protocol-test $(OUT)/capture-test $(OUT)/main-test $(OUT)/hal-test \
 	$(OUT)/usb-lines
 	@ulimit -c 0; failed=0; \
 	for case in $(GPS_CASES); do "$(OUT)/gps-test" "$$case" || failed=1; done; \
@@ -38,6 +38,7 @@ test: $(OUT)/gps-test $(OUT)/sync-test $(OUT)/queue-test $(OUT)/fault-test $(OUT
 	"$(OUT)/queue-test" || failed=1; \
 	"$(OUT)/fault-test" || failed=1; \
 	"$(OUT)/secure-test" || failed=1; \
+	"$(OUT)/protocol-test" || failed=1; \
 	"$(OUT)/capture-test" || failed=1; \
 	"$(OUT)/main-test" || failed=1; \
 	"$(OUT)/hal-test" || failed=1; \
@@ -65,9 +66,13 @@ $(OUT)/fault-test: fault_test.c $(SRC)/fault.c $(SRC)/power.c $(HEADERS)
 	@mkdir -p $(OUT)
 	$(CC) $(CFLAGS) -DFAULT_HOST_TEST -I$(SRC) fault_test.c $(SRC)/fault.c $(SRC)/power.c -o $@
 
-$(OUT)/secure-test: secure_test.c $(SRC)/secure.c $(HEADERS)
+$(OUT)/secure-test: secure_test.c $(SRC)/secure.c $(SRC)/protocol.c $(HEADERS)
 	@mkdir -p $(OUT)
-	$(CC) $(CFLAGS) -I$(SRC) -I../vendor/monocypher/src secure_test.c ../vendor/monocypher/src/monocypher.c -o $@
+	$(CC) $(CFLAGS) -I$(SRC) -I../vendor/monocypher/src secure_test.c $(SRC)/protocol.c ../vendor/monocypher/src/monocypher.c -o $@
+
+$(OUT)/protocol-test: protocol_test.c $(SRC)/protocol.c $(HEADERS)
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) -I$(SRC) protocol_test.c $(SRC)/protocol.c -o $@
 
 $(OUT)/capture-test: capture_test.c $(SRC)/capture.c fakes/nrf.h $(HEADERS)
 	@mkdir -p $(OUT)

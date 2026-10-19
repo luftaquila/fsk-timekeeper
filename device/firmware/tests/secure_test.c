@@ -26,11 +26,11 @@ static void packets(void)
 {
     sec_init();
     assert(sec_ready() && sec_boot_id() == entropy);
-    uplink_pl_t u = {.kind = UL_KIND_EDGES, .master_boot_id = UINT64_MAX, .tick = UINT64_MAX};
+    uplink_pl_t u = {.kind = UL_KIND_EDGES, .master_boot_id = UINT64_MAX, .tick = PROTO_TICK_MAX};
     u.u.edges.count = 1;
     uint8_t wire[WIRE_MAX], second[WIRE_MAX];
     int n = sec_seal_key(KEY, wire, sizeof wire, PKT_TYPE_UPLINK, 0x123443b0u, &u, sizeof u);
-    assert(n == WIRE_UPLINK && n == 94);
+    assert(n == WIRE_UPLINK && n == 91);
     uplink_pl_t out;
     sec_meta_t meta;
     assert(sec_unseal_key(KEY, wire, n, &meta, &out, sizeof out) == 0);
@@ -39,8 +39,13 @@ static void packets(void)
     assert(sec_seal_key(KEY, second, sizeof second, PKT_TYPE_UPLINK, meta.node_id, &u, sizeof u) == n);
     assert(memcmp(wire, second, (size_t)n));
     for (int i = 0; i < n; i++) {
+        sec_meta_t saved_meta = meta;
+        uplink_pl_t saved_out = out;
         wire[i] ^= 1;
         assert(sec_unseal_key(KEY, wire, n, &meta, &out, sizeof out) != 0);
+        assert(saved_meta.type == meta.type && saved_meta.node_id == meta.node_id &&
+               saved_meta.boot_id == meta.boot_id && saved_meta.ctr == meta.ctr);
+        assert(!memcmp(&saved_out, &out, sizeof(out)));
         wire[i] ^= 1;
     }
     assert(sec_unseal_key(KEY, wire, n - 1, &meta, &out, sizeof out) != 0);
@@ -54,7 +59,7 @@ static void packets(void)
     assert(sec_unseal_key(KEY, wire, n, &meta, &out, INT_MAX) == -1);
     beacon_pl_t b = {0}, bout;
     n = sec_seal(wire, sizeof wire, PKT_TYPE_BEACON, 0, &b, sizeof b);
-    assert(n == 109 && sec_unseal(wire, n, &meta, &bout, sizeof bout) == 0);
+    assert(n == 87 && sec_unseal(wire, n, &meta, &bout, sizeof bout) == 0);
     assert(sec_authentic_any_version(wire, n));
     g_tx_ctr = 0xfffffeu;
     assert(sec_seal(wire, sizeof wire, PKT_TYPE_BEACON, 0, &b, sizeof b) == n);
@@ -98,6 +103,26 @@ static void legacy_authentication(void)
     beacon_pl_t out; sec_meta_t meta;
     assert(sec_unseal(wire, sizeof wire, &meta, &out, sizeof out) != 0);
     wire[59] ^= 1; assert(!sec_authentic_any_version(wire, sizeof wire));
+    /* The deployed v15 control keys include their version. They remain readable
+     * for mismatch diagnostics, never as live v16 packets. */
+    const uint8_t types[] = {PKT_TYPE_BEACON, PKT_TYPE_JOIN, PKT_TYPE_OFFER};
+    const int lengths[] = {81, 24, 55};
+    for (unsigned i = 0; i < 3; i++) {
+        uint8_t old[WIRE_MAX] = {SEC_VT(15, types[i])}, plain[81] = {0}, key[32];
+        uint64_t boot64 = UINT64_C(0x123456789abcdef0);
+        uint32_t node = types[i] == PKT_TYPE_JOIN ? 0xabcd1234u : 0;
+        int hdr = node ? 16 : 12, size = hdr + lengths[i] + 16;
+        memcpy(old + 1, &boot64, 8); old[9] = 1;
+        if (node) { memcpy(old + 12, &node, 4); }
+        uint8_t context[16] = {'F','S','K',15,'C',types[i],0,0};
+        if (types[i] == PKT_TYPE_BEACON) { memcpy(context + 8, &boot64, 8); }
+        crypto_blake2b_keyed(key, 32, KEY, sizeof(KEY), context, sizeof(context));
+        build_nonce(nonce, types[i], node, boot64, 1);
+        crypto_aead_lock(old + hdr, old + hdr + lengths[i], key, nonce, old, (size_t)hdr, plain, (size_t)lengths[i]);
+        assert(sec_authentic_any_version(old, size));
+        assert(sec_unseal(old, size, &meta, &out, sizeof(out)) == -4);
+        old[size - 1] ^= 1; assert(!sec_authentic_any_version(old, size));
+    }
     puts("PASS secure_legacy_diagnostic");
 }
 
@@ -106,7 +131,7 @@ static void connection_keys(void)
     sec_init();
     uint8_t ns[16] = {1}, nm[16] = {2}; sec_link_keys_t k, changed;
     assert(sec_link_keys(&k, 123, 456, 789, ns, nm, 1));
-    static const uint8_t expected[32] = {0x20, 0x91, 0x60, 0xd, 0x9b, 0x14, 0xb7, 0xc8, 0xe5, 0xac, 0xe5, 0x81, 0xae, 0xd7, 0x38, 0x8d, 0x65, 0xb, 0xb2, 0x30, 0xa8, 0x41, 0x9f, 0x10, 0xaf, 0xd9, 0x8f, 0xfd, 0xba, 0x19, 0x1a, 0x47};
+    static const uint8_t expected[32] = {0x6a, 0x2f, 0x29, 0xe0, 0xfd, 0xa5, 0x2d, 0x2e, 0x52, 0xbd, 0x79, 0x30, 0x69, 0x79, 0x99, 0xe2, 0x03, 0xe0, 0xf3, 0xdb, 0x17, 0x66, 0xa8, 0x29, 0x4e, 0x08, 0x57, 0xfa, 0x78, 0x72, 0xc3, 0x00};
     assert(!memcmp(k.data, expected, 32)); /* independent Python hashlib vector */
     assert(memcmp(k.data, k.confirm, 32));
     for (unsigned field = 0; field < 6; field++) {
@@ -114,6 +139,13 @@ static void connection_keys(void)
         if (field == 3) { a[15]++; }
         if (field == 4) { b[15]++; }
         assert(sec_link_keys(&changed, 123 + (field == 0), 456 + (field == 1), 789 + (field == 2), a, b, 1 + (field == 5)));
+        assert(memcmp(&changed, &k, sizeof(k)));
+    }
+    /* The upper boot/node bits must still distinguish keys; only link width changed. */
+    for (unsigned field = 0; field < 3; field++) {
+        assert(sec_link_keys(&changed, 123 | (field == 0 ? UINT64_C(1) << 63 : 0),
+                            456 | (field == 1 ? UINT32_C(1) << 31 : 0),
+                            789 | (field == 2 ? UINT64_C(1) << 63 : 0), ns, nm, 1));
         assert(memcmp(&changed, &k, sizeof(k)));
     }
     uint8_t wire[WIRE_MAX]; uplink_pl_t p = {0}, out; sec_meta_t m;
@@ -131,6 +163,43 @@ static void connection_keys(void)
     assert(sec_accept_counter(&high, 0xffffff) && !sec_accept_counter(&high, 0x1000000));
     puts("PASS secure_connection_key_isolation");
 }
+
+static void compact_payload_validation(void)
+{
+    sec_init();
+    admission_beacon_t a = {.base = {.flags = BEACON_ADMISSION, .m_tx_prev = PROTO_TICK_MAX},
+                             .schedule = {SLOT_ROLE_REQUEST, SLOT_ROLE_OFFER | 4, SLOT_ROLE_CONFIRM | 4}}, out;
+    uint8_t wire[WIRE_MAX], plain[PL_ADMISSION], key[32], nonce[24];
+    sec_meta_t meta;
+    int n = sec_seal(wire, sizeof(wire), PKT_TYPE_BEACON, 0, &a, sizeof(a));
+    assert(n == WIRE_ADMISSION && sec_unseal(wire, n, &meta, &out, sizeof(out)) == 0);
+    assert(!memcmp(&a, &out, sizeof(a)));
+    assert(sec_authentic_any_version(wire, n));
+    a.schedule[0] = SLOT_ROLE_DATA | 7;
+    uint32_t counter = g_tx_ctr;
+    assert(sec_seal(wire, sizeof(wire), PKT_TYPE_BEACON, 0, &a, sizeof(a)) == -1 && g_tx_ctr == counter);
+    a.schedule[0] = SLOT_ROLE_REQUEST;
+    /* A valid authentication tag must not bypass validation of packed fields.
+     * Give the malformed packet a fresh counter, as a faulty fleet peer would. */
+    assert(protocol_encode(plain, sizeof(plain), PKT_TYPE_BEACON, &a, sizeof(a)) == PL_ADMISSION);
+    plain[PL_BEACON] |= 31u; /* reserved slot code */
+    wire[9] = 2;
+    control_key(key, PKT_TYPE_BEACON, g_boot_id);
+    build_nonce(nonce, PKT_TYPE_BEACON, 0, g_boot_id, 2);
+    crypto_aead_lock(wire + SEC_HDR_DL, wire + SEC_HDR_DL + PL_ADMISSION, key, nonce,
+                     wire, SEC_HDR_DL, plain, sizeof(plain));
+    admission_beacon_t saved = out;
+    assert(sec_unseal(wire, n, &meta, &out, sizeof(out)) == -1);
+    assert(!memcmp(&saved, &out, sizeof(out)) && meta.ctr == 1);
+
+    offer_pl_t offer = {.node_id = 0xfedc0001u, .sensor_boot = UINT64_MAX, .link_id = UINT32_MAX}, offered;
+    memset(offer.ns, 0x55, sizeof(offer.ns)); memset(offer.nm, 0xaa, sizeof(offer.nm));
+    n = sec_seal(wire, sizeof(wire), PKT_TYPE_OFFER, 0, &offer, sizeof(offer));
+    assert(n == WIRE_OFFER && sec_unseal(wire, n, &meta, &offered, sizeof(offered)) == 0);
+    assert(!memcmp(&offer, &offered, sizeof(offer)));
+    puts("PASS secure_compact_payload_validation");
+}
+
 static void challenge_pool(void)
 {
     sec_init(); uint8_t nonce[16], last[16] = {0};
@@ -149,4 +218,4 @@ static void challenge_pool(void)
     puts("PASS secure_nonblocking_challenge_pool");
 }
 
-int main(void) { packets(); rng_recovery(); legacy_authentication(); connection_keys(); challenge_pool(); return 0; }
+int main(void) { packets(); rng_recovery(); legacy_authentication(); connection_keys(); compact_payload_validation(); challenge_pool(); return 0; }

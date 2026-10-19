@@ -42,11 +42,12 @@ int sec_counter_exhausted(void);
 
 typedef struct { uint8_t data[32], confirm[32]; } sec_link_keys_t;
 int sec_link_keys(sec_link_keys_t *out, uint64_t master_boot, uint32_t node_id,
-                  uint64_t sensor_boot, const uint8_t ns[16], const uint8_t nm[16], uint64_t link_id);
+                  uint64_t sensor_boot, const uint8_t ns[16], const uint8_t nm[16], uint32_t link_id);
 int sec_seal_key(const uint8_t key[32], uint8_t *out, int out_cap, uint8_t type,
                  uint32_t node_id, const void *payload, int payload_len);
 
-/* Seal payload into out[] as [header | ciphertext | mac]; node_id is the sender's (ignored for
+/* Pack a payload model and seal into out[] as [header | ciphertext | mac];
+ * payload_len is the model's sizeof, not its encoded length. node_id is the sender's (ignored for
  * downlink, always the master). Returns the wire length, or -1 out too small, -3 counter
  * exhausted, -4 unprovisioned or no boot id. Advances the tx counter. */
 int sec_seal(uint8_t *out, int out_cap, uint8_t type, uint32_t node_id,
@@ -69,8 +70,8 @@ int sec_accept_counter(uint32_t *high, uint32_t ctr);
 int sec_unseal(const uint8_t *in, int in_len, sec_meta_t *meta,
                void *out_payload, int payload_len);
 
-/* 1 when a received packet of any protocol version authenticates under the
- * fleet key, i.e. a board of this fleet sent it. */
+/* 1 when a received packet authenticates under the fleet/control key (diagnostics
+ * only). v15+ DATA/CONFIRM require connection keys and cannot be checked here. */
 int sec_authentic_any_version(const uint8_t *in, int in_len);
 
 /* Counter for one explicitly authenticated connection. Changing a packet's

@@ -433,7 +433,7 @@ static void radio_health(void)
     d = el_radio_recovery();
     assert(d.count == UINT16_MAX && d.failures == UINT16_MAX);
     radio_history_t history = el_radio_history();
-    assert(sizeof(history) == 17 && WIRE_UPLINK == 94 && SLOT_LEN_MS == 120);
+    assert(sizeof(history) == 17 && WIRE_UPLINK == 91 && SLOT_LEN_MS == 120);
     assert(history.faults[1] == count && history.faults[5] == UINT16_MAX);
     sensor_queue_t q;
     sq_init(&q);
