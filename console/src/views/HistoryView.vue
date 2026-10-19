@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, nextTick } from "vue";
+import { ref, computed, nextTick, watch, onBeforeUnmount } from "vue";
 import { useTimingStore } from "../stores/timing";
 import { useDeviceStore } from "../stores/device";
 import { useHistoryStore } from "../stores/history";
@@ -21,6 +21,8 @@ const exporting = ref(false);
 const filter = ref("");
 const lapDialog = ref(null);
 const lapPopup = ref(null);
+const backupMenu = ref(null);
+const backupOpen = ref(false);
 
 const rows = computed(() => history.filtered(filter.value || null));
 
@@ -77,8 +79,25 @@ async function importFile(event) {
   if (!file || importBlocked.value) return;
   try {
     const { added, skipped, runs } = await history.importJson(file);
-    notyf.success(`Imported ${added} records and ${runs} run snapshots; ${skipped} duplicates skipped`);
-  } catch (error) { notyf.error(error.message || "Import failed"); }
+    notyf.success(`Restored ${added} records and ${runs} run snapshots; ${skipped} duplicates skipped`);
+  } catch (error) { notyf.error(error.message || "Restore failed"); }
+}
+
+function closeBackupOnOutside(event) {
+  if (!backupMenu.value?.contains(event.target)) backupOpen.value = false;
+}
+watch(backupOpen, (open) => {
+  if (open) document.addEventListener("pointerdown", closeBackupOnOutside);
+  else document.removeEventListener("pointerdown", closeBackupOnOutside);
+});
+onBeforeUnmount(() => document.removeEventListener("pointerdown", closeBackupOnOutside));
+function downloadBackup() {
+  backupOpen.value = false;
+  exportFile("json");
+}
+function restoreBackup() {
+  backupOpen.value = false;
+  importInput.value.click();
 }
 
 async function remove(r) {
@@ -103,9 +122,14 @@ async function clearAll() {
       <span class="count muted">{{ rows.length }} run{{ rows.length === 1 ? "" : "s" }}</span>
       <div class="spacer"></div>
       <button class="btn btn-ghost btn-sm" :disabled="!rows.length || exporting || history.importing || history.clearing" @click="exportFile('excel')"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" /></svg> Export Excel</button>
-      <button class="btn btn-ghost btn-sm" :disabled="exporting || history.importing || history.clearing" @click="exportFile('json')"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" /></svg> Export JSON</button>
+      <div ref="backupMenu" class="backup-menu" @keydown.esc="backupOpen = false">
+        <button class="btn btn-ghost btn-sm" :disabled="exporting || history.importing || history.clearing" aria-controls="backup-actions" :aria-expanded="backupOpen" @click="backupOpen = !backupOpen"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8v13H3V8M1 3h22v5H1zM10 12h4" /></svg> Backup <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6" /></svg></button>
+        <div v-show="backupOpen" id="backup-actions" class="backup-actions">
+          <button class="btn btn-ghost btn-sm" :disabled="exporting || history.importing || history.clearing" @click="downloadBackup"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" /></svg> Download</button>
+          <button class="btn btn-ghost btn-sm" :disabled="importBlocked" @click="restoreBackup"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 8l5-5 5 5M12 3v12" /></svg> Restore</button>
+        </div>
+      </div>
       <input ref="importInput" type="file" accept=".json,application/json" hidden @change="importFile" />
-      <button class="btn btn-ghost btn-sm" :disabled="importBlocked" @click="importInput.click()"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 8l5-5 5 5M12 3v12" /></svg> Import JSON</button>
       <button class="btn btn-ghost btn-ghost-danger btn-sm" :disabled="importBlocked || classifying || device.connecting || device.dfuInProgress" @click="clearAll"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M19 6l-1 14H6L5 6M9 6V3h6v3M10 10v6M14 10v6" /></svg> Clear All</button>
     </div>
 
@@ -255,6 +279,29 @@ async function clearAll() {
 }
 .spacer {
   flex: 1;
+}
+.backup-menu {
+  position: relative;
+}
+.backup-actions {
+  position: absolute;
+  top: calc(100% + 0.25rem);
+  right: 0;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 100%;
+  padding: 0.25rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  box-shadow: var(--shadow-hover);
+}
+.backup-actions .btn {
+  justify-content: flex-start;
+  border: 0;
+  white-space: nowrap;
 }
 .muted {
   color: var(--text-tertiary);

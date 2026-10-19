@@ -302,7 +302,7 @@ export const useHistoryStore = defineStore("history", () => {
   }
 
   async function recoveryJson() {
-    if (clearing.value) throw new Error("Wait for data deletion to finish before exporting.");
+    if (clearing.value) throw new Error("Wait for data deletion to finish before backing up.");
     await useTimingStore().settleResults();
     await eventLog.flush();
     const recovery = await backup.snapshot(rows.value, useDeviceStore().ppsEdges);
@@ -318,7 +318,7 @@ export const useHistoryStore = defineStore("history", () => {
   async function importJson(file) {
     const timing = useTimingStore(), device = useDeviceStore();
     if (clearing.value || importing.value || timing.armed || timing.starting || timing.classifying || device.updateInProgress) {
-      throw new Error("Stop measurement and wait for current operations before importing.");
+      throw new Error("Stop measurement and wait for current operations before restoring.");
     }
     importing.value = true;
     try {
