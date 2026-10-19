@@ -60,6 +60,7 @@ typedef struct {
     uint32_t sender_id, tx_ctr, rng;
     uint64_t boot_id, tx_end;
     int transmitting;
+    int reject_tx_once;
     uint32_t deadline;
     uint8_t sealed_plain[WIRE_MAX];
     int32_t ppm;
@@ -268,6 +269,7 @@ void radio_limit(uint32_t end_us) { cur->deadline = end_us; }
 void radio_unlimit(void) { cur->deadline = 0; }
 int radio_tx_start(const uint8_t *data, int len, uint32_t end_us)
 {
+    if (cur->reject_tx_once) { cur->reject_tx_once = 0; return -1; }
     if (cur->transmitting || radio_needs_reset() ||
         (int32_t)(end_us - board_micros()) < (int32_t)(TX_SETUP_US + airtime_us(len))) { return -1; }
     deliver(cur); cur->rx_on = 0; cur->have_pkt = 0;
@@ -432,12 +434,28 @@ static int host_acks = 1;
 static uint32_t last_hseq;
 static unsigned d_lines;
 static char last_d[PU_LINE_MAX + 8];
+static int track_timing;
+static struct { uint64_t at_us; unsigned age, valid; } timing_report[SIM_NODES];
 
 int usb_console_ready(void) { return 1; }
 uint32_t usb_console_epoch(void) { return 0; }
 int usb_write(const char *s)
 {
     if (s[0] == 'D') { d_lines++; strcpy(last_d, s); }
+    if (s[0] == 'D' && track_timing) {
+        char copy[PU_LINE_MAX + 8], *fields[40];
+        strcpy(copy, s);
+        unsigned count = 0;
+        for (char *p = strtok(copy, " \n"); p && count < 40; p = strtok(NULL, " \n")) { fields[count++] = p; }
+        assert(count == 33);
+        uint32_t id = (uint32_t)strtoul(fields[1], NULL, 16);
+        for (int i = 1; i < n_nodes; i++) if (nodes[i].sender_id == id) {
+            timing_report[i].at_us = cur->now_us;
+            timing_report[i].age = (unsigned)strtoul(fields[17], NULL, 10);
+            timing_report[i].valid = !strcmp(fields[14], "1") && !strcmp(fields[15], "1") &&
+                                     !strcmp(fields[16], "XTAL") && !strcmp(fields[32], "1");
+        }
+    }
     if (s[0] != 'E') { return 1; }
     assert(inbox_n < 64);
     strcpy(inbox[inbox_n++], s);
@@ -568,7 +586,7 @@ static void run(uint64_t end_us, hook_t hook)
             n->now_us = now_global;
             cur = n;
             if (n->is_master) {
-                (void)mac_master_step(&mm);
+                if (mac_master_step(&mm) && track_timing) { mac_master_report(&mm, 1); }
                 mq_pump(&mq, board_millis());
                 for (unsigned k = 0; k < inbox_n; k++) { host_line(inbox[k]); }
                 inbox_n = 0;
@@ -752,6 +770,130 @@ static void radio_delay(unsigned count, int asymmetric)
     assert(normal && admission && delay_checks > 5000);
     printf("PASS radio_delay_%u_%s (%u checks, max model error %lld ticks)\n", count,
            asymmetric ? "asymmetric" : "symmetric", delay_checks, (long long)delay_max_error);
+}
+
+/* Exercise the actual D lines and their expiry between reports, not just the
+ * sensor's internal clock. Idle two-way updates used to leave the console on
+ * the pre-update anchor for another five seconds and falsely expire it. */
+static int reported_sync_ok(int node, uint64_t us)
+{
+    assert(timing_report[node].at_us);
+    uint64_t elapsed = us > timing_report[node].at_us ? us - timing_report[node].at_us : 0;
+    return timing_report[node].valid && timing_report[node].age + elapsed / 1000u <= SYNC_TTL_MS;
+}
+
+static unsigned timing_checks;
+static int timing_failure;
+static void timing_hook(uint64_t us)
+{
+    if (timing_failure) {
+        if (us == 40000000u) { nodes[1].deaf = 1; }
+        if (us == 55000000u) { nodes[1].deaf = 0; }
+        if (us >= 48000000u && us < 55000000u && us % 100000u == 0) {
+            assert(!(sync_health(&nodes[1].s.sync, local_tick(&nodes[1], us), 1) & HEALTH_SYNC_VALID));
+            assert(!reported_sync_ok(1, us));
+        }
+        if (us >= 40000000u && us < 80000000u) { return; }
+    } else if (n_nodes == 4 && us >= 80000000u && us < 100000000u) {
+        mm.admission.join_until_ms = (uint32_t)(us / 1000u) + 1000u;
+        mm.admission.request_seen = 1;
+    }
+    if (us < 30000000u || us % 100000u) { return; }
+    for (int i = 1; i < n_nodes; i++) {
+        assert(sync_health(&nodes[i].s.sync, local_tick(&nodes[i], us), 1) == HEALTH_EVENT_REQUIRED);
+        if (!reported_sync_ok(i, us)) {
+            fprintf(stderr, "false sync expiry node %d at %llu: reported age %u, received at %llu\n",
+                    i, (unsigned long long)us, timing_report[i].age, (unsigned long long)timing_report[i].at_us);
+            abort();
+        }
+        timing_checks++;
+    }
+}
+
+static void sync_reports(unsigned count, int failure)
+{
+    track_timing = 1; timing_failure = failure;
+    down_delay_us = up_delay_us = 144; admission_delay_us = 37;
+    add_node(1, 0, 0, 0);
+    for (unsigned i = 0; i < count; i++) { add_node(0, 0x12340001u + i, (int32_t)i * 31 - 62, 0); }
+    run(failure ? 100000000u : 270000000u, timing_hook);
+    check_slots(0);
+    assert(timing_checks > 200);
+    if (!failure) {
+        /* No echo/report feedback loop: exactly one checkpoint and one status
+         * packet per five seconds per idle node, including a five-node fleet. */
+        for (int n = 1; n < n_nodes; n++) {
+            unsigned checkpoints = 0, reports = 0;
+            for (unsigned i = 0; i < air_n; i++) {
+                const tx_t *x = &air[i];
+                if (x->src != n || x->start_us < 110000000u || x->start_us >= 210000000u) { continue; }
+                assert(SEC_VT_TYPE(x->data[0]) == PKT_TYPE_UPLINK);
+                const uplink_pl_t *p = (const uplink_pl_t *)x->plain;
+                if (p->kind == UL_KIND_CHECKPOINT) { checkpoints++; }
+                else { assert(p->kind == UL_KIND_SYNC); reports++; }
+            }
+            if (checkpoints != 20 || reports != 20) {
+                fprintf(stderr, "idle node %d: %u checkpoints, %u reports / 100 s\n", n, checkpoints, reports);
+                abort();
+            }
+        }
+    }
+    printf("PASS sync_reports_%u%s (%u status checks)\n", count, failure ? "_loss" : "", timing_checks);
+}
+
+static void sync_reports_data(void)
+{
+    track_timing = 1;
+    add_node(1, 0, 0, 0); add_node(0, 0x12340001u, -18, 0);
+    for (uint64_t us = 29001000u; us < 80000000u; us += 1000000u) { edge_at(1, us); }
+    run(85000000u, timing_hook);
+    check_slots(0);
+    unsigned interp, lost, packets = 0;
+    check_records(1, 29000000u, TOL_TICKS, &interp, &lost);
+    assert(!lost);
+    for (unsigned i = 0; i < air_n; i++) {
+        const tx_t *x = &air[i];
+        if (x->src != 1 || x->start_us < 30000000u || x->start_us >= 80000000u) { continue; }
+        const uplink_pl_t *p = (const uplink_pl_t *)x->plain;
+        assert(SEC_VT_TYPE(x->data[0]) == PKT_TYPE_UPLINK && p->kind == UL_KIND_EDGES);
+        packets++;
+    }
+    assert(packets == 50); /* every update rides evidence; no extra status packet */
+    puts("PASS sync_reports_piggyback_on_evidence");
+}
+
+static int report_rejected, report_kept, report_retried;
+static unsigned report_air;
+static void report_retry_hook(uint64_t us)
+{
+    mac_sensor_t *s = &nodes[1].s;
+    if (us >= 30000000u && !report_rejected && s->sync_report_pending && !s->tx_busy) {
+        nodes[1].reject_tx_once = 1;
+        report_air = air_n;
+        report_rejected = 1;
+    }
+    if (report_rejected && !nodes[1].reject_tx_once && !report_kept) {
+        assert(s->sync_report_pending && !s->tx_busy && air_n == report_air);
+        report_kept = 1;
+    }
+    if (report_kept && !s->sync_report_pending && !report_retried) {
+        assert(air_n > report_air);
+        const tx_t *x = &air[air_n - 1];
+        const uplink_pl_t *p = (const uplink_pl_t *)x->plain;
+        assert(x->src == 1 && p->kind == UL_KIND_SYNC);
+        report_retried = 1;
+    }
+    timing_hook(us);
+}
+
+static void sync_reports_retry(void)
+{
+    track_timing = 1;
+    add_node(1, 0, 0, 0); add_node(0, 0x12340001u, -18, 0);
+    run(45000000u, report_retry_hook);
+    assert(report_rejected && report_kept && report_retried);
+    check_slots(0);
+    puts("PASS sync_reports_retry_after_tx_start_failure");
 }
 
 static void steady(void)
@@ -1575,6 +1717,12 @@ int main(int argc, char **argv)
     else if (!strcmp(argv[1], "radio_delay_3")) { radio_delay(3, 0); }
     else if (!strcmp(argv[1], "radio_delay_5")) { radio_delay(5, 0); }
     else if (!strcmp(argv[1], "radio_asymmetry")) { radio_delay(3, 1); }
+    else if (!strcmp(argv[1], "sync_reports_1")) { sync_reports(1, 0); }
+    else if (!strcmp(argv[1], "sync_reports_3")) { sync_reports(3, 0); }
+    else if (!strcmp(argv[1], "sync_reports_5")) { sync_reports(5, 0); }
+    else if (!strcmp(argv[1], "sync_reports_loss")) { sync_reports(1, 1); }
+    else if (!strcmp(argv[1], "sync_reports_data")) { sync_reports_data(); }
+    else if (!strcmp(argv[1], "sync_reports_retry")) { sync_reports_retry(); }
     else if (!strcmp(argv[1], "roundtrip_binding")) { roundtrip_binding(); }
     else if (!strcmp(argv[1], "status_reports")) { status_reports(); }
     else if (!strcmp(argv[1], "init_recovery")) { init_recovery(); }

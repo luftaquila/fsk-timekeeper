@@ -135,18 +135,23 @@ static void on_uplink(mac_master_t *m, const uint8_t *buf, int n, float rssi, fl
     if (sec_unseal_key(e->data_key, buf, n, &meta, &u, sizeof(u)) ||
         meta.boot_id != e->sensor_boot || u.master_boot_id != sec_boot_id()) { m->auth_drop++; return; }
     if (!sec_accept_counter(&e->rx.max_ctr, meta.ctr)) { e->sec_drop++; return; }
-    /* Prefer the entry whose periodic checkpoint falls in this frame; otherwise
-     * return the first matching uplink (also lets a new/returning sensor sync).
+    /* Refresh the oldest reported anchor first; rotate the entry used to break
+     * ties. A fresh anchor must not displace another sensor's due refresh.
+     * Diagnostics-only follow-ups have fresh anchors and therefore do not
+     * displace ordinary refreshes.
      * The beacon counter prevents an old uplink being paired with a new frame. */
     unsigned entry = (unsigned)(e - m->reg.e);
     if (have_rx && m->cycle_ready && n == m->cycle_wire_len && u.beacon_ctr == m->beacon_ctr &&
-        (!m->reply_valid || (entry == m->cycle_seq % CHECKPOINT_PERIOD_BEACONS && m->reply_entry != entry))) {
+        (!m->reply_valid || u.diag.sync_age_ms > m->reply_age_ms ||
+         (u.diag.sync_age_ms == m->reply_age_ms &&
+          entry == m->cycle_seq % CHECKPOINT_PERIOD_BEACONS && m->reply_entry != entry))) {
         for (unsigned j = 0; j < SLOT_COUNT; j++) {
             if (m->schedule[j] != (SLOT_ROLE_DATA | entry)) { continue; }
             uint64_t start = m->cycle_tx + (SLOT_OFFSET_MS + j * SLOT_LEN_MS) * TPM;
             /* Keep the existing guard for the two radio event delays. */
             if (rx_tick < start || rx_tick > start + (SLOT_LEN_MS - LBT_LISTEN_MS) * TPM) { continue; }
             m->reply_rx = rx_tick; m->reply_entry = (uint8_t)entry;
+            m->reply_age_ms = u.diag.sync_age_ms;
             m->reply_link = e->link_id; m->reply_valid = 1;
             break;
         }

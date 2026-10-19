@@ -86,8 +86,8 @@
 #define RX_HEADER_WAIT_MS  12u  /* a preamble without a header after this long is noise */
 #define CAD_TIMEOUT_MS     10u  /* ~2.5 ms CAD (4 symbols at SF7/BW250) plus oscillator startup margin */
 
-/* Periodic checkpoint + diagnostics: in the cycle whose beacon seq % this == table entry % this,
- * in the sensor's last slot of that cycle. */
+/* Idle checkpoint/two-way refresh: this many beacon periods after the last
+ * confirmed exchange, in the sensor's last slot. Independent of 8-bit seq wrap. */
 #define CHECKPOINT_PERIOD_BEACONS 5u
 /* A checkpoint request (host `CP`) rides this many consecutive beacons. */
 #define CP_REQ_BEACONS 2u

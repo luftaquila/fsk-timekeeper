@@ -24,7 +24,7 @@ static_assert((SLOT_LATE_MS + TX_SETUP_MS + SLOT_GUARD_MS + LBT_LISTEN_MS) * 100
               LORA_TOA_US(WIRE_OFFER) <= SLOT_LEN_MS * 1000u, "an offer fits its slot");
 static_assert(LBT_LISTEN_MS < SLOT_OFFSET_MS, "the listen before slot 0 starts after the beacon");
 static_assert(SLOT_COUNT >= 2u && SLOT_COUNT <= 8u, "tx_slots holds every slot in 8 bits");
-static_assert(CHECKPOINT_PERIOD_BEACONS == MAX_NODES, "two-way selection follows periodic checkpoints");
+static_assert(CHECKPOINT_PERIOD_BEACONS >= MAX_NODES, "one two-way reply per frame must serve every node");
 static_assert(LORA_SF >= 7 && LORA_SYMBOL_US < 16000u, "LORA_TOA_US covers SF7..SF12 without LDRO");
 
 void mac_sensor_init(mac_sensor_t *s, uint32_t my_id, uint8_t reset_reason)
@@ -131,6 +131,8 @@ static void activate_join(mac_sensor_t *s, int entry, uint32_t ctr)
     }
     s->master_boot_id = j->master_boot; s->link_id = j->link_id;
     memset(&s->roundtrip, 0, sizeof(s->roundtrip));
+    s->sync_report_pending = 0;
+    s->sync_refresh_rx = 0;
     memcpy(s->data_key, j->keys.data, 32);
     s->have_session = 1; s->entry = entry;
     memset(&s->from_master, 0, sizeof(s->from_master));
@@ -207,7 +209,12 @@ static void on_beacon(mac_sensor_t *s, const uint8_t *buf, int n)
             b.base.seq == (uint8_t)(s->roundtrip.seq + 1u) && b.base.rx_entry == s->roundtrip.entry &&
             s->roundtrip.link == s->link_id && b.base.slot[b.base.rx_entry].link_id == s->link_id &&
             b.base.slot[b.base.rx_entry].node_id == s->my_id) {
-            (void)sync_roundtrip(&s->sync, b.base.m_tx_prev, s->roundtrip.l_rx, s->roundtrip.l_tx, b.base.m_rx_prev);
+            if (sync_roundtrip(&s->sync, b.base.m_tx_prev, s->roundtrip.l_rx, s->roundtrip.l_tx, b.base.m_rx_prev)) {
+                if (s->roundtrip.report_after) {
+                    s->sync_refresh_rx = s->roundtrip.l_rx;
+                    s->sync_report_pending = 1;
+                }
+            }
         }
         s->roundtrip.valid = 0;
         sq_resolve(&s->q, &s->sync, capture_now64());
@@ -291,8 +298,15 @@ static void drain_captures(mac_sensor_t *s)
 static int checkpoint_due(const mac_sensor_t *s)
 {
     if (s->cp_pending || s->entry < 0 || !s->sync.cur.have) { return 1; }
-    return s->tx_slots == 0u && (uint8_t)(s->cycle_seq % CHECKPOINT_PERIOD_BEACONS) ==
-                                (uint8_t)((unsigned)s->entry % CHECKPOINT_PERIOD_BEACONS);
+    if (s->tx_slots) { return 0; }
+    /* Measure five frames from the last confirmed exchange, independently of
+     * the 8-bit seq wrap. A reply addressed to another node does not postpone
+     * our next attempt; the report-only follow-up does not postpone it either.
+     * Use beacon captures, not the slot-dependent anchor midpoint. A half-frame
+     * tolerance covers clock drift and beacon channel-access jitter. */
+    return !s->sync_refresh_rx ||
+           (s->cycle_rx > s->sync_refresh_rx && s->cycle_rx - s->sync_refresh_rx >=
+            (CHECKPOINT_PERIOD_BEACONS * BEACON_PERIOD_MS - BEACON_PERIOD_MS / 2u) * TPM);
 }
 
 /* "Through now, the last capture is seq": only when nothing precedes it. */
@@ -352,6 +366,7 @@ static void slot_tx(mac_sensor_t *s)
     if (listen && radio_lbt_listen() != RADIO_LBT_QUIET) { radio_unlimit(); return; }
     drain_captures(s);
     uplink_pl_t *p = NULL;
+    int report_only = 0;
     uplink_pl_t probe = {.kind = UL_KIND_SYNC, .flags = EVENT_TIME_UNKNOWN, .master_boot_id = s->master_boot_id};
     if (role == SLOT_ROLE_DATA) {
         p = sq_packet(&s->q, s->master_boot_id);
@@ -361,6 +376,16 @@ static void slot_tx(mac_sensor_t *s)
              * the FIFO. A probe carries no checkpoint/evidence and cannot ACK
              * past them; it uses this same scheduled transmission opportunity. */
             if (!p) { p = &probe; }
+        }
+        if (!p && s->sync_report_pending && !s->tx_slots) {
+            /* The preceding uplink reported the old anchor. Publish the new
+             * one even while idle; ordinary evidence takes priority and carries
+             * these same diagnostics. Wait for our last slot so captures that
+             * arrive later in this frame can still use its earlier slots.
+             * This report must not start a report loop when its own two-way
+             * echo arrives in the following beacon. */
+            p = &probe;
+            report_only = 1;
         }
         if (!p) { radio_unlimit(); return; }
     }
@@ -385,6 +410,7 @@ static void slot_tx(mac_sensor_t *s)
             s->data_sent = 1;
             s->roundtrip.l_rx = s->cycle_rx; s->roundtrip.seq = s->cycle_seq;
             s->roundtrip.entry = (uint8_t)s->entry; s->roundtrip.link = s->link_id;
+            s->roundtrip.report_after = !report_only;
             s->roundtrip.pending = 1; s->roundtrip.valid = 0;
         }
         if (role == SLOT_ROLE_CONFIRM) { s->join.phase = SENSOR_JOIN_WAIT_ASSIGNMENT; }
@@ -425,6 +451,7 @@ void mac_sensor_step(mac_sensor_t *s)
         if (s->roundtrip.pending) {
             s->roundtrip.valid = done > 0 && have;
             if (s->roundtrip.valid) { s->roundtrip.l_tx = cap; }
+            if (done > 0) { s->sync_report_pending = 0; }
             s->roundtrip.pending = 0;
         }
     }

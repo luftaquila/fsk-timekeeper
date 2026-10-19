@@ -51,8 +51,10 @@ typedef struct {
     struct {
         uint64_t l_rx, l_tx;
         uint32_t link;
-        uint8_t seq, entry, pending, valid;
+        uint8_t seq, entry, pending, valid, report_after;
     } roundtrip; /* at most one DATA TxDone per frame; consumed by the next beacon */
+    uint8_t sync_report_pending; /* publish a newly accepted anchor on the next DATA uplink */
+    uint64_t sync_refresh_rx; /* beacon RxDone of the latest non-report two-way exchange */
     uint8_t  tx_slots;       /* bit j: slot j is ours and still ahead; 0 once a packet went out */
     int      entry;          /* own entry in the slot table, -1 = not registered */
     uint8_t  cp_pending, cp_answered;

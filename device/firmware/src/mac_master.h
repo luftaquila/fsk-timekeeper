@@ -32,6 +32,7 @@ typedef struct {
     uint32_t beacon_ctr;
     uint64_t reply_rx;
     uint32_t reply_link;
+    uint16_t reply_age_ms;
     uint8_t cycle_seq, cycle_wire_len, reply_entry, reply_valid;
     master_tx_state_t tx_state;
     uint8_t schedule[SLOT_COUNT], cycle_ready, slot_done;
