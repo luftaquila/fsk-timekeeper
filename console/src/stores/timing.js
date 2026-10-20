@@ -54,7 +54,7 @@ export const useTimingStore = defineStore("timing", () => {
   const lapRows = computed(() => {
     const r = run.value;
     if (!r) return [];
-    if (r.closed && !live.laps.length) return lapsNsOf(r, timeline.value).map((ns) => ({ ns, confirmed: true }));
+    if (r.closed) return lapsNsOf(r, timeline.value).map((ns) => ({ ns, confirmed: true }));
     return live.laps.map((lap) => ({ ns: spanNs(r, lap.startTick, lap.endTick, timeline.value), confirmed: lap.confirmed }));
   });
 

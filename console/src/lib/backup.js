@@ -17,7 +17,7 @@ const uint = v => Number.isSafeInteger(v) && v >= 0;
 const tick = v => typeof v === "string" && /^(0|[1-9]\d{0,19})$/.test(v) && BigInt(v) <= 18446744073709551615n;
 const optionalTick = v => v == null || tick(v);
 const decimal = v => typeof v === "string" && /^-?\d{1,80}$/.test(v);
-const localFields = new Set(["id", "seq", "cursor", "cursorSeq", "throughSeq", "evidenceSeqs", "historyId", "cpSeq", "imported"]);
+const localFields = new Set(["id", "seq", "cursor", "cursorSeq", "throughSeq", "evidenceSeqs", "historyId", "cpSeq", "imported", "durable"]);
 export function canonical(value) {
   if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
   if (object(value)) return `{${Object.keys(value).filter(k => value[k] !== undefined).sort().map(k => `${JSON.stringify(k)}:${canonical(value[k])}`).join(",")}}`;
@@ -225,9 +225,16 @@ export function merge(data) {
         }
       }
       for (const r of data.results) {
-        if (resultsById.has(r.runId)) { skipped++; continue; }
+        if (resultsById.has(r.runId)) {
+          const old = resultsById.get(r.runId);
+          if (old.durable === false) {
+            old.durable = true;
+            await request(tx.objectStore(stores.results).put(old));
+          }
+          skipped++; continue;
+        }
         const refs = evidence(r);
-        const row = { ...r, cursorSeq: refs.from, throughSeq: refs.throughSeq, evidenceSeqs: refs.evidenceSeqs };
+        const row = { ...r, durable: true, cursorSeq: refs.from, throughSeq: refs.throughSeq, evidenceSeqs: refs.evidenceSeqs };
         delete row.id;
         row.id = await request(tx.objectStore(stores.results).add(row));
         resultsById.set(row.runId, row); added++;
@@ -238,9 +245,16 @@ export function merge(data) {
         }
       }
       for (const r of data.runs) {
-        if (runsById.has(r.runId) && !runsById.get(r.runId).deleted) continue;
+        if (runsById.has(r.runId) && !runsById.get(r.runId).deleted) {
+          const old = runsById.get(r.runId);
+          if (old.durable === false) {
+            const saved = { ...old, durable: true };
+            await request(tx.objectStore(stores.runs).put(saved)); addedRuns.push(saved);
+          }
+          continue;
+        }
         const refs = evidence(r);
-        const row = { ...r, armed: false, closed: true, imported: true, cursor: refs.from,
+        const row = { ...r, durable: true, armed: false, closed: true, imported: true, cursor: refs.from,
           throughSeq: refs.throughSeq, evidenceSeqs: refs.evidenceSeqs, historyId: resultsById.get(r.runId)?.id ?? null,
           nodes: Object.fromEntries(Object.entries(r.nodes).map(([node, v]) => [node, { ...v, cpSeq: v.cpSeq == null ? v.cpSeq : remap.get(v.cpSeq) ?? 0 }])) };
         await request(tx.objectStore(stores.runs).put(row)); addedRuns.push(row);
