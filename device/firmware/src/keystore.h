@@ -7,8 +7,8 @@
  *
  * The page sits at the very top of the application flash region, just below the
  * bootloader, and is carved out of the linker's FLASH length (nrf52840_app.ld).
- * App DFU updates rewrite only the pages contained in the .uf2 (the app image,
- * which is far below this page), so the key survives firmware updates.
+ * App DFU upgrades rewrite only the pages contained in the .uf2 (the app image,
+ * which is far below this page), so the key survives firmware upgrades.
  */
 #ifndef KEYSTORE_H
 #define KEYSTORE_H

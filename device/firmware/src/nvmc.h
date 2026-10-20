@@ -1,6 +1,6 @@
 /* One-page flash records kept outside the application image (keystore.c,
  * radio_cfg.c): App DFU rewrites only the pages in the .uf2, so they survive
- * firmware updates. */
+ * firmware upgrades. */
 #ifndef NVMC_H
 #define NVMC_H
 

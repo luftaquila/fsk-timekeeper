@@ -26,7 +26,7 @@ export const useFirmwareStore = defineStore("firmware", () => {
   const awaitingPort = computed(() => ["select-device", "select-bootloader", "select-app"].includes(phase.value));
   const actionLabel = computed(() => {
     const comparison = compareVersions(firmware.value?.metadata.version, device.identity?.fw);
-    return comparison === 0 ? "Reinstall" : comparison === -1 ? "Downgrade" : "Update";
+    return comparison === 0 ? "Reinstall" : comparison === -1 ? "Downgrade" : "Upgrade";
   });
   const canStart = computed(() => !!firmware.value?.compatible && !busy.value && !awaitingPort.value &&
     !device.updateInProgress && !device.clearingData && !useHistoryStore().importing && !timing.armed && !timing.starting && !timing.classifying && !device.connecting && device.transportKind !== "fake" && device.supported);
@@ -82,7 +82,7 @@ export const useFirmwareStore = defineStore("firmware", () => {
       if (!ports.includes(appPort)) break;
       await wait(100);
     }
-    if (ports.includes(appPort)) throw new Error("The board did not enter bootloader mode. Double-tap RST, then retry the update.");
+    if (ports.includes(appPort)) throw new Error("The board did not enter bootloader mode. Double-tap RST, then retry the upgrade.");
     phase.value = "select-bootloader";
     message.value = "Board reset requested. Select its bootloader port to continue. If it is not listed, double-tap RST on the board.";
     await chooseBootloader({ automatic: true });
@@ -129,10 +129,10 @@ export const useFirmwareStore = defineStore("firmware", () => {
 
   async function transfer(port) {
     if (timing.armed) throw new Error("Stop the running measurement first.");
-    message.value = "Keep the board connected until the update finishes.";
+    message.value = "Keep the board connected until the upgrade finishes.";
     await flashFirmware(port, firmware.value, { onProgress: (state, value) => { phase.value = state; progress.value = value; } });
     phase.value = "select-app";
-    message.value = "Firmware sent. Select the updated board to verify its version.";
+    message.value = "Firmware sent. Select the upgraded board to verify its version.";
   }
 
   async function chooseApp() {
@@ -147,10 +147,10 @@ export const useFirmwareStore = defineStore("firmware", () => {
   }
 
   async function verify(port) {
-    if (!isApp(port)) throw new Error("Select the updated FSK Timekeeper board.");
+    if (!isApp(port)) throw new Error("Select the upgraded FSK Timekeeper board.");
     if (!await device.connect({ port, forUpdate: true })) {
       phase.value = "select-app";
-      message.value = "Firmware sent, but reconnection failed. Select the updated board to retry verification.";
+      message.value = "Firmware sent, but reconnection failed. Select the upgraded board to retry verification.";
       return;
     }
     for (let i = 0; i < 50 && !device.identity; i++) await wait(100);
@@ -165,7 +165,7 @@ export const useFirmwareStore = defineStore("firmware", () => {
     if ((expectedId.value && identity.devid !== expectedId.value) || identity.product !== m.product ||
         identity.fw !== m.version || identity.usbProto !== m.usb_protocol || identity.radioProto !== m.radio_protocol) {
       await device.disconnect();
-      throw new Error("Update could not be verified: board identity, version or protocols do not match the selected firmware.");
+      throw new Error("Upgrade could not be verified: board identity, version or protocols do not match the selected firmware.");
     }
     phase.value = "complete";
     message.value = `Firmware ${m.version} verified on board ${identity.devid}.`;
@@ -176,7 +176,7 @@ export const useFirmwareStore = defineStore("firmware", () => {
     if (!awaitingPort.value) return;
     const sent = phase.value === "select-app";
     phase.value = sent ? "unverified" : "ready";
-    message.value = sent ? "Firmware was sent; the running version has not been verified." : "Update cancelled before writing firmware.";
+    message.value = sent ? "Firmware was sent; the running version has not been verified." : "Upgrade cancelled before writing firmware.";
     release();
   }
 

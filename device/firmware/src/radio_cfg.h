@@ -1,7 +1,7 @@
 /* Per-board radio settings: channel, output power and RSSI listen-before-talk.
  *
  * Set over USB (`R`, proto_usb.h) and kept in their own flash page just below
- * the key page (nrf52840_app.ld), so they survive firmware updates. A board
+ * the key page (nrf52840_app.ld), so they survive firmware upgrades. A board
  * without stored settings uses the config.h defaults. Every board of a fleet
  * needs the same frequency; nothing on the air tells a board it is on another
  * channel.

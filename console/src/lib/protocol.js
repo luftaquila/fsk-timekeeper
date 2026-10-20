@@ -268,10 +268,10 @@ export function contractOf(identity) {
   if (!identity) return { ok: false, reason: "Waiting for master identification" };
   if (identity.product !== USB_PRODUCT) return { ok: false, reason: `Unexpected device: ${identity.product}` };
   if (identity.usbProto !== USB_PROTO_VERSION || identity.radioProto !== RADIO_PROTO_VERSION || identity.ticksPerMs !== Number(MASTER_TICKS_PER_MS)) {
-    return { ok: false, reason: CONTRACT_VERSION, label: "Protocol Mismatch", action: "Update the firmware and console" };
+    return { ok: false, reason: CONTRACT_VERSION, label: "Protocol Mismatch", action: "Upgrade the firmware and console" };
   }
   if (identity.role === "S") return { ok: false, reason: CONTRACT_SENSOR_ROLE, action: "Reset the board with USB connected" };
-  if (identity.role !== "M") return { ok: false, reason: CONTRACT_VERSION, label: "Protocol Mismatch", action: "Update the firmware and console" };
+  if (identity.role !== "M") return { ok: false, reason: CONTRACT_VERSION, label: "Protocol Mismatch", action: "Upgrade the firmware and console" };
   return { ok: true, reason: null };
 }
 

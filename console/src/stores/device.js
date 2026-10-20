@@ -485,7 +485,7 @@ export const useDeviceStore = defineStore("device", () => {
 
   // One provisioning command to the connected board (any role); resolves "ok", one of fails, or "timeout".
   function provision(cmd, line, shown, fails) {
-    if (updateInProgress.value) return Promise.reject(new Error("Wait for the firmware update to finish."));
+    if (updateInProgress.value) return Promise.reject(new Error("Wait for the firmware upgrade to finish."));
     if (!transport?.connected) return Promise.reject(new Error("Master not connected"));
     if (keyReadState.value === "loading") return Promise.reject(new Error("Wait for the board settings to load."));
     if (provisionPending) return Promise.reject(new Error("A settings update is already in progress"));

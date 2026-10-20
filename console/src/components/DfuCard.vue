@@ -21,17 +21,17 @@ const stages = {
   restarting: "Restarting board…",
   verifying: "Verifying firmware…",
   "select-app": "Verification Required",
-  complete: "Firmware Updated",
+  complete: "Firmware Upgraded",
   unverified: "Firmware Not Verified",
 };
 const status = computed(() => {
-  if (update.phase === "error") return update.firmware ? "Update Failed" : "Invalid Firmware File";
+  if (update.phase === "error") return update.firmware ? "Upgrade Failed" : "Invalid Firmware File";
   if (incompatible.value) return "Incompatible Firmware";
   return stages[update.phase] || "";
 });
 const details = computed(() => {
-  if (!device.supported) return "Use desktop Chrome or Edge to update firmware over USB.";
-  if (device.transportKind === "fake") return "Disconnect the simulator to update a board over USB.";
+  if (!device.supported) return "Use desktop Chrome or Edge to upgrade firmware over USB.";
+  if (device.transportKind === "fake") return "Disconnect the simulator to upgrade a board over USB.";
   if (update.phase === "complete") return "";
   return notificationText(update.message);
 });
@@ -47,9 +47,9 @@ function dropped(event) {
 </script>
 
 <template>
-  <section class="settings-section" aria-labelledby="firmware-update-title">
+  <section class="settings-section" aria-labelledby="firmware-upgrade-title">
     <div class="section-heading">
-      <h4 id="firmware-update-title">Firmware Update</h4>
+      <h4 id="firmware-upgrade-title">Firmware Upgrade</h4>
     </div>
     <div class="section-content">
       <div class="firmware-file" :class="{ dragging }" @dragover.prevent="dragging = !locked" @dragleave.prevent="dragging = false" @drop.prevent="dropped">
@@ -79,7 +79,7 @@ function dropped(event) {
           <button v-if="update.phase === 'select-device'" class="btn btn-primary btn-sm" type="button" @click="update.chooseDevice">Select Device</button>
           <button v-else-if="update.phase === 'select-bootloader'" class="btn btn-primary btn-sm" type="button" @click="update.chooseBootloader">Select Bootloader</button>
           <button v-else-if="update.phase === 'select-app'" class="btn btn-primary btn-sm" type="button" @click="update.chooseApp">Reconnect</button>
-          <button v-else class="btn btn-sm send" :class="update.actionLabel === 'Downgrade' ? 'btn-warning' : 'btn-success'" type="button" :disabled="!update.canStart" @click="update.start">{{ update.busy ? 'Updating…' : update.actionLabel }}</button>
+          <button v-else class="btn btn-sm send" :class="update.actionLabel === 'Downgrade' ? 'btn-warning' : 'btn-success'" type="button" :disabled="!update.canStart" @click="update.start">{{ update.busy ? 'Upgrading…' : update.actionLabel }}</button>
         </div>
       </div>
     </div>

@@ -157,12 +157,12 @@ describe("pipeline with the fake master", () => {
     assert.equal(settings.mappingOf("0250FEB2"), null);
     assert.equal(device.telemetry["0250FEB2"].link_state, "online");
   });
-  it("keeps the firmware update lock across disconnect and blocks measurement/configuration", async () => {
+  it("keeps the firmware upgrade lock across disconnect and blocks measurement/configuration", async () => {
     const { device, timing } = await boot();
     device.updateInProgress = true;
     assert.equal(await device.connect({ kind: "fake" }), false);
     assert.equal(await timing.start("sprint"), false);
-    await assert.rejects(device.provisionKey("a".repeat(64)), /firmware update/);
+    await assert.rejects(device.provisionKey("a".repeat(64)), /firmware upgrade/);
     await device.disconnect();
     assert.equal(device.updateInProgress, true);
     device.updateInProgress = false;

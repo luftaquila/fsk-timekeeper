@@ -56,7 +56,7 @@ export async function readFirmwarePackage(bytes) {
     fail("The outer ZIP and DFU ZIP metadata do not match.");
   }
   const manifest = json(files["manifest.json"], "DFU manifest").manifest;
-  if (!manifest || Object.keys(manifest).length !== 2 || !manifest.application || manifest.dfu_version !== 0.5) fail("Only application firmware updates are supported.");
+  if (!manifest || Object.keys(manifest).length !== 2 || !manifest.application || manifest.dfu_version !== 0.5) fail("Only application firmware upgrades are supported.");
   const app = manifest.application;
   if (!/^[\w.-]+\.bin$/.test(app.bin_file) || !/^[\w.-]+\.dat$/.test(app.dat_file)) fail("Invalid DFU file names.");
   const binary = files[app.bin_file];

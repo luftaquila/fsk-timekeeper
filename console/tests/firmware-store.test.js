@@ -33,8 +33,8 @@ beforeEach(() => {
 });
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
-describe("firmware update lifecycle", () => {
-  it("opens the normal/bootloader chooser directly from Update, then chooses the reset board", async () => {
+describe("firmware upgrade lifecycle", () => {
+  it("opens the normal/bootloader chooser directly from Upgrade, then chooses the reset board", async () => {
     serial.requestPort.mockResolvedValueOnce(app).mockResolvedValue(boot);
     serial.getPorts.mockResolvedValueOnce([app]).mockResolvedValue([boot]);
     const store = await ready();
