@@ -97,11 +97,13 @@ Results are saved in the browser and listed in `History`.
 > The JLCPCB PCBA order above costs about <span>$</span>7, excluding shipping.\
 > The full set of parts costs about <span>$</span>40 on AliExpress, excluding BA2M-DDT sensors and 18650 batteries.
 
+> [!IMPORTANT]
+> Solder `U2` first. Installing `U1` first makes `U2` harder to solder.
+
 1. All boards: solder `U2` (Ra-01SH), `U1` (SuperMini nRF52840), and `L1` (22 µH 0630 inductor).
 2. Master: solder the optional GPS module at `U4` and connect its antenna.
-3. Sensors: solder the battery holder at `BT1` and the `5569-04A2` connector at `J1`.
-4. Sensors: wire the toggle switch to `SW1`.
-5. Connect each LoRa module to an IPEX-to-SMA cable.
+3. Sensors: solder the battery holder at `BT1` and the `5569-04A2` connector at `J1`, then wire the toggle switch to `SW1`.
+4. Connect each LoRa module to an IPEX-to-SMA cable.
 
 | 3D view | Layout |
 | :---: | :---: |
@@ -115,18 +117,17 @@ Required per sensor: 4x M2 × 8 mm and 3x M3 × 14 mm hex bolts.
 2. 3D-print 1x `master.stl`, 4x `sensor.stl`, and 4x `sensor-holder.stl`.
 3. Mount the SMA connectors and attach the LoRa antennas.
 4. Mount the switches and insert 18650 batteries into the sensor housings.
-5. Secure each PCB between the base and lid with bolts.
-6. Secure the `BA2M-DDT` sensor to the holder with bolts, then mount the holder on a tripod.
+5. Secure each PCB between the base and lid with M2 bolts.
+6. Secure the `BA2M-DDT` sensor to the holder with M3 bolts, then mount the holder on a tripod.
 
 ### 4. Upload firmware and configure devices
 
-1. Connect a board to the [web console](https://luftaquila.github.io/fsk-timekeeper/) over USB.
-   * If a new board does not enter bootloader mode automatically, quickly short `RST` pin to `GND` twice.
-2. In `Firmware Upgrade`, select `fsk-timekeeper-firmware.zip` and click `Upgrade`.
-3. Select the port and keep USB connected during upload.
-4. Click `Reconnect` and select the board to verify the new firmware version.
-5. Generate a new key under `Radio Key` and apply it to the first board.
-6. Set up the remaining boards with the same firmware and radio key.
+1. In console's `Firmware Upgrade`, select `fsk-timekeeper-firmware.zip` and click `Upgrade`.
+2. Select the port and keep the USB cable connected until the upload is complete.
+   * If a new board does not enter bootloader mode automatically, short the `RST` pin to `GND` twice quickly.
+3. Click `Reconnect` and select the board to verify the new firmware version.
+4. Generate a new key under `Radio Key` and apply it to the first board.
+5. Set up the remaining boards with the same firmware and radio key.
 
 <img src=".github/assets/console.png" alt="FSK Timekeeper Console settings with one master and four sensors" width="750">
 
