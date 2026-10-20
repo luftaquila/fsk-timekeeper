@@ -276,12 +276,28 @@ int main(int argc, char **argv)
                     assert(hal.getLimit(restored) && restored == start + budget);
                     if (result == RADIO_CAD_BUSY) {
                         assert(chip.mode == RADIOLIB_SX126X_STATUS_MODE_RX);
-                        assert(board_micros() - start < budget + 2000u);
+                        assert(board_micros() - start < budget + cad_delay_us + 1000u); /* awaited to completion */
                     }
                     radio_unlimit();
                     assert(radio_start_rx() == 0);
                 }
             }
+        }
+    } else if (!strcmp(scenario, "cad_hung_deadline")) {
+        /* CAD-done never comes. However late the slot was entered (here the deadline falls
+         * 9, 7, 5, 2 and 0.1 ms into the scan), the scan counts as failed and resets the radio. */
+        power_on();
+        unsigned counted = 0;
+        for (unsigned budget : {9000u, 7000u, 5000u, 2000u, 100u}) {
+            assert(radio_begin() == 0 && radio_start_rx() == 0);
+            for (unsigned i = 1; i <= RADIO_NORESP_RESET; i++) {
+                assert(!radio_needs_reset());
+                uint32_t start = board_micros(); radio_limit(start + budget);
+                assert(radio_cad() == RADIO_CAD_ERROR && notes[EL_CAD_TIMEOUT] == ++counted);
+                assert(board_micros() - start < (CAD_TIMEOUT_MS + 1u) * 1000u); /* bounded wait */
+                radio_unlimit();
+            }
+            assert(radio_needs_reset());
         }
     } else if (!strcmp(scenario, "cad_busy_deadline")) {
         power_on(); assert(radio_begin() == 0 && radio_start_rx() == 0);

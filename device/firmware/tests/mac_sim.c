@@ -40,6 +40,7 @@
  * XOSC standby avoids most starts; retain the existing worst-case budget. */
 #define OSC_START_BUDGET_US 5000u
 #define CAD_US      2560u   /* 4 symbols at SF7/BW250 */
+static_assert(OSC_START_BUDGET_US + CAD_US < CAD_DONE_MS * 1000u, "a modelled CAD is a healthy one");
 #define TX_SETUP_US (TX_SETUP_MS * 1000u) /* SPI (~1.5 ms at 1 MHz: packet, params) + oscillator + PA ramp */
 #define RX_SETUP_US 5500u   /* SPI + oscillator before the receiver listens */
 #define HEADER_US   10400u  /* preamble + header before HEADER_VALID */
@@ -338,8 +339,7 @@ int radio_cad(void)
     int32_t remaining = (int32_t)(cur->deadline - board_micros());
     if (cur->deadline && remaining < (int32_t)(OSC_START_BUDGET_US + CAD_US)) {
         if (remaining <= 0) { return RADIO_CAD_BUSY; } /* RX never left */
-        cur->now_us += remaining;
-        if (cur->now_us < t0) { cur->now_us = t0; } /* finish the setup command */
+        cur->now_us = t0 + CAD_US; /* the scan is awaited to completion, then cancelled */
         uint32_t access = cur->deadline;
         radio_limit(board_micros() + TX_SETUP_MS * 1000u);
         int result = radio_start_rx();

@@ -375,7 +375,13 @@ static int cad_failure(void)
 
 /* A failed start or a CAD that never completes counts towards a reset. The
  * start fails with WRONG_MODEM once the radio has reset itself: back in GFSK,
- * it still transmits and receives, so only this sees it. */
+ * it still transmits and receives, so only this sees it. An elapsed access
+ * deadline cancels the transmission, not the health check: the scan is still
+ * awaited for up to CAD_DONE_MS, so no slot deadline can hide a hung CAD. */
+static_assert(CAD_DONE_MS < CAD_TIMEOUT_MS &&
+              SLOT_LATE_MS + CAD_DONE_MS + TX_SETUP_MS + LBT_LISTEN_MS < SLOT_LEN_MS,
+              "a scan awaited past its slot deadline ends before the next slot's listen");
+
 extern "C" int radio_cad(void)
 {
     RadioAccess access;
@@ -385,13 +391,10 @@ extern "C" int radio_cad(void)
     if (track(radio.startChannelScan()) != RADIOLIB_ERR_NONE) {
         return cad_failure();
     }
-    uint32_t t0 = board_millis();
-    for (;;) {
-        if (access.expired()) { return cad_rearm(RADIO_CAD_BUSY); }
-        if (gpio_read(PIN_LORA_DIO1)) { break; }
-        if ((uint32_t)(board_millis() - t0) >= CAD_TIMEOUT_MS) {
-            return cad_failure();
-        }
+    uint32_t t0 = board_micros();
+    while (!gpio_read(PIN_LORA_DIO1)) {
+        uint32_t limit_ms = access.expired() ? CAD_DONE_MS : CAD_TIMEOUT_MS;
+        if (board_micros() - t0 >= limit_ms * 1000u) { return cad_failure(); }
     }
     hal.limit(board_micros() + TX_SETUP_MS * 1000u);
     int16_t result = track(radio.getChannelScanResult());

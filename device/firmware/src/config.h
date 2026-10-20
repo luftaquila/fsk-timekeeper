@@ -85,6 +85,8 @@
 #define JOIN_MAX_OFFERS    3u
 #define RX_HEADER_WAIT_MS  12u  /* a preamble without a header after this long is noise */
 #define CAD_TIMEOUT_MS     10u  /* ~2.5 ms CAD (4 symbols at SF7/BW250) plus oscillator startup margin */
+#define CAD_DONE_MS        8u   /* a healthy CAD has reported by now, oscillator startup included;
+                                   past an access deadline a scan is awaited this long, no longer */
 
 /* Idle checkpoint/two-way refresh: this many beacon periods after the last
  * confirmed exchange, in the sensor's last slot. Independent of 8-bit seq wrap. */
