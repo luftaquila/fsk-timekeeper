@@ -21,7 +21,8 @@
 static uint8_t s_dma_byte;
 static volatile uint8_t s_rx_ring[RX_RING];
 static volatile uint16_t s_rx_head;
-static uint16_t s_rx_tail;
+static volatile uint16_t s_rx_tail;
+static volatile int s_rx_discard;
 static uint8_t s_tx_buf[48];
 static int s_tx_started;
 
@@ -30,12 +31,27 @@ void UART0_UARTE0_IRQHandler(void)
     if (NRF_UARTE0->EVENTS_ENDRX) {
         NRF_UARTE0->EVENTS_ENDRX = 0;
         uint16_t head = s_rx_head;
-        uint16_t next = (uint16_t)((head + 1u) & (RX_RING - 1u));
-        if (next != s_rx_tail) {
-            s_rx_ring[head] = s_dma_byte;
-            __DMB();
-            s_rx_head = next;
+        uint8_t c = s_dma_byte;
+        /* Attach each '$' to its arrival tick inside the existing byte ring.
+         * Publish the whole entry atomically; timestamps cost no second buffer. */
+        unsigned need = c == '$' ? 5u : 1u;
+        unsigned free = (s_rx_tail - head - 1u) & (RX_RING - 1u);
+        if ((s_rx_discard && c != '$') || free < need) {
+            s_rx_discard = 1;
+            return;
         }
+        s_rx_discard = 0;
+        s_rx_ring[head] = c;
+        head = (uint16_t)((head + 1u) & (RX_RING - 1u));
+        if (c == '$') {
+            uint32_t tick = capture_now32();
+            for (unsigned i = 0; i < 4u; i++) {
+                s_rx_ring[head] = (uint8_t)(tick >> (8u * i));
+                head = (uint16_t)((head + 1u) & (RX_RING - 1u));
+            }
+        }
+        __DMB();
+        s_rx_head = head;
     }
 }
 
@@ -173,6 +189,7 @@ static int pps_estimate(uint8_t count, int32_t *ppb, uint8_t *span_s)
 static char s_nmea[NMEA_MAX];
 static uint8_t s_nlen;
 static int s_nactive;
+static uint32_t s_nmea_tick;
 static uint8_t s_fix, s_sats;
 static uint32_t s_rmc_utc;      /* epoch of the last valid RMC (status A), 0 = none */
 static int s_rmc_valid;
@@ -229,10 +246,11 @@ static uint32_t civil_to_epoch(int y, int m, int d, unsigned hh, unsigned mm, un
 static void parse_rmc(char *f[], unsigned nf)
 {
     uint32_t now = board_millis();
+    uint32_t age_ms = ((uint32_t)capture_now64() - s_nmea_tick) / (TICKS_PER_S / 1000u);
     /* Expire BEFORE refreshing: an A arriving after a gap cannot revive samples
      * accumulated without fresh receiver status, even if no report was requested. */
     reference_ready(now);
-    int fixed = nf >= 10 && !strcmp(f[2], "A") && rmc_datetime_valid(f[1], f[9]);
+    int fixed = age_ms < GPS_RMC_STALE_MS && nf >= 10 && !strcmp(f[2], "A") && rmc_datetime_valid(f[1], f[9]);
     /* Discard transition-adjacent samples conservatively: PPS phase may realign
      * on reacquisition. Do not assume every A/V change implies a phase step. */
     if (!fixed || fixed != s_nav_valid) { s_pps_count = 0; }
@@ -241,7 +259,7 @@ static void parse_rmc(char *f[], unsigned nf)
         s_rmc_valid = 0;
         return;
     }
-    s_rmc_last_ms = now;
+    s_rmc_last_ms = now - age_ms;
     s_rmc_utc = civil_to_epoch(2000 + (int)num2(f[9] + 4), (int)num2(f[9] + 2), (int)num2(f[9]),
                                num2(f[1]), num2(f[1] + 2), num2(f[1] + 4));
     s_rmc_valid = 1;
@@ -278,9 +296,8 @@ static void nmea_line(char *line, unsigned len)
         parse_rmc(f, nf);
         /* The RMC that follows a PPS edge describes that edge's second; one that
          * ends the window also disqualifies the edge it follows. */
-        uint64_t now = capture_now64();
         if (s_edge_pending && !s_edge.rmc &&
-            now - s_edge.tick < (uint64_t)GPS_RMC_LAG_MAX_MS * (TICKS_PER_S / 1000u)) {
+            (uint32_t)(s_nmea_tick - (uint32_t)s_edge.tick) < GPS_RMC_LAG_MAX_MS * (TICKS_PER_S / 1000u)) {
             s_edge.rmc = 1;
             s_edge.utc = s_rmc_valid ? s_rmc_utc : 0;
             if (!s_pps_count) { s_edge.seg = 0; s_edge.n = 0; }
@@ -294,7 +311,15 @@ static void nmea_line(char *line, unsigned len)
 
 static void nmea_byte(uint8_t c)
 {
-    if (c == '$') { s_nactive = 1; s_nlen = 0; s_nmea[s_nlen++] = '$'; return; }
+    if (c == '$') {
+        s_nmea_tick = 0;
+        for (unsigned i = 0; i < 4u; i++) {
+            uint8_t byte = 0;
+            (void)rx_pop(&byte); /* published together with '$' by the ISR */
+            s_nmea_tick |= (uint32_t)byte << (8u * i);
+        }
+        s_nactive = 1; s_nlen = 0; s_nmea[s_nlen++] = '$'; return;
+    }
     if (!s_nactive) { return; }
     if (c == '\n' || c == '\r') {
         s_nmea[s_nlen] = '\0';
@@ -307,6 +332,21 @@ static void nmea_byte(uint8_t c)
 }
 
 /* ---- public ------------------------------------------------------------------ */
+void gps_discard_pending(void)
+{
+    /* No pre-session sentence or edge may be labelled with the new master boot. */
+    NVIC_DisableIRQ(UART0_UARTE0_IRQn);
+    s_rx_tail = s_rx_head;
+    s_rx_discard = 1;
+    NVIC_EnableIRQ(UART0_UARTE0_IRQn);
+    s_nactive = s_nlen = 0;
+    s_edge_pending = 0;
+    /* TIMER1 continues across rekey. Keep its frequency window; reference_ready()
+     * independently invalidates it after an HFXO stop or stale navigation status. */
+    uint64_t discarded;
+    (void)capture_pps_get(&discarded);
+}
+
 void gps_init(void)
 {
     gpio_cfg_input_pullup(PIN_GPS_RXD); /* idle-high; no garbage when the GPS is unpopulated */

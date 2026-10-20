@@ -101,6 +101,9 @@ static int bring_up(int master)
     if (!board_hfclk_xtal()) { return -1; }
     int st = radio_begin();
     if (st != 0) { return st; }
+    st = radio_start_rx();
+    if (st != 0) { return st; }
+    /* Start captures only after the last fallible step, so a retry cannot reset live counters. */
     capture_init();
     if (master) {
         capture_pps_enable();
@@ -120,7 +123,7 @@ static int retry_bring_up(retry_t *r, int master, uint32_t now)
         return 0;
     }
     el_radio_recovery_begin(RADIO_RECOVERY_BOOT);
-    int ok = bring_up(master) == 0 && radio_start_rx() == 0;
+    int ok = bring_up(master) == 0;
     el_radio_recovery_end(ok);
     if (ok) { return 1; }
     retry_later(r, board_millis(), RADIO_RESET_BACKOFF_MAX_MS);
@@ -180,6 +183,8 @@ static mq_t g_queue;
 static mac_master_t g_mac;
 static int g_rekey;
 static uint32_t g_hfxo_stops; /* board_hfxo_stops() already handled */
+static uint64_t g_reported_boot;
+static uint32_t g_reported_usb_epoch;
 
 /* A master HFXO fault ends the timebase session: its marker is queued ahead of
  * any record of the new session, which starts once the crystal is back. A stop
@@ -204,6 +209,7 @@ static int master_clock_check(void)
     if (!reported && !mq_full(&g_queue)) { reported = mq_push_timebase_end(&g_queue, boot, at); }
     if (reported && board_hfclk_xtal()) {
         g_rekey = 0;
+        gps_discard_pending();
         sec_init();
         mac_master_session(&g_mac);
         faulted = 0;
@@ -213,7 +219,7 @@ static int master_clock_check(void)
 }
 
 /* Node 0 self-report: die temperature, charge rail, security and queue counters. */
-static void emit_self(int timebase_ok)
+static int emit_self(int timebase_ok)
 {
     timebase_ok = timebase_ok && sec_ready() && !radio_needs_reset();
     pu_diag_t d = {0};
@@ -238,14 +244,22 @@ static void emit_self(int timebase_ok)
     d.tx_drop = pu_tx_drop();
     d.reset_reason = fault_reset_reason();
     d.master_boot_id = sec_boot_id();
-    pu_emit_diag(&d);
+    if (!pu_emit_diag(&d)) { return 0; }
+    g_reported_boot = d.master_boot_id;
+    g_reported_usb_epoch = usb_console_epoch();
+    return 1;
 }
 
 static void emit_pps(void)
 {
-    if (!gps_report_due()) { return; } /* includes explicit ?STATUS requests */
+    if (!usb_console_ready() || !gps_report_due()) { return; } /* includes ?STATUS */
     gps_report_t g;
+    /* Periodic output is best effort. Consume once, even if the session line
+     * cannot fit, so a full USB buffer costs at most one attempt per sample. */
     gps_report(&g);
+    /* P has no boot field. Its session must reach this USB connection first. */
+    if ((g_reported_boot != sec_boot_id() || g_reported_usb_epoch != usb_console_epoch()) &&
+        !emit_self(1)) { return; }
     pu_emit_pps(g.pps_tick, g.utc_s, g.ppb, g.pps_valid, g.fix, g.sats, g.span_s, g.seg, g.n);
 }
 

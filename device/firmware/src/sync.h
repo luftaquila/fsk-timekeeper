@@ -39,8 +39,8 @@ typedef struct {
     int      skew_valid;    /* plausible and from enough samples */
     int64_t  skew_num;      /* fractional offset slope; ppm is display only */
     uint64_t skew_den;
-    uint16_t rx_miss;       /* beacons missed since boot (saturating) */
-    uint8_t  beacon_gap;    /* beacons missed in a row right now */
+    uint16_t rx_miss;       /* observed misses since boot, saturating; long/ambiguous gaps excluded */
+    uint8_t  beacon_gap;    /* last measurable gap between received beacons, not a live outage count */
 } sync_t;
 
 /* Boot: everything zero. */

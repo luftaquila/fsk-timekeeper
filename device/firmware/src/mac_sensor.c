@@ -125,7 +125,9 @@ static void activate_join(mac_sensor_t *s, int entry, uint32_t ctr)
     sensor_join_t *j = &s->join;
     if (!s->have_session || s->master_boot_id != j->master_boot) {
         sq_clear(&s->q);
+        uint32_t missed = (uint32_t)s->sync.rx_miss + j->sync.rx_miss;
         s->sync = j->sync;
+        s->sync.rx_miss = (uint16_t)(missed > UINT16_MAX ? UINT16_MAX : missed);
         s->timing_ready = 0;
         s->cp_pending = s->cp_answered = 0;
     }
@@ -416,8 +418,8 @@ static void slot_tx(mac_sensor_t *s)
         if (role == SLOT_ROLE_CONFIRM) { s->join.phase = SENSOR_JOIN_WAIT_ASSIGNMENT; }
         return;
     }
-    if (!radio_needs_reset()) { radio_start_rx(); }
     radio_unlimit();
+    if (!radio_needs_reset()) { radio_start_rx(); }
 }
 
 static void radio_recovery(mac_sensor_t *s)

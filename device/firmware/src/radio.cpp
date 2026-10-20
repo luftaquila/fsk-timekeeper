@@ -320,17 +320,30 @@ extern "C" int radio_receive(uint8_t *buf, int maxlen, float *rssi, float *snr)
     return (int)len;
 }
 
+/* The access deadline cancels channel assessment, not a healthy SPI command.
+ * Restore it for the caller; each command/re-arm gets a bounded SPI budget. */
+struct RadioAccess {
+    uint32_t end;
+    bool limited;
+    RadioAccess() : limited(hal.getLimit(end)) {}
+    ~RadioAccess() { if (limited) { hal.limit(end); } else { hal.unlimit(); } }
+    bool expired() const { return limited && (int32_t)(board_micros() - end) >= 0; }
+};
+
 extern "C" int radio_rx_settle(uint32_t header_wait_ms, uint32_t max_ms)
 {
+    RadioAccess access;
     hal.restartHangCheck();
     uint32_t t0 = board_millis();
     for (;;) {
-        if (hal.expired()) { return RADIO_RX_BUSY; }
+        if (access.expired()) { return RADIO_RX_BUSY; }
         if (gpio_read(PIN_LORA_DIO1)) {
             return RADIO_RX_PACKET;
         }
+        hal.limit(board_micros() + TX_SETUP_MS * 1000u);
         uint32_t irq = radio.getIrqFlags();
         if (hal.deadlineHit()) { track(RADIOLIB_ERR_SPI_CMD_TIMEOUT); return RADIO_RX_BUSY; }
+        if (access.expired()) { return RADIO_RX_BUSY; }
         uint32_t waited = board_millis() - t0;
         /* A valid header means a packet is arriving, whatever older header error
          * is latched beside it. A header error or a preamble that led nowhere
@@ -345,13 +358,19 @@ extern "C" int radio_rx_settle(uint32_t header_wait_ms, uint32_t max_ms)
     }
 }
 
-static int cad_failure(bool stop_scan)
+static int cad_rearm(int result)
+{
+    if (s_init_pending && !s_configured) { return RADIO_CAD_ERROR; }
+    hal.limit(board_micros() + TX_SETUP_MS * 1000u);
+    /* startReceive enters standby before setting RX, also stopping a live CAD. */
+    return radio_start_rx() == RADIOLIB_ERR_NONE ? result : RADIO_CAD_ERROR;
+}
+
+static int cad_failure(void)
 {
     el_note(EL_CAD_TIMEOUT);
     s_cad_fail++;
-    if (stop_scan) { radio.standby(); }
-    radio_start_rx();
-    return RADIO_CAD_ERROR;
+    return cad_rearm(RADIO_CAD_ERROR);
 }
 
 /* A failed start or a CAD that never completes counts towards a reset. The
@@ -359,25 +378,30 @@ static int cad_failure(bool stop_scan)
  * it still transmits and receives, so only this sees it. */
 extern "C" int radio_cad(void)
 {
+    RadioAccess access;
+    if (access.expired()) { return RADIO_CAD_BUSY; }
+    hal.limit(board_micros() + TX_SETUP_MS * 1000u);
     hal.restartHangCheck();
     if (track(radio.startChannelScan()) != RADIOLIB_ERR_NONE) {
-        return cad_failure(false);
+        return cad_failure();
     }
     uint32_t t0 = board_millis();
-    while (gpio_read(PIN_LORA_DIO1) == 0) {
-        if (hal.expired() || (uint32_t)(board_millis() - t0) >= CAD_TIMEOUT_MS) {
-            return cad_failure(true);
+    for (;;) {
+        if (access.expired()) { return cad_rearm(RADIO_CAD_BUSY); }
+        if (gpio_read(PIN_LORA_DIO1)) { break; }
+        if ((uint32_t)(board_millis() - t0) >= CAD_TIMEOUT_MS) {
+            return cad_failure();
         }
     }
+    hal.limit(board_micros() + TX_SETUP_MS * 1000u);
     int16_t result = track(radio.getChannelScanResult());
     if (result != RADIOLIB_LORA_DETECTED && result != RADIOLIB_CHANNEL_FREE) {
-        return cad_failure(false);
+        return cad_failure();
     }
     s_cad_fail = 0;
     el_radio_clear(EL_CAD_TIMEOUT);
-    if (result == RADIOLIB_LORA_DETECTED) {
-        radio_start_rx();
-        return RADIO_CAD_BUSY;
+    if (result == RADIOLIB_LORA_DETECTED || access.expired()) {
+        return cad_rearm(RADIO_CAD_BUSY);
     }
     return RADIO_CAD_CLEAR;
 }
@@ -387,16 +411,19 @@ extern "C" int radio_lbt_enabled(void) { return s_cfg.lbt; }
 /* GetRssiInst answers -raw/2 dBm; SPI failures count towards a reset like any command. */
 extern "C" int radio_lbt_listen(void)
 {
+    RadioAccess access;
     hal.restartHangCheck();
     int loud = 0;
     uint32_t t0 = board_micros();
     do {
-        if (hal.expired()) { return RADIO_LBT_LOUD; }
+        if (access.expired()) { return RADIO_LBT_LOUD; }
+        hal.limit(board_micros() + TX_SETUP_MS * 1000u);
         uint8_t raw = 0;
         if (track(mod.SPIreadStream(RADIOLIB_SX126X_CMD_GET_RSSI_INST, &raw, 1)) != RADIOLIB_ERR_NONE ||
             raw < -2 * LBT_THRESHOLD_DBM) {
             loud = 1;
         }
+        if (access.expired()) { return RADIO_LBT_LOUD; }
     } while ((uint32_t)(board_micros() - t0) < LBT_LISTEN_MS * 1000u);
     return loud ? RADIO_LBT_LOUD : RADIO_LBT_QUIET;
 }

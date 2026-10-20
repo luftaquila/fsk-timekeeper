@@ -249,8 +249,8 @@ static void send_beacon(mac_master_t *m)
             return;
         }
     }
-    if (!radio_needs_reset()) { radio_start_rx(); }
     radio_unlimit();
+    if (!radio_needs_reset()) { radio_start_rx(); }
 }
 
 static void send_offer(mac_master_t *m)
@@ -278,8 +278,8 @@ static void send_offer(mac_master_t *m)
                 j + 1u < SLOT_COUNT && SLOT_ROLE(m->schedule[j+1]) == SLOT_ROLE_CONFIRM);
             m->tx_state = MASTER_TX_OFFER; return;
         }
-        if (!radio_needs_reset()) { radio_start_rx(); }
         radio_unlimit();
+        if (!radio_needs_reset()) { radio_start_rx(); }
     }
 }
 

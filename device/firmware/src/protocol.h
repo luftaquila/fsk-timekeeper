@@ -115,8 +115,8 @@ typedef struct __attribute__((packed)) {
     uint8_t  health;           /* HEALTH_* of the sensor clock now */
     uint16_t sync_age_ms;      /* age of the newest anchor now, saturated */
     int16_t  skew_ppm;         /* measured drift vs master, clamped to i16 */
-    uint16_t rx_miss;          /* beacons missed since boot (saturating) */
-    uint8_t  beacon_gap;       /* beacons missed in a row right now (saturating) */
+    uint16_t rx_miss;          /* observed misses since boot, saturating; long/ambiguous gaps excluded */
+    uint8_t  beacon_gap;       /* last measurable gap between received beacons, not a live outage count */
     uint16_t batt_mv;          /* cell estimate */
     int16_t  temp_c10;         /* die temperature, 0.1 C */
     uint16_t capture_overflow; /* lost/ambiguous hardware captures since boot */

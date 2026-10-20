@@ -16,11 +16,13 @@ static int have_pps;
 static int xtal = 1;
 static uint32_t hfxo_stops;
 static unsigned clock_ppm;
+static uint64_t tick_base;
 
 uint32_t board_millis(void) { return (uint32_t)now_ms; }
 int board_hfclk_xtal(void) { return xtal; }
 uint32_t board_hfxo_stops(void) { return hfxo_stops; }
-uint64_t capture_now64(void) { return now_ms * 16000u + now_ms * 16u * clock_ppm / 1000u; }
+uint64_t capture_now64(void) { return tick_base + now_ms * 16000u + now_ms * 16u * clock_ppm / 1000u; }
+uint32_t capture_now32(void) { return (uint32_t)capture_now64(); }
 int capture_pps_get(uint64_t *tick)
 {
     if (!have_pps) return 0;
@@ -36,7 +38,7 @@ static void byte(uint8_t c)
     UART0_UARTE0_IRQHandler();
 }
 
-static void sentence(const char *body, int corrupt)
+static void queue_sentence(const char *body, int corrupt)
 {
     unsigned sum = 0;
     char suffix[6];
@@ -44,6 +46,11 @@ static void sentence(const char *body, int corrupt)
     for (const char *p = body; *p; p++) { byte((uint8_t)*p); sum ^= (uint8_t)*p; }
     snprintf(suffix, sizeof(suffix), "*%02X\r\n", sum ^ (corrupt ? 1u : 0u));
     for (const char *p = suffix; *p; p++) byte((uint8_t)*p);
+}
+
+static void sentence(const char *body, int corrupt)
+{
+    queue_sentence(body, corrupt);
     gps_poll();
 }
 
@@ -98,6 +105,33 @@ int main(int argc, char **argv)
             assert(out.pps_valid == 0 && out.seg == 0);
             assert(!gps_report_due());
         }
+    } else if (!strcmp(scenario, "buffered_rmc") || !strcmp(scenario, "buffered_rmc_wrap")) {
+        if (!strcmp(scenario, "buffered_rmc_wrap")) tick_base = UINT32_MAX - 10500u * 16000u;
+        warm();
+        edge(10, -1);
+        now_ms = 10250;
+        queue_sentence("GNRMC,120010.000,A,3730.0,N,12700.0,E,0,0,280926,,,A", 0);
+        now_ms = 11000; next_pps = capture_now64(); have_pps = 1;
+        now_ms = 11050; gps_poll(); /* 800 ms stall straddling PPS 11 */
+        assert(!gps_report_due()); /* old RMC must not label the new edge */
+        now_ms = 11250; rmc(1);
+        gps_report_t out = report();
+        assert(out.pps_tick == tick_base + 11u * 16000000u && out.utc_s == 1790596811u && out.seg);
+        /* A buffered A cannot extend its navigation lease from processing time. */
+        now_ms = 12250;
+        queue_sentence("GNRMC,120012.000,A,3730.0,N,12700.0,E,0,0,280926,,,A", 0);
+        now_ms += GPS_RMC_STALE_MS; gps_poll();
+        assert(!report().pps_valid);
+    } else if (!strcmp(scenario, "rx_ring_recovery")) {
+        /* Timestamp entries wrap with the byte ring; overflow discards a torn sentence. */
+        for (unsigned i = 0; i < RX_RING - 3u; i++) byte('x');
+        queue_sentence("GNRMC,120000.000,A,3730.0,N,12700.0,E,0,0,280926,,,A", 0);
+        for (unsigned i = 0; i < 5u; i++) gps_poll();
+        assert(!s_nav_valid);
+        warm(); assert(report().pps_valid);
+        gps_discard_pending();
+        assert(!gps_report_due() && report().pps_valid);
+        edge(10, 1); assert(report().seg && report().pps_valid);
     } else if (!strcmp(scenario, "healthy")) {
         now_ms = 100; rmc(1);
         for (unsigned i = 1; i <= 8; i++) edge(i, 1);

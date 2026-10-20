@@ -21,6 +21,8 @@ void capture_init(void) { capture_inits++; }
 void capture_pps_enable(void) {}
 void capture_sensor_enable(void) {}
 void gps_init(void) {}
+static unsigned gps_discards;
+void gps_discard_pending(void) { gps_discards++; }
 static int begin_fail, rx_fail, init_pending, configured;
 static unsigned begin_calls;
 int radio_begin(void) {
@@ -73,7 +75,8 @@ int fault_take_report(uint32_t *pc, uint32_t *lr, const char **cause, uint32_t *
 }
 uint32_t node_devid_hi(void) { return 1; }
 uint32_t node_devid_lo(void) { return 2; }
-int16_t meas_temp_c10(void) { return 250; }
+static unsigned diag_builds;
+int16_t meas_temp_c10(void) { diag_builds++; return 250; }
 uint16_t meas_vddh_mv(void) { return 4000; }
 static int pps_pending;
 int gps_report_due(void) { return pps_pending; }
@@ -84,9 +87,14 @@ void gps_report(gps_report_t *r) {
     pps_pending = 0;
 }
 static int console_open = 1;
+static int reject_diag;
+static uint32_t console_epoch;
 int usb_console_ready(void) { return console_open; }
-uint32_t usb_console_epoch(void) { return 0; }
-int usb_write(const char *line) { if (!console_open) { return 0; } assert(strlen(output) + strlen(line) < sizeof output); strcat(output, line); return 1; }
+uint32_t usb_console_epoch(void) { return console_epoch; }
+int usb_write(const char *line) {
+    if (!console_open || (reject_diag && !strncmp(line, "D ", 2))) { return 0; }
+    assert(strlen(output) + strlen(line) < sizeof output); strcat(output, line); return 1;
+}
 
 static void command(pu_cmd_t cmd)
 {
@@ -293,5 +301,37 @@ int main(void)
     puts("PASS main_deferred_boot_fault");
     queue_pressure_report();
     counter_rollover();
+    assert(gps_discards == sessions);
+    /* A closed console never formats D; backpressure costs one attempt per sample.
+     * No PPS may precede a successfully delivered session announcement. */
+    output[0] = 0; pps_pending = 1; console_open = 0; console_epoch++;
+    unsigned builds = diag_builds;
+    uint32_t drops = pu_tx_drop();
+    for (unsigned i = 0; i < 10000; i++) { emit_pps(); }
+    assert(pps_pending && !output[0] && diag_builds == builds && pu_tx_drop() == drops);
+    console_open = 1; reject_diag = 1;
+    for (unsigned i = 0; i < 10000; i++) { emit_pps(); }
+    assert(!pps_pending && !output[0] && diag_builds == builds + 1u && pu_tx_drop() == drops + 1u);
+    reject_diag = 0;
+    emit_pps(); assert(!output[0]);
+    pps_pending = 1; /* the next edge retries the session */
+    emit_pps(); assert(!pps_pending && !strncmp(output, "D 0 ", 4));
+    assert(strstr(output, "\nP 16000000 "));
+    output[0] = 0; pps_pending = 1;
+    emit_pps(); assert(!strncmp(output, "P ", 2)); /* no extra report per normal edge */
+    output[0] = 0; pps_pending = 1; console_epoch++;
+    emit_pps(); assert(!strncmp(output, "D 0 ", 4) && strstr(output, "\nP "));
+    puts("PASS main_pps_session_before_edge");
+    /* Failed attempts never start captures; the successful attempt initializes once. */
+    retry_t retry; retry_init(&retry, now, 0);
+    rx_fail = 1;
+    assert(!retry_bring_up(&retry, 0, now));
+    unsigned first_init = capture_inits;
+    assert(first_init == 0);
+    now += RADIO_RESET_BACKOFF_MAX_MS + 1u;
+    assert(!retry_bring_up(&retry, 0, now) && capture_inits == first_init);
+    rx_fail = 0; now += RADIO_RESET_BACKOFF_MAX_MS + 1u;
+    assert(retry_bring_up(&retry, 0, now) && capture_inits == first_init + 1u);
+    puts("PASS main_capture_preserved_on_boot_retry");
     return 0;
 }

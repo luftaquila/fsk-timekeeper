@@ -18,6 +18,8 @@ void capture_sensor_enable(void);
 /* GPS PPS capture on its own GPIOTE/PPI channel (master role). */
 void capture_pps_enable(void);
 
+/* Raw TIMER1 sample; safe in an ISR, without modifying the main-loop extension. */
+uint32_t capture_now32(void);
 uint64_t capture_now64(void);
 
 /* Latest DIO1 rising edge since the last call (1), or none (0). */

@@ -78,6 +78,7 @@ typedef struct {
     int init_pending, configured, begin_fail, rx_fail;
     unsigned receive_calls;
     unsigned begin_calls;
+    unsigned cad_skips, lbt_skips;
     unsigned loss_pct;     /* receive loss, percent */
     int disabled, drop_type;
     int deaf;              /* drops every beacon */
@@ -248,6 +249,8 @@ int radio_begin(void)
 
 int radio_start_rx(void)
 {
+    /* The hardware HAL rejects SPI access after the caller's deadline. */
+    assert(!cur->deadline || (int32_t)(cur->deadline - board_micros()) > 0);
     deliver(cur);
     if (cur->rx_fail) { return -1; }
     if (cur->configured) { cur->init_pending = 0; }
@@ -332,6 +335,18 @@ int radio_cad(void)
     if (cad_error) { cur->now_us += CAD_US; return RADIO_CAD_ERROR; }
     deliver(cur);
     uint64_t t0 = cur->now_us + OSC_START_BUDGET_US; /* listens only after the oscillator start */
+    int32_t remaining = (int32_t)(cur->deadline - board_micros());
+    if (cur->deadline && remaining < (int32_t)(OSC_START_BUDGET_US + CAD_US)) {
+        if (remaining <= 0) { return RADIO_CAD_BUSY; } /* RX never left */
+        cur->now_us += remaining;
+        if (cur->now_us < t0) { cur->now_us = t0; } /* finish the setup command */
+        uint32_t access = cur->deadline;
+        radio_limit(board_micros() + TX_SETUP_MS * 1000u);
+        int result = radio_start_rx();
+        radio_limit(access);
+        cur->cad_skips++;
+        return result == 0 ? RADIO_CAD_BUSY : RADIO_CAD_ERROR;
+    }
     cur->now_us = t0 + CAD_US;
     unsigned from = air_n > 64u ? air_n - 64u : 0u;
     for (unsigned i = from; i < air_n; i++) {
@@ -355,6 +370,13 @@ int radio_lbt_listen(void)
 {
     deliver(cur);
     uint64_t t0 = cur->now_us;
+    int32_t remaining = (int32_t)(cur->deadline - board_micros());
+    if (cur->deadline && remaining <= (int32_t)(LBT_LISTEN_MS * 1000u)) {
+        if (remaining > 0) { cur->now_us += remaining; }
+        isr_catch_up(cur);
+        cur->lbt_skips++;
+        return RADIO_LBT_LOUD;
+    }
     cur->now_us = t0 + LBT_LISTEN_MS * 1000u;
     isr_catch_up(cur); /* the GPIOTE ISR keeps capturing while the main loop listens */
     if (cur->jam_from_us < cur->now_us && cur->jam_to_us > t0) { return RADIO_LBT_LOUD; }
@@ -1124,6 +1146,7 @@ static void faults_hook(uint64_t us)
     if (us == 35000000u) { assert(nodes[2].begin_calls == 1); }
     if (us == 45000000u) {
         /* master timebase session change (clock fault recovery path) */
+        nodes[1].s.sync.rx_miss = 321;
         cur = &nodes[0];
         (void)mq_push_timebase_end(&mq, nodes[0].boot_id, capture_now64());
         nodes[0].boot_id = mix(nodes[0].boot_id);
@@ -1140,6 +1163,7 @@ static void faults(void)
     edge_at(1, 70000000u);
     edge_at(2, 71000000u);
     run(80000000u, faults_hook);
+    assert(nodes[1].s.sync.rx_miss >= 321); /* lifetime total survives master session replacement */
     assert(nodes[2].begin_calls >= 1); /* the SPI fault recovered before the new-master handshake */
     int saw_end = 0;
     unsigned after = 0;
@@ -1298,6 +1322,51 @@ static void late_seal(void)
     check_records(1, 12000000u, TOL_TICKS, &interp, &lost);
     assert(lost == 0);
     puts("PASS late_seal");
+}
+
+static uint32_t late_slot_delay_us;
+static void late_slot_hook(uint64_t us)
+{
+    for (int i = 0; i < n_nodes; i++) {
+        node_t *n = &nodes[i];
+        if (n->now_us > us) { continue; }
+        /* Delay OFFERs during admission, then DATA after the sensor joins. */
+        if (n->is_master ? us >= 5000000u : us < 20000000u || us >= 25000000u) { continue; }
+        for (unsigned j = 0; j < SLOT_COUNT; j++) {
+            if (n->is_master) {
+                if (!mm.cycle_ready || (mm.slot_done & (1u << j)) ||
+                    SLOT_ROLE(mm.schedule[j]) != SLOT_ROLE_OFFER) { continue; }
+            } else if (!(n->s.tx_slots & (1u << j))) { continue; }
+            uint64_t tick = (n->is_master ? mm.cycle_tx : n->s.cycle_rx) +
+                            (SLOT_OFFSET_MS + j * SLOT_LEN_MS) * TICKS_PER_MS;
+            uint64_t start = (tick - n->tick_base) / 16u; /* this scenario has zero drift */
+            if (us + LBT_LISTEN_MS * 1000u >= start && us < start + late_slot_delay_us) {
+                n->now_us = start + late_slot_delay_us;
+            }
+            break;
+        }
+    }
+}
+
+static void late_slot(uint32_t delay_us)
+{
+    late_slot_delay_us = delay_us;
+    add_node(1, 0, 0, 0); add_node(0, 0x12345678u, 0, 0);
+    random_edges(1, 18000000u, 40000000u, 500, 17u);
+    run(70000000u, late_slot_hook);
+    if (delay_us > LBT_LISTEN_MS * 1000u) {
+        assert(nodes[0].lbt_skips && nodes[1].lbt_skips);
+    } else {
+        assert(nodes[0].cad_skips && nodes[1].cad_skips);
+    }
+    assert(nodes[0].begin_calls == 0 && nodes[1].begin_calls == 0);
+    assert(nodes[1].s.have_session);
+    check_slots(0);
+    unsigned interp, lost;
+    check_records(1, 18000000u, TOL_TICKS, &interp, &lost);
+    assert(lost == 0);
+    printf("PASS late_slot_%s (OFFER and DATA cancel, remain connected, retain captures)\n",
+           delay_us > LBT_LISTEN_MS * 1000u ? "lbt" : "cad");
 }
 
 /* A strong stranger next to the master (20-23 s), then next to sensor 1 (40-43 s): the
@@ -1686,6 +1755,31 @@ static void join_backoff(void)
     puts("PASS join_backoff");
 }
 
+static void join_window_end(void)
+{
+    add_node(1, 0, 0, 0); add_node(0, 0x123443b0u, 0, 0);
+    const uint32_t starts[] = {0, UINT32_MAX - 5000u};
+    for (unsigned i = 0; i < 2; i++) {
+        master_admission_t a = {0}; registry_t r; reg_init(&r);
+        master_admission_session(&a, starts[i]);
+        uint32_t arrival = starts[i] + JOIN_WINDOW_MS - 100u;
+        join_pl_t j = {.master_boot = nodes[0].boot_id, .ns = {1}};
+        uint8_t wire[WIRE_MAX]; uint32_t id;
+        cur = &nodes[1];
+        int n = sec_seal(wire, sizeof wire, PKT_TYPE_JOIN, cur->sender_id, &j, sizeof j);
+        cur = &nodes[0];
+        assert(master_admission_receive(&a, &r, wire, n, arrival, &id) == ADMISSION_WAIT);
+        admission_beacon_t b = {0}; uint8_t slots[SLOT_COUNT];
+        master_admission_schedule(&a, &r, arrival + 100u, &b, slots);
+        assert(a.pending[0].phase != ADMISSION_EMPTY);
+        uint32_t until = a.join_until_ms;
+        assert(master_admission_receive(&a, &r, wire, n, arrival + 1000u, &id) == ADMISSION_IGNORED);
+        assert(a.join_until_ms == until && (uint32_t)(until - arrival) >= JOIN_LIFETIME_MS);
+        assert(master_admission_offer(&a, 0, 1, &(offer_pl_t){0}));
+    }
+    puts("PASS join_window_end");
+}
+
 int main(int argc, char **argv)
 {
     assert(argc == 2);
@@ -1720,6 +1814,9 @@ int main(int argc, char **argv)
     else if (!strcmp(argv[1], "faults")) { faults(); }
     else if (!strcmp(argv[1], "session_replay")) { session_replay(); }
     else if (!strcmp(argv[1], "late_seal")) { late_seal(); }
+    else if (!strcmp(argv[1], "late_slot")) { late_slot(1000u); }
+    else if (!strcmp(argv[1], "late_lbt")) { late_slot(6000u); }
+    else if (!strcmp(argv[1], "join_window_end")) { join_window_end(); }
     else if (!strcmp(argv[1], "cad_failure")) { cad_failure(); }
     else if (!strcmp(argv[1], "load_2")) { load(2, 3); }
     else if (!strcmp(argv[1], "load_5")) { load(5, 3); }

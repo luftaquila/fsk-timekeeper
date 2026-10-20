@@ -28,6 +28,9 @@ typedef struct {
  * Call once after capture_pps_enable(). */
 void gps_init(void);
 
+/* End the old master session's pending samples before starting a new one. */
+void gps_discard_pending(void);
+
 /* Drain NMEA, take PPS edges, keep qualification and the edge<->UTC
  * association current. Call every main-loop pass. */
 void gps_poll(void);

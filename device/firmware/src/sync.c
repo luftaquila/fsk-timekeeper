@@ -70,7 +70,8 @@ int sync_beacon(sync_t *s, uint8_t seq, uint64_t l_rx, int l_rx_ok, int m_tx_ok,
             s->beacon_gap = 0;
         } else {
             uint8_t miss = (uint8_t)(seq - s->prev_seq - 1u);
-            if ((uint16_t)(s->rx_miss + miss) >= s->rx_miss) { s->rx_miss += miss; }
+            uint32_t total = (uint32_t)s->rx_miss + miss;
+            s->rx_miss = (uint16_t)(total > UINT16_MAX ? UINT16_MAX : total);
             s->beacon_gap = miss;
         }
     }

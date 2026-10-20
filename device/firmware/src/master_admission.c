@@ -63,7 +63,11 @@ static admission_result_t on_join(master_admission_t *a, registry_t *r, const ui
     seen->id = meta.node_id; seen->boot = meta.boot_id; memcpy(seen->ns, j.ns, 16);
     a->seen_next = (uint8_t)((a->seen_next + 1u) % 8u);
     if (a->seen_count < 8u) { a->seen_count++; }
+    /* A newly accepted challenge gets its full lifetime even at the end of a window. */
     if (!join_open(a, now)) { open_window(a, now); }
+    else if ((int32_t)(a->join_until_ms - now) < (int32_t)JOIN_LIFETIME_MS) {
+        a->join_until_ms = now + JOIN_LIFETIME_MS;
+    }
     a->request_seen = 1;
     *id = meta.node_id;
     return ADMISSION_WAIT;

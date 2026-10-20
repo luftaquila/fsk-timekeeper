@@ -53,6 +53,7 @@ class NrfHal : public RadioLibHal {
     void unlimit();
     bool expired() const;
     bool deadlineHit() const { return _deadlineHit; }
+    bool getLimit(uint32_t &end_us) const { end_us = _deadline; return _limited; }
 
   private:
     uint32_t _sck;

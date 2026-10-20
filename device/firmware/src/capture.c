@@ -144,7 +144,7 @@ void capture_pps_enable(void)
 static uint64_t s_base;
 static uint32_t s_prev;
 
-static uint32_t timer1_now32(void)
+uint32_t capture_now32(void)
 {
     NRF_TIMER1->TASKS_CAPTURE[CAP_CC_NOW] = 1;
     return NRF_TIMER1->CC[CAP_CC_NOW];
@@ -152,7 +152,7 @@ static uint32_t timer1_now32(void)
 
 uint64_t capture_now64(void)
 {
-    uint32_t low = timer1_now32();
+    uint32_t low = capture_now32();
     if (low < s_prev) {
         s_base += (uint64_t)1 << 32;
     }

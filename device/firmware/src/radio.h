@@ -46,13 +46,14 @@ int radio_receive(uint8_t *buf, int maxlen, float *rssi, float *snr);
 
 /* Wait out a reception in progress: a preamble with no header after header_wait_ms is noise
  * (maybe stale: the flags stay latched until the next CAD or TX); a packet still arriving
- * after max_ms returns RADIO_RX_BUSY. */
+ * after max_ms or an elapsed access deadline returns RADIO_RX_BUSY. */
 #define RADIO_RX_IDLE   0 /* nothing on air for us */
 #define RADIO_RX_PACKET 1 /* a packet is ready for radio_receive() */
 #define RADIO_RX_BUSY   2 /* a packet is still arriving */
 int radio_rx_settle(uint32_t header_wait_ms, uint32_t max_ms);
 
-/* CAD result; errors must never be interpreted as a clear channel. BUSY/ERROR
+/* CAD result; an elapsed access deadline is BUSY, not a device failure.
+ * Errors must never be interpreted as a clear channel. BUSY/ERROR
  * attempt to re-arm RX (a restart failure is recorded separately). CLEAR leaves
  * the radio out of RX; the caller must transmit or re-arm RX before listening. */
 #define RADIO_CAD_ERROR (-1)
@@ -62,8 +63,8 @@ int radio_cad(void);
 
 /* RSSI listen-before-talk; the caller checks radio_lbt_enabled(). Receive for LBT_LISTEN_MS
  * (the radio must be in RX) and report QUIET only when every instantaneous RSSI
- * stayed at or below LBT_THRESHOLD_DBM. A failed read is LOUD: errors must never
- * pass for a quiet channel. */
+ * stayed at or below LBT_THRESHOLD_DBM. A failed read or elapsed access deadline
+ * is LOUD: errors and incomplete checks must never pass for a quiet channel. */
 #define RADIO_LBT_QUIET 0
 #define RADIO_LBT_LOUD  1
 int radio_lbt_enabled(void);

@@ -160,6 +160,9 @@ static void invalid_inputs(void)
     assert(!sync_roundtrip(&s, 100000, 200000, 1800000, 1700000));
     sync_beacon(&s, 14, 209000000, 1, 1, 0, 0);
     assert(s.rx_miss == 4 && s.beacon_gap == 4);
+    s.rx_miss = UINT16_MAX - 2u;
+    sync_beacon(&s, 20, 305000000, 1, 1, 0, 0);
+    assert(s.rx_miss == UINT16_MAX && s.beacon_gap == 5);
     puts("PASS two_way_invalid_inputs_and_downlink_only");
 }
 

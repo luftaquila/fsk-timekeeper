@@ -13,10 +13,13 @@ NRF_GPIO_Type test_gpio[2];
 
 /* ---- clock --------------------------------------------------------------- */
 static uint64_t now_us;
+static uint64_t cad_done_us;
+static uint32_t cad_delay_us;
+static void cad_clock(void);
 
-extern "C" uint32_t board_micros(void) { return (uint32_t)++now_us; }
+extern "C" uint32_t board_micros(void) { ++now_us; cad_clock(); return (uint32_t)now_us; }
 /* Every poll moves time on, so polling loops end as they do on hardware. */
-extern "C" uint32_t board_millis(void) { now_us += 1u; return (uint32_t)(now_us / 1000u); }
+extern "C" uint32_t board_millis(void) { now_us += 1u; cad_clock(); return (uint32_t)(now_us / 1000u); }
 extern "C" void board_delay_ms(uint32_t ms) { now_us += (uint64_t)ms * 1000u; }
 
 static unsigned notes[EL_COUNT];
@@ -59,6 +62,15 @@ static void set_line(uint32_t pin, bool high)
     port->IN = high ? (port->IN | bit) : (port->IN & ~bit);
 }
 
+static void cad_clock(void)
+{
+    if (cad_done_us && now_us >= cad_done_us) {
+        cad_done_us = 0;
+        chip.irq_flags = RADIOLIB_SX126X_IRQ_CAD_DONE;
+        set_line(PIN_LORA_DIO1, true);
+    }
+}
+
 /* Command status 0x2 (processed) in the current chip mode. */
 static uint8_t chip_status(void) { return (uint8_t)(chip.mode | 0x02u); }
 
@@ -77,6 +89,13 @@ static void chip_transfer(const uint8_t *out, uint8_t *in, size_t len)
     }
     uint16_t addr = len >= 3 ? (uint16_t)(out[1] << 8 | out[2]) : 0;
     switch (out[0]) {
+    case RADIOLIB_SX126X_CMD_SET_CAD:
+        if (cad_delay_us) {
+            cad_done_us = now_us + cad_delay_us;
+            chip.irq_flags = 0;
+            set_line(PIN_LORA_DIO1, false);
+        }
+        break;
     case RADIOLIB_SX126X_CMD_READ_REGISTER:
         for (size_t i = 4; i < len; i++) { in[i] = chip.reg[(uint16_t)(addr + i - 4)]; }
         break;
@@ -106,6 +125,7 @@ static void chip_transfer(const uint8_t *out, uint8_t *in, size_t len)
         }
         break;
     case RADIOLIB_SX126X_CMD_SET_STANDBY:
+        cad_done_us = 0;
         chip.mode = out[1] == RADIOLIB_SX126X_STANDBY_XOSC && !chip.stuck_xosc ? RADIOLIB_SX126X_STATUS_MODE_STDBY_XOSC
                                                           : RADIOLIB_SX126X_STATUS_MODE_STDBY_RC;
         break;
@@ -206,11 +226,70 @@ int main(int argc, char **argv)
         assert(radio_rx_settle(12, 10000) == RADIO_RX_BUSY);
         assert(board_micros() - start < 31200 && chip.mode == RADIOLIB_SX126X_STATUS_MODE_RX);
         radio_unlimit(); assert(!radio_needs_reset());
+    } else if (!strcmp(scenario, "lbt_access_deadline") || !strcmp(scenario, "rx_access_boundary")) {
+        const bool lbt = !strcmp(scenario, "lbt_access_deadline");
+        const int cancelled = lbt ? RADIO_LBT_LOUD : RADIO_RX_BUSY;
+        power_on(); assert(radio_begin() == 0 && radio_start_rx() == 0);
+        for (unsigned wrap = 0; wrap < 2; wrap++) {
+            for (unsigned budget : {0u, 1u, 16u, 40u, 100u, 1000u, 4000u, 4999u, 5000u, 5001u, 5010u, 5100u, 10000u}) {
+                for (unsigned repeat = 0; repeat < RADIO_NORESP_RESET + 1u; repeat++) {
+                    if (wrap) { now_us = UINT32_MAX - 20u; }
+                    uint32_t start = board_micros(); radio_limit(start + budget);
+                    int result = lbt ? radio_lbt_listen() : radio_rx_settle(0, 0);
+                    uint32_t elapsed = (uint32_t)now_us - start;
+                    assert(!radio_needs_reset() && !notes[EL_SPI_TIMEOUT]);
+                    assert(chip.mode == RADIOLIB_SX126X_STATUS_MODE_RX);
+                    assert(result == cancelled || (result == 0 && elapsed < budget));
+                    if (lbt && budget <= LBT_LISTEN_MS * 1000u) { assert(result == cancelled); }
+                    if (budget == 10000u) { assert(result == 0); }
+                    assert(elapsed < budget + 200u); /* finish the healthy SPI command */
+                    uint32_t restored;
+                    assert(hal.getLimit(restored) && restored == start + budget);
+                    radio_unlimit();
+                }
+            }
+        }
+    } else if (!strcmp(scenario, "lbt_busy_deadline") || !strcmp(scenario, "rx_busy_deadline")) {
+        const bool lbt = !strcmp(scenario, "lbt_busy_deadline");
+        power_on(); assert(radio_begin() == 0 && radio_start_rx() == 0);
+        set_line(PIN_LORA_BUSY, true);
+        uint32_t start = board_micros(); radio_limit(start + 100u);
+        int result = lbt ? radio_lbt_listen() : radio_rx_settle(0, 0);
+        assert(result == (lbt ? RADIO_LBT_LOUD : RADIO_RX_BUSY));
+        assert(board_micros() - start < 7200u && radio_needs_reset());
+        assert(notes[EL_SPI_TIMEOUT]);
+        radio_unlimit();
     } else if (!strcmp(scenario, "cad_access_deadline")) {
         power_on(); assert(radio_begin() == 0 && radio_start_rx() == 0);
-        uint32_t start = board_micros(); radio_limit(start + 4000);
+        cad_delay_us = 2500; /* healthy scan, including expiry during SPI setup/result */
+        for (unsigned wrap = 0; wrap < 2; wrap++) {
+            if (wrap) { now_us = UINT32_MAX - 1000u; }
+            for (unsigned budget : {0u, 1u, 32u, 200u, 2000u, 2800u, 10000u}) {
+                for (unsigned repeat = 0; repeat < RADIO_NORESP_RESET + 1u; repeat++) {
+                    uint32_t start = board_micros(); radio_limit(start + budget);
+                    int result = radio_cad();
+                    assert(result == RADIO_CAD_BUSY || result == RADIO_CAD_CLEAR);
+                    if (budget < cad_delay_us) { assert(result == RADIO_CAD_BUSY); }
+                    if (budget == 10000u) { assert(result == RADIO_CAD_CLEAR); }
+                    assert(!radio_needs_reset() && !notes[EL_SPI_TIMEOUT] && !notes[EL_CAD_TIMEOUT]);
+                    uint32_t restored;
+                    assert(hal.getLimit(restored) && restored == start + budget);
+                    if (result == RADIO_CAD_BUSY) {
+                        assert(chip.mode == RADIOLIB_SX126X_STATUS_MODE_RX);
+                        assert(board_micros() - start < budget + 2000u);
+                    }
+                    radio_unlimit();
+                    assert(radio_start_rx() == 0);
+                }
+            }
+        }
+    } else if (!strcmp(scenario, "cad_busy_deadline")) {
+        power_on(); assert(radio_begin() == 0 && radio_start_rx() == 0);
+        set_line(PIN_LORA_BUSY, true);
+        uint32_t start = board_micros(); radio_limit(start + 100u);
         assert(radio_cad() == RADIO_CAD_ERROR);
-        assert(board_micros() - start < 4200 && radio_needs_reset());
+        assert(board_micros() - start < 7200u && radio_needs_reset());
+        assert(notes[EL_SPI_TIMEOUT] && notes[EL_CAD_TIMEOUT]);
         radio_unlimit();
     } else if (!strcmp(scenario, "probe_frame")) {
         /* first boot: RadioLib's Module still has its default framing */

@@ -104,10 +104,12 @@ static void write_control(const char *line)
     s_ctl_count++;
 }
 
-static void write_periodic(const char *line)
+static int write_periodic(const char *line)
 {
-    if (!console_ready()) { return; }
-    if (!usb_write(line) && s_tx_drop != UINT32_MAX) { s_tx_drop++; }
+    if (!console_ready()) { return 0; }
+    if (usb_write(line)) { return 1; }
+    if (s_tx_drop != UINT32_MAX) { s_tx_drop++; }
+    return 0;
 }
 
 void pu_service(uint32_t now_ms)
@@ -166,7 +168,7 @@ void pu_emit_heartbeat(uint64_t now_tick, uint32_t uptime_ms, uint8_t beacon_seq
     write_periodic(line);
 }
 
-void pu_emit_diag(const pu_diag_t *d)
+int pu_emit_diag(const pu_diag_t *d)
 {
     const char *st = d->state == PU_STATE_OK ? "OK" : (d->state == PU_STATE_STALE ? "STALE" : "LOST");
     char line[240];
@@ -205,7 +207,7 @@ void pu_emit_diag(const pu_diag_t *d)
     lb_sp(&b); lb_u32(&b, RADIO_RECOVERY_RESULT(d->recovery));
     lb_sp(&b); lb_u32(&b, d->diag_valid ? 1u : 0u);
     lb_finish(&b);
-    write_periodic(line);
+    return write_periodic(line);
 }
 
 void pu_emit_pps(uint64_t pps_tick, uint32_t utc_s, int32_t ppb, int pps_valid, uint8_t fix,

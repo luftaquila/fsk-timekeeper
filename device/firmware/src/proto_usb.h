@@ -118,7 +118,7 @@ typedef struct {
 void pu_emit_identity(uint32_t devid_hi, uint32_t devid_lo, int is_master, uint8_t reset_reason,
                       const radio_cfg_t *radio);
 void pu_emit_heartbeat(uint64_t now_tick, uint32_t uptime_ms, uint8_t beacon_seq, int nseen);
-void pu_emit_diag(const pu_diag_t *d);
+int pu_emit_diag(const pu_diag_t *d);
 void pu_emit_clock(const char *token, uint64_t tick, uint64_t master_boot_id);
 void pu_emit_pps(uint64_t pps_tick, uint32_t utc_s, int32_t ppb, int pps_valid, uint8_t fix,
                  uint8_t sats, uint8_t span_s, uint32_t seg, uint32_t n);
