@@ -50,3 +50,23 @@ describe("missing sensor removal", () => {
     expect(wrapper.findAll(".sensor")).toHaveLength(0);
   });
 });
+
+describe("role mapping", () => {
+  // Firefox rebuilds an open dropdown on any <select> subtree mutation, even a
+  // same-value attribute write, and resets its highlight to the old option.
+  it("leaves the role select untouched while the card re-renders", async () => {
+    device.telemetry["00000001"] = report("online"); render();
+    const select = wrapper.get('[aria-label="Sensor 00000001"] select');
+    const records = [];
+    const observer = new MutationObserver((r) => records.push(...r));
+    observer.observe(select.element, { subtree: true, childList: true, attributes: true, characterData: true });
+    await vi.advanceTimersByTimeAsync(1000);
+    device.telemetry["00000001"] = report("degraded"); await nextTick();
+    records.push(...observer.takeRecords());
+    observer.disconnect();
+    expect(records).toHaveLength(0);
+    await select.setValue("start");
+    expect(useSettingsStore().mappingOf("00000001").role).toBe("start");
+    expect(select.element.value).toBe("start");
+  });
+});

@@ -3,10 +3,10 @@ import { computed, ref, onMounted, onUnmounted } from "vue";
 import { useDeviceStore } from "../stores/device";
 import { useSettingsStore } from "../stores/settings";
 import { useTimingStore } from "../stores/timing";
-import { ROLES, ROLE_LABEL } from "../lib/constants";
 import { telemetryFresh } from "../lib/quality";
 import NodeDiagnostics from "./NodeDiagnostics.vue";
 import NodeAge from "./NodeAge.vue";
+import NodeMapping from "./NodeMapping.vue";
 
 const device = useDeviceStore();
 const settings = useSettingsStore();
@@ -43,11 +43,6 @@ function removeSensor(node) {
   settings.removeSensor(node);
 }
 
-function updateMapping(node, changes) {
-  const current = settings.mappingOf(node) ?? { role: "unused", note: "" };
-  settings.setMapping(node, { ...current, ...changes });
-}
-
 </script>
 
 <template>
@@ -70,17 +65,7 @@ function updateMapping(node, changes) {
             <NodeAge :node-id="node" />
             <button v-if="missing(node)" class="btn btn-ghost btn-sm remove-sensor" type="button" :disabled="removalBlocked" @click="removeSensor(node)">Remove</button>
           </div>
-          <div class="mapping-controls">
-            <label class="sensor-role">
-              <span>Role</span>
-              <select :value="settings.mappingOf(node)?.role ?? 'unused'" class="form-select" aria-label="Role" @change="updateMapping(node, { role: $event.target.value })">
-                <option v-for="r in ROLES" :key="r" :value="r">{{ ROLE_LABEL[r] }}</option>
-              </select>
-            </label>
-            <label class="sensor-note">
-              <input :value="settings.mappingOf(node)?.note ?? ''" class="form-input" aria-label="Note" placeholder="Note" @input="updateMapping(node, { note: $event.target.value })" />
-            </label>
-          </div>
+          <NodeMapping :node-id="node" />
         </div>
         <NodeDiagnostics :node-id="node" />
       </article>
@@ -112,23 +97,6 @@ function updateMapping(node, changes) {
 .remove-sensor:hover:not(:disabled), .remove-sensor:focus-visible { color: white; background: var(--accent-danger); border-color: var(--accent-danger); }
 
 .sensor-title { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem; flex-shrink: 0; max-width: 100%; }
-.mapping-controls {
-  display: flex;
-  flex: 1 1 18rem;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 0.75rem 15px;
-  align-items: center;
-  min-width: 0;
-}
-.mapping-controls label { display: flex; align-items: center; gap: 0.5rem; min-width: 0; color: var(--text-secondary); font-size: 1rem; }
-.mapping-controls label > span { flex-shrink: 0; }
-.mapping-controls .form-input, .mapping-controls .form-select { height: 2.5rem; padding: 0.375rem 0.625rem; font-size: 1rem; }
-.mapping-controls .form-select { width: 6.5rem; }
-.mapping-controls .sensor-role { color: var(--text-primary); font-size: 1rem; font-weight: 600; }
-.sensor-role .form-select { width: 7.25rem; font-weight: 600; color: var(--text-primary); }
-.sensor-note { flex: 0 1 8rem; max-width: 100%; }
-.sensor-note .form-input { min-width: 0; width: 100%; }
 @container sensor-layout (min-width: 888px) {
   .sensor-heading {
     display: grid;
@@ -136,8 +104,5 @@ function updateMapping(node, changes) {
     column-gap: 1.5rem;
   }
   .sensor-title { grid-column: 1 / 3; }
-  .mapping-controls { grid-column: 3 / -1; flex-wrap: nowrap; justify-content: flex-start; }
-  .mapping-controls > label:first-child { flex-shrink: 0; }
-  .sensor-note { flex: 1 1 0; max-width: none; }
 }
 </style>
