@@ -138,10 +138,13 @@ static void on_uplink(mac_master_t *m, const uint8_t *buf, int n, float rssi, fl
     /* Refresh the oldest reported anchor first; rotate the entry used to break
      * ties. A fresh anchor must not displace another sensor's due refresh.
      * Diagnostics-only follow-ups have fresh anchors and therefore do not
-     * displace ordinary refreshes.
+     * displace ordinary refreshes. A sensor without its crystal discards every
+     * anchor (mac_sensor.c), so it is no candidate: it would keep the oldest age
+     * and take every frame's reply from the others.
      * The beacon counter prevents an old uplink being paired with a new frame. */
     unsigned entry = (unsigned)(e - m->reg.e);
     if (have_rx && m->cycle_ready && n == m->cycle_wire_len && u.beacon_ctr == m->beacon_ctr &&
+        (u.diag.health & HEALTH_CLOCK_XTAL) &&
         (!m->reply_valid || u.diag.sync_age_ms > m->reply_age_ms ||
          (u.diag.sync_age_ms == m->reply_age_ms &&
           entry == m->cycle_seq % CHECKPOINT_PERIOD_BEACONS && m->reply_entry != entry))) {

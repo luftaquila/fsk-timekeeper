@@ -1140,6 +1140,39 @@ static void hfxo_stop(void)
     printf("PASS hfxo_stop\n");
 }
 
+static void xtal_lost_hook(uint64_t us)
+{
+    if (us == 30000000u) { nodes[1].xtal = 0; } /* the crystal stays down */
+}
+
+/* A sensor without its crystal discards every anchor, so it always reports the
+ * oldest one. It must not take every frame's two-way reply: the other sensors
+ * keep fresh anchors and every capture of theirs is stamped. */
+static void xtal_lost(void)
+{
+    add_node(1, 0, 0, 0);
+    add_node(0, 0x0D2243B0u, 26, 0);
+    add_node(0, 0x7A1C9F02u, -22, 0);
+    add_node(0, 0x11110003u, 31, 0);
+    for (int i = 2; i <= 3; i++) { random_edges(i, 40000000u, 140000000u, 2000, 5u * (uint32_t)i); }
+    run(150000000u, xtal_lost_hook);
+    const reg_entry_t *e = reg_lookup(&mm.reg, nodes[1].sender_id);
+    assert(e);
+    unsigned rc_entry = (unsigned)(e - mm.reg.e), replies = 0;
+    for (unsigned i = 0; i < air_n; i++) {
+        if (!is_beacon(&air[i]) || air[i].start_us < 32000000u) { continue; }
+        const beacon_pl_t *b = (const beacon_pl_t *)air[i].plain;
+        if (b->flags & BEACON_RX_PREV_VALID) { assert(b->rx_entry != rc_entry); replies++; }
+    }
+    assert(replies > 0);
+    unsigned interp, lost;
+    for (int i = 2; i <= 3; i++) {
+        check_records(i, 40000000u, TOL_TICKS, &interp, &lost);
+        assert(interp == 0 && lost == 0);
+    }
+    printf("PASS xtal_lost\n");
+}
+
 static void faults_hook(uint64_t us)
 {
     if (us == 30000000u) { nodes[2].noresp = (int)RADIO_NORESP_RESET; }
@@ -1219,7 +1252,8 @@ static void roundtrip_binding(void)
     unsigned entry = (unsigned)(e - mm.reg.e);
     uint8_t wire[WIRE_MAX];
     uplink_pl_t u = {.kind = UL_KIND_SYNC, .flags = EVENT_TIME_UNKNOWN,
-                     .master_boot_id = nodes[0].boot_id, .ev_seq = 500};
+                     .master_boot_id = nodes[0].boot_id, .ev_seq = 500,
+                     .diag.health = HEALTH_CLOCK_XTAL};
     memset(mm.schedule, 0, sizeof(mm.schedule)); mm.schedule[0] = SLOT_ROLE_DATA | entry;
     mm.cycle_ready = 1; mm.cycle_wire_len = WIRE_UPLINK; mm.reply_valid = 0;
     mm.cycle_tx = local_tick(&nodes[0], now_global) - (SLOT_OFFSET_MS + 50u) * TICKS_PER_MS;
@@ -1811,6 +1845,7 @@ int main(int argc, char **argv)
     else if (!strcmp(argv[1], "reboot_full")) { reboot(0, 5); }
     else if (!strcmp(argv[1], "ev_wrap")) { ev_wrap(); }
     else if (!strcmp(argv[1], "hfxo_stop")) { hfxo_stop(); }
+    else if (!strcmp(argv[1], "xtal_lost")) { xtal_lost(); }
     else if (!strcmp(argv[1], "faults")) { faults(); }
     else if (!strcmp(argv[1], "session_replay")) { session_replay(); }
     else if (!strcmp(argv[1], "late_seal")) { late_seal(); }
