@@ -373,6 +373,13 @@ export const useTimingStore = defineStore("timing", () => {
     syncHistory(run.value, {});
   }
 
+  // A restore saved the selected run again: follow the run log's durable state.
+  function markRestored() {
+    const current = run.value;
+    if (!current || current.durable !== false || !runLog.get(current.runId)?.durable) return;
+    setRun({ ...current, durable: true });
+  }
+
   // After the event log is loaded: rebuild the live view of a restored run.
   async function reevaluate() {
     if (!restored) {
@@ -445,6 +452,7 @@ export const useTimingStore = defineStore("timing", () => {
     onMasterVersion,
     onPpsEdge,
     markNonDurable,
+    markRestored,
     qualityFor,
     missingRoles,
     settleResults,

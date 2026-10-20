@@ -319,6 +319,7 @@ export const useHistoryStore = defineStore("history", () => {
       await timing.settleResults();
       const result = await backup.merge(data);
       await init();
+      timing.markRestored();
       await device.loadLog();
       return result;
     } finally { importing.value = false; }

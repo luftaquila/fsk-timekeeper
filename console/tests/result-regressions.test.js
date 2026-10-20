@@ -107,3 +107,30 @@ it("marks restored records durable and accepts reimport of the original unsaved 
   expect(again.history.rows[0].durable).toBe(true);
   eventLog._reset();
 });
+
+it("keeps the selected run durable after a restore and a later classification", async () => {
+  await boot();
+  const record = {
+    schema: 3, radioProto: RADIO_PROTO_VERSION, usbProto: USB_PROTO_VERSION, runId: "selected",
+    mode: "sprint", verification: "pending", classification: "DNS", closed: true, armed: false,
+    nodes: {}, cursor: 0, crossingTicks: [], createdAt: 1, startedAt: 1, durable: false,
+  };
+  await put(eventLog.getDb(), eventLog.STORE_RESULTS, { ...record });
+  await runLog.save(record, { select: true });
+  await runLog.flush();
+  const { timing, history } = await boot(false);
+  await timing.reevaluate();
+  expect(timing.run.durable).toBe(false);
+  // The backup made while the run could not be saved, restored once storage works again.
+  const text = await history.recoveryJson();
+  await history.importJson({ size: new TextEncoder().encode(text).length, text: async () => text });
+  expect(timing.run.durable).toBe(true);
+  expect(await timing.classify("DSQ")).toBe(true);
+  await runLog.flush();
+  const stored = (await getAll(eventLog.getDb(), eventLog.STORE_RESULTS))[0];
+  expect([stored.classification, stored.durable]).toEqual(["DSQ", true]);
+  expect(history.rows[0].durable).toBe(true);
+  expect(runLog.get(record.runId).durable).toBe(true);
+  timing.discardRecords();
+  eventLog._reset();
+});
