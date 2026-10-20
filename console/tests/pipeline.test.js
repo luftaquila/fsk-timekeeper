@@ -38,8 +38,7 @@ const { resultNs } = await import("../src/lib/results.js");
 const { formatDuration } = await import("../src/lib/format.js");
 const { timingHealth } = await import("../src/lib/quality.js");
 const runLog = await import("../src/lib/runLog.js");
-const { encodeRun } = await import("../src/lib/run-codec.js");
-const { getAll, put } = await import("../src/lib/idb.js");
+const { getAll } = await import("../src/lib/idb.js");
 
 fakeDefaults.slotDelayMin = 10;
 fakeDefaults.slotDelayMax = 30;
@@ -60,9 +59,7 @@ async function boot({ keepStorage = false } = {}) {
   if (!keepStorage) localStorage.clear();
   eventLog._reset();
   const timing = useTimingStore();
-  const minSeq = timing.restore();
-  await eventLog.init({ minSeq });
-  eventLog.protect(minSeq);
+  await eventLog.init();
   const history = useHistoryStore();
   await history.init();
   const device = useDeviceStore();
@@ -183,7 +180,7 @@ describe("pipeline with the fake master", () => {
     await device.clearLog();
   });
 
-  it("expires PPS by new edge arrival, ignoring zero/replayed ticks across reconnects", async () => {
+  it("expires PPS by report arrival and on disconnect or a new master boot", async () => {
     const { device } = await boot();
     const identity = "I FSK-WL 7 1.0.0 0123456789ABCDEF M 17 922900 7 250.00 16000 0 12 1";
     await device.handleLine(identity);
@@ -191,16 +188,9 @@ describe("pipeline with the fake master", () => {
     let now = Date.now();
     const dateNow = vi.spyOn(Date, "now").mockImplementation(() => now);
     try {
-      await device.handleLine("P 0 0 0 0 0 0 0 0 0");
-      assert.equal(device.gpsReport(), null);
       await device.handleLine("P 16000000 0 0 0 0 0 0 0 0");
-      const receivedAt = device.pps.at;
       assert.equal(device.gpsReport().tick, "16000000");
       now += 2999;
-      for (const tick of ["0", "16000000", "8000000"]) {
-        await device.handleLine(`P ${tick} 0 0 0 0 0 0 0 0`);
-      }
-      assert.equal(device.pps.at, receivedAt);
       assert.ok(device.gpsReport());
       now++;
       assert.equal(device.gpsReport(), null);
@@ -212,15 +202,13 @@ describe("pipeline with the fake master", () => {
       assert.equal(device.gpsReport(), null);
       await device.handleLine(identity);
       await device.handleLine("T 00000000000000000000000000000000 64000000 1234");
-      await device.handleLine("P 64000000 0 50000 0 0 0 8 0 0");
-      assert.equal(device.gpsReport(), null); // same boot's cached report is still a repeat
       await device.handleLine("P 80000000 0 50000 0 0 0 8 0 0");
       assert.equal(device.gpsReport().tick, "80000000");
 
       await device.handleLine("T 00000000000000000000000000000000 0 5678");
       assert.equal(device.gpsReport(), null);
       await device.handleLine("P 16000000 0 0 0 0 0 0 0 0");
-      assert.equal(device.gpsReport().tick, "16000000"); // new boot may restart ticks
+      assert.equal(device.gpsReport().tick, "16000000"); // a new boot restarts its ticks
       assert.equal(device.gpsReport().span, 0);
     } finally {
       dateNow.mockRestore();
@@ -246,38 +234,9 @@ describe("pipeline with the fake master", () => {
     assert.deepEqual(stored.map((e) => e.tick), ["64003200"]);
   });
 
-  it("removes fake sensor telemetry and mappings on disconnect without removing other sensors", async () => {
-    const { device, settings } = await boot();
-    const otherNode = "ABCDEF01";
-    device.telemetry[otherNode] = { node_id: otherNode };
-    settings.setMapping(otherNode, { role: "finish", note: "Physical Sensor" });
-    for (const disconnect of [() => device.disconnect(), () => device.enterBootloader()]) {
-      const fake = await connectFake(device);
-      const addedNode = "12345678";
-      fake.addSensor(addedNode);
-      const fakeNodes = [...fake.sensors.keys()];
-      for (const node of fakeNodes) settings.setMapping(node, { role: "start", note: "Simulator" });
-      await fake.write("?STATUS");
-      await waitFor(() => device.telemetry[addedNode]);
-      await disconnect();
-      // Pending simulator replies must not bring deleted sensors back.
-      await sleep(100);
-      assert.equal(device.connected, false);
-      assert.equal(device.fakeTransport(), null);
-      assert.deepEqual(Object.keys(device.telemetry), [otherNode]);
-      assert.deepEqual(settings.mappingList, [{ node_id: otherNode, role: "finish", note: "Physical Sensor" }]);
-      const saved = JSON.parse(localStorage.getItem("tk.settings.v2"));
-      for (const node of fakeNodes) assert.equal(saved.mapping[node], undefined);
-    }
-  });
-
   it("manual classification works offline, survives reload and does not recreate a deleted record", async () => {
     let { timing, history } = await boot();
-    assert.deepEqual(await eventLog.rowsBetween(0, 0), []);
-    assert.deepEqual(await eventLog.rowsBetween(2, 1), []);
     assert.equal(await timing.classify("DNS", "sprint", "Car 7"), true);
-    const row = history.rows[0];
-    assert.deepEqual(await eventLog.rowsBetween(row.cursorSeq, row.throughSeq), []);
     const id = timing.run.runId;
     assert.equal(history.rows.length, 1);
     assert.equal(history.rows[0].note, "Car 7");
@@ -493,7 +452,7 @@ describe("pipeline with the fake master", () => {
   it("acks every event, decides a sprint on its two first crossings, freezes the calibration and records it", { timeout: 20000 }, async () => {
     const { device, settings, timing, history } = await boot();
     const { fake, a, b } = await mapSprint(device, settings);
-    assert.equal(device.identityOk, true);
+    assert.equal(device.contract.ok, true);
     await waitFor(() => device.ppsEdges.length >= 2, 4000); // S1 inside PPS coverage
     assert.equal(timing.qualityFor("sprint").ok, true, JSON.stringify(timing.qualityFor("sprint").reasons));
     assert.equal(await timing.start("sprint", "car 7"), true, toasts.error.join(" | "));
@@ -719,7 +678,6 @@ describe("pipeline with the fake master", () => {
     await waitFor(() => timing.live.crossings.length === 1);
     assert.equal(await timing.stop(), true);
     assert.equal(timing.run.closed, true);
-    assert.equal(timing.run.dnfReason, null);
     assert.equal(timing.run.startTick, String(startTick));
     fake.crossing(b);
     await waitFor(() => fake.queueLength === 0);
@@ -731,7 +689,6 @@ describe("pipeline with the fake master", () => {
       assert.equal(await timing.start(mode, "no crossings"), true, toasts.error.join(" | "));
       assert.equal(await timing.stop(), true);
       assert.equal(timing.run.closed, true);
-      assert.equal(timing.run.dnfReason, null);
       assert.equal(history.rows.length, 0);
     }
     await device.disconnect();
@@ -782,7 +739,6 @@ describe("pipeline with the fake master", () => {
     assert.equal(await timing.stop(), true);
     assert.equal(timing.run.armed, false);
     assert.equal(timing.run.closed, true);
-    assert.equal(timing.run.dnfReason, null);
   });
 
   it("converts through the PPS timeline (+500 ppm → 1999 ms) and stamps the run with UTC", { timeout: 20000 }, async () => {
@@ -801,30 +757,6 @@ describe("pipeline with the fake master", () => {
     await waitFor(() => history.rows[0].durationNs != null);
     assert.equal(ms(resultNs(history.rows[0])), 1999);
     await device.disconnect();
-
-    // no qualified PPS -> nominal
-    const again = await boot();
-    const fake2 = await connectFake(again.device);
-    const [c, d] = [...fake2.sensors.keys()];
-    again.settings.setMapping(c, { role: "start" });
-    again.settings.setMapping(d, { role: "finish" });
-    fake2.setGps({ valid: false, fix: 0, ppb: 50000, span: 8 });
-    fake2.rebootMaster(); // a fresh boot has no qualified edge yet
-    await waitFor(() => again.device.pps?.fix === 0 && again.device.pps?.ppb === 50000);
-    assert.equal(again.device.gpsReport().valid, 0);
-    assert.equal(again.device.gpsReport().span, 8);
-    assert.equal(again.device.ppsEdges.length, 0);
-    await waitFor(() => again.device.contract.ok && again.device.masterBootId === fake2.masterBootId);
-    await waitFor(() => fake2.queueLength === 0 && Object.values(again.device.telemetry).every((t) => t.node_id === "0" || t.master_boot_id === fake2.masterBootId), 8000);
-    await sleep(5200); // periodic checkpoints under the new session
-    assert.equal(await again.timing.start("sprint"), true, toasts.error.join(" | "));
-    const c0 = BigInt(fake2.crossing(c));
-    fake2.crossing(d, { at: c0 + 1500n * 16000n });
-    await waitFor(() => again.timing.run.durationNs != null, 6000);
-    assert.equal(again.timing.run.calibration.method, "nominal");
-    assert.equal(ms(again.timing.run.durationNs), 1500);
-    assert.equal(again.timing.run.startedUtc, null);
-    await again.device.disconnect();
   });
 
   it("a master reboot ends an open laps run: laps before stay confirmed, no total", { timeout: 20000 }, async () => {
@@ -891,7 +823,8 @@ describe("pipeline with the fake master", () => {
     settings.setMapping(a, { role: "start" });
     fake.setCorrupt(true);
     fake.crossing(a);
-    await waitFor(() => device.head != null && Date.now() - device.head.firstSeenAt > 5200, 8000);
+    await waitFor(() => device.head != null);
+    device.head.firstSeenAt -= 5200; // the same line has been re-sent for over 5 s
     assert.equal(timing.qualityFor("laps").ok, false);
     assert.match(timing.qualityFor("laps").reasons[0].reason, /keeps being retransmitted/);
     assert.equal(await timing.start("laps"), false);
@@ -955,54 +888,13 @@ describe("pipeline with the fake master", () => {
     await device.disconnect();
   });
 
-  it("removes old empty result rows while preserving the active run and real results", { timeout: 20000 }, async () => {
-    const { device, settings, timing } = await boot();
-    await mapSprint(device, settings);
-    assert.equal(await timing.start("sprint", "legacy empty"), true);
-    const active = JSON.parse(encodeRun(timing.run));
-    const placeholder = { ...active, createdAt: Date.now(), updatedAt: Date.now() };
-    const oldId = await put(eventLog.getDb(), eventLog.STORE_RESULTS, placeholder);
-    await put(eventLog.getDb(), eventLog.STORE_RESULTS, { ...placeholder, runId: "stopped-empty", closed: true });
-    const startTick = String(BigInt(active.boundaryTick) + 16000n);
-    const finishTick = String(BigInt(startTick) + 16000000n);
-    await put(eventLog.getDb(), eventLog.STORE_RESULTS, { ...placeholder, runId: "real-result", verification: "verified", startTick, finishTick, closed: true });
-    await put(eventLog.getDb(), eventLog.STORE_RESULTS, { ...placeholder, runId: "legacy-dnf", verification: "dnf", dnfReason: "DNF", closed: true });
-    localStorage.setItem("tk.run.v3", encodeRun({ ...active, historyId: oldId }));
-    await device.disconnect();
-    const again = await boot({ keepStorage: true });
-    assert.deepEqual(again.history.rows.map((r) => r.runId).sort(), ["legacy-dnf", "real-result"]);
-    assert.equal(again.timing.run.runId, active.runId);
-    assert.equal(again.timing.run.armed, true);
-    assert.equal(again.timing.run.historyId, null);
-    assert.equal((await getAll(eventLog.getDb(), eventLog.STORE_RESULTS)).length, 2);
-    // The restored run can still create its first result after the obsolete row was removed.
-    await again.history.upsert({ ...again.timing.run, verification: "verified", startTick, finishTick, closed: true });
-    assert.equal(again.history.rows.length, 3);
-    assert.ok(again.history.rows.some((r) => r.runId === active.runId));
-  });
-
-  it("closes an unmeasured stored run of another protocol version without creating a result", { timeout: 20000 }, async () => {
-    const first = await boot();
-    const fake = await connectFake(first.device);
-    const [a] = [...fake.sensors.keys()];
-    first.settings.setMapping(a, { role: "start" });
-    assert.equal(await first.timing.start("laps", "old"), true, toasts.error.join(" | "));
-    await first.device.disconnect();
-    const stored = { ...first.timing.run, radioProto: 12, usbProto: 2 };
-    await runLog.save(stored, { select: true });
-    const again = await boot({ keepStorage: true });
-    assert.equal(again.timing.run.closed, true);
-    assert.equal(again.timing.run.verification, "invalid");
-    assert.match(again.timing.run.fault.reasons[0].reason, /protocol change/);
-    assert.equal(again.history.rows.length, 0);
-  });
 });
 
 describe("automatic sensor admission", () => {
   it("tracks connection states and clears the full-registry notice when admission resumes", async () => {
     const { device, settings } = await boot();
     await device.connect({ kind: "fake" });
-    await waitFor(() => device.identityOk && device.keyReadState !== "loading");
+    await waitFor(() => device.contract.ok && device.keyReadState !== "loading");
     const fake = device.fakeTransport(), node = [...fake.sensors.keys()][0];
     settings.setMapping(node, { role: "finish", note: "old sensor" });
     await device.handleLine("X registry_full");

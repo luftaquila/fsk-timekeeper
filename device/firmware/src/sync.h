@@ -46,9 +46,6 @@ typedef struct {
 /* Boot: everything zero. */
 void sync_init(sync_t *s);
 
-/* New master session: drop anchors and skew (the old timebase is gone); keeps rx_miss. */
-void sync_session(sync_t *s);
-
 /* HFXO not running: anchors and skew no longer describe the local clock. */
 void sync_clock_lost(sync_t *s);
 

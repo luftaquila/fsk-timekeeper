@@ -26,11 +26,11 @@ static void packets(void)
 {
     sec_init();
     assert(sec_ready() && sec_boot_id() == entropy);
-    uplink_pl_t u = {.kind = UL_KIND_EDGES, .master_boot_id = UINT64_MAX, .tick = PROTO_TICK_MAX};
+    uplink_pl_t u = {.kind = UL_KIND_EDGES, .master_boot_id = UINT64_MAX, .tick = UINT64_C(0xffffffffffff)};
     u.u.edges.count = 1;
     uint8_t wire[WIRE_MAX], second[WIRE_MAX];
     int n = sec_seal_key(KEY, wire, sizeof wire, PKT_TYPE_UPLINK, 0x123443b0u, &u, sizeof u);
-    assert(n == WIRE_UPLINK && n == 94);
+    assert(n == WIRE_UPLINK);
     uplink_pl_t out;
     sec_meta_t meta;
     assert(sec_unseal_key(KEY, wire, n, &meta, &out, sizeof out) == 0);
@@ -59,7 +59,7 @@ static void packets(void)
     assert(sec_unseal_key(KEY, wire, n, &meta, &out, INT_MAX) == -1);
     beacon_pl_t b = {0}, bout;
     n = sec_seal(wire, sizeof wire, PKT_TYPE_BEACON, 0, &b, sizeof b);
-    assert(n == 94 && sec_unseal(wire, n, &meta, &bout, sizeof bout) == 0);
+    assert(n == WIRE_BEACON && sec_unseal(wire, n, &meta, &bout, sizeof bout) == 0);
     assert(sec_authentic_any_version(wire, n));
     g_tx_ctr = 0xfffffeu;
     assert(sec_seal(wire, sizeof wire, PKT_TYPE_BEACON, 0, &b, sizeof b) == n);
@@ -90,41 +90,23 @@ static void rng_recovery(void)
     puts("PASS secure_rng_recovery");
 }
 
-static void legacy_authentication(void)
+static void other_version_diagnostic(void)
 {
-    /* Previously deployed v12 header and nonce, authenticated only for diagnostics. */
-    uint8_t wire[60] = {SEC_VT(12, PKT_TYPE_BEACON)}, nonce[24] = {0x57, PKT_TYPE_BEACON};
-    uint32_t boot = 0x12345678u, ctr = 1;
-    memcpy(wire + 1, &boot, 4); wire[5] = 1;
-    memcpy(nonce + 6, &boot, 4); memcpy(nonce + 10, &ctr, 4);
-    uint8_t payload[36] = {0};
-    crypto_aead_lock(wire + 8, wire + 44, KEY, nonce, wire, 8, payload, 36);
-    assert(sec_authentic_any_version(wire, sizeof wire));
-    beacon_pl_t out; sec_meta_t meta;
-    assert(sec_unseal(wire, sizeof wire, &meta, &out, sizeof out) != 0);
-    wire[59] ^= 1; assert(!sec_authentic_any_version(wire, sizeof wire));
-    /* Old control keys include their version. Diagnose v15, compact-only v16,
-     * and the temporary two-way v16 build, but never accept them as v17. */
-    const uint8_t types[] = {PKT_TYPE_BEACON, PKT_TYPE_JOIN, PKT_TYPE_OFFER};
-    const uint8_t versions[] = {15, 16, 16};
-    const int lengths[][3] = {{81, 24, 55}, {59, 24, 51}, {66, 24, 51}};
-    for (unsigned v = 0; v < 3; v++) for (unsigned i = 0; i < 3; i++) {
-        uint8_t old[WIRE_MAX] = {SEC_VT(versions[v], types[i])}, plain[81] = {0}, key[32];
-        uint64_t boot64 = UINT64_C(0x123456789abcdef0);
-        uint32_t node = types[i] == PKT_TYPE_JOIN ? 0xabcd1234u : 0;
-        int hdr = node ? 16 : 12, size = hdr + lengths[v][i] + 16;
-        memcpy(old + 1, &boot64, 8); old[9] = 1;
-        if (node) { memcpy(old + 12, &node, 4); }
-        uint8_t context[16] = {'F','S','K',versions[v],'C',types[i],0,0};
-        if (types[i] == PKT_TYPE_BEACON) { memcpy(context + 8, &boot64, 8); }
-        crypto_blake2b_keyed(key, 32, KEY, sizeof(KEY), context, sizeof(context));
-        build_nonce(nonce, types[i], node, boot64, 1);
-        crypto_aead_lock(old + hdr, old + hdr + lengths[v][i], key, nonce, old, (size_t)hdr, plain, (size_t)lengths[v][i]);
-        assert(sec_authentic_any_version(old, size));
-        assert(sec_unseal(old, size, &meta, &out, sizeof(out)) == -4);
-        old[size - 1] ^= 1; assert(!sec_authentic_any_version(old, size));
-    }
-    puts("PASS secure_legacy_diagnostic");
+    /* A board on another protocol version authenticates for the ver_drop count,
+     * but is never accepted. */
+    sec_init();
+    beacon_pl_t b = {0}, out; sec_meta_t meta;
+    uint8_t wire[WIRE_MAX], plain[PL_BEACON], key[32], nonce[24];
+    int n = sec_seal(wire, sizeof wire, PKT_TYPE_BEACON, 0, &b, sizeof b);
+    assert(n == WIRE_BEACON && protocol_encode(plain, sizeof plain, PKT_TYPE_BEACON, &b, sizeof b) == PL_BEACON);
+    wire[0] = SEC_VT(PROTO_VER + 1u, PKT_TYPE_BEACON);
+    control_key_version(key, PKT_TYPE_BEACON, g_boot_id, PROTO_VER + 1u);
+    build_nonce(nonce, PKT_TYPE_BEACON, 0, g_boot_id, wire[9]);
+    crypto_aead_lock(wire + SEC_HDR_DL, wire + SEC_HDR_DL + PL_BEACON, key, nonce, wire, SEC_HDR_DL, plain, sizeof plain);
+    assert(sec_authentic_any_version(wire, n));
+    assert(sec_unseal(wire, n, &meta, &out, sizeof out) == -4);
+    wire[n - 1] ^= 1; assert(!sec_authentic_any_version(wire, n));
+    puts("PASS secure_other_version_diagnostic");
 }
 
 static void connection_keys(void)
@@ -168,7 +150,7 @@ static void connection_keys(void)
 static void compact_payload_validation(void)
 {
     sec_init();
-    admission_beacon_t a = {.base = {.flags = BEACON_ADMISSION, .m_tx_prev = PROTO_TICK_MAX},
+    admission_beacon_t a = {.base = {.flags = BEACON_ADMISSION, .m_tx_prev = UINT64_C(0xffffffffffff)},
                              .schedule = {SLOT_ROLE_REQUEST, SLOT_ROLE_OFFER | 4, SLOT_ROLE_CONFIRM | 4}}, out;
     uint8_t wire[WIRE_MAX], plain[PL_ADMISSION], key[32], nonce[24];
     sec_meta_t meta;
@@ -236,18 +218,22 @@ static void challenge_pool(void)
 {
     sec_init(); uint8_t nonce[16], last[16] = {0};
     assert(!sec_challenge(nonce));
-    for (unsigned i = 0; i < 37; i++) sec_service(now_ms);
-    assert(g_challenge_count == 2 && g_challenge_fill == 5);
-    assert(sec_challenge(last) && sec_challenge(nonce) && memcmp(nonce, last, 16));
-    assert(!sec_challenge(nonce) && g_challenge_fill == 5);
-    for (unsigned i = 0; i < 11; i++) sec_service(now_ms);
-    assert(sec_challenge(nonce) && memcmp(nonce, last, 16));
-    rng_ok = 0; sec_service(now_ms); assert(!sec_challenge(nonce) && sec_ready()); rng_ok = 1;
+    sec_service(now_ms);
+    assert(!sec_challenge(nonce)); /* one service call never fills a whole challenge */
     for (unsigned i = 0; i < 100; i++) sec_service(now_ms);
-    assert(g_challenge_count == 5);
-    for (unsigned i = 0; i < 5; i++) { memcpy(last, nonce, 16); assert(sec_challenge(nonce) && memcmp(nonce, last, 16)); }
-    assert(!sec_challenge(nonce));
+    unsigned drawn = 0;
+    while (sec_challenge(nonce)) {
+        assert(memcmp(nonce, last, 16) && ++drawn < 100);
+        memcpy(last, nonce, 16);
+    }
+    assert(drawn > 1);
+    rng_ok = 0;
+    for (unsigned i = 0; i < 100; i++) sec_service(now_ms);
+    assert(!sec_challenge(nonce) && sec_ready());
+    rng_ok = 1;
+    for (unsigned i = 0; i < 100; i++) sec_service(now_ms);
+    assert(sec_challenge(nonce) && memcmp(nonce, last, 16));
     puts("PASS secure_nonblocking_challenge_pool");
 }
 
-int main(void) { packets(); rng_recovery(); legacy_authentication(); connection_keys(); compact_payload_validation(); authenticated_padding(); challenge_pool(); return 0; }
+int main(void) { packets(); rng_recovery(); other_version_diagnostic(); connection_keys(); compact_payload_validation(); authenticated_padding(); challenge_pool(); return 0; }

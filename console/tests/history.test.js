@@ -52,8 +52,8 @@ function assertWorkbookRecords(sheetRows, records) {
 function run(fields) {
   return {
     schema: 3,
-    radioProto: 12,
-    usbProto: 2,
+    radioProto: RADIO_PROTO_VERSION,
+    usbProto: USB_PROTO_VERSION,
     runId: fields.runId,
     mode: fields.mode,
     note: "",
@@ -63,7 +63,6 @@ function run(fields) {
     lapTarget: null,
     debounceMs: 300,
     verification: "pending",
-    dnfReason: null,
     startTick: null,
     finishTick: null,
     crossingTicks: [],
@@ -83,17 +82,10 @@ describe("history rows and exports", () => {
     eventLog._reset();
   });
 
-  it("round-trips 64-bit sessions and preserves finished results from the previous protocol", async () => {
-    const current = run({ runId: "64bit", mode: "laps", radioProto: RADIO_PROTO_VERSION, usbProto: USB_PROTO_VERSION,
+  it("round-trips 64-bit sessions", async () => {
+    const current = run({ runId: "64bit", mode: "laps",
       masterBootId: "18446744073709551615", nodes: { A: { boot: "9007199254740993", seq: 1, role: "start", cpSeq: 1 } }, closed: false });
-    assert.deepEqual(decodeRun(encodeRun(current)).run, current);
-    const old = run({ runId: "legacy", mode: "sprint", closed: true, armed: true, verification: "verified",
-      startTick: tick(10), finishTick: tick(4010), durationNs: "4000000000" });
-    const restored = decodeRun(encodeRun(old));
-    assert.equal(restored.protocolChanged, false);
-    assert.equal(restored.run.armed, false);
-    assert.equal(restored.run.verification, "verified");
-    assert.equal(restored.run.durationNs, old.durationNs);
+    assert.deepEqual(decodeRun(encodeRun(current)), current);
     const history = useHistoryStore();
     await history.upsert({ ...current, verification: "verified", crossingTicks: [tick(0), tick(1000)] });
     assert.equal(history.rows[0].masterBootId, current.masterBootId);
@@ -172,11 +164,11 @@ describe("history rows and exports", () => {
       durationNs: "1000000000", classification: "DSQ" }));
     await history.upsert(run({ runId: "laps", mode: "laps", verification: "verified", note: "Car 7",
       crossingTicks: [tick(0), tick(2000), tick(3500), tick(6000), tick(8500)],
-      fault: { kind: "test", reasons: [{ role: "finish", reason: "Sensor ABC lost captures.", lo: tick(100), hi: null }] } }));
+      fault: { kind: "test", reasons: [{ role: "finish", reason: "Sensor ABC: Capture Loss", lo: tick(100), hi: null }] } }));
     await history.upsert(run({ runId: "manual", mode: "sprint", classification: "DNS" }));
     // Same date and note must not merge two attempts or detach their laps.
-    history.rows.push({ id: 100, runId: "same-context", createdAt: 1, mode: "laps", note: "Car 7",
-      verification: "verified", result: 3000, laps: [1000, 2000] });
+    history.rows.push({ ...run({ runId: "same-context", mode: "laps", note: "Car 7", verification: "verified",
+      crossingTicks: [tick(0), tick(1000), tick(3000)] }), id: 100, createdAt: 1 });
     const snapshot = history.exportData();
     assert.deepEqual(snapshot.History.filter((r) => r.Mode === "Laps").map((r) => r["Lap Times"].map((lap) => lap.Time)),
       [["00:02.000", "00:01.500", "00:02.500", "00:02.500"], ["00:01.000", "00:02.000"]]);
@@ -191,35 +183,29 @@ describe("history rows and exports", () => {
     assert.equal(snapshot.History.find((r) => r.Note === note).Result, "00:01.000");
     assert.equal(snapshot.History.find((r) => r.Mode === "Start → Finish" && r.Note === "-").Result, "-");
     assert.equal(lapRecord.Errors[0], "Finish\nSensor ABC: Capture Loss\nafter +00:00.100 (end not known yet)");
-    const evidence = vi.spyOn(eventLog, "rowsBetween");
-    try {
-      await history.exportJson();
-      const [jsonBlob, jsonName] = downloadBlob.mock.calls.at(-1);
-      assert.match(jsonName, /\.json$/);
-      const json = JSON.parse(await jsonBlob.text());
-      assert.deepEqual(json.History, snapshot.History);
-      assert.equal(json.version, 1);
-      assert.equal(json.recovery.results.length, 4);
-      assert.equal(json.recovery.results.find(r => r.runId === "sprint").masterBootId, "18446744073709551615");
-      assert.equal(evidence.mock.calls.length, 0);
-      await history.exportExcel();
-      const [excelBlob, filename] = downloadBlob.mock.calls.at(-1);
-      assert.match(filename, /^fsk-timekeeper-all-.*\.xlsx$/);
-      assert.equal(excelBlob.type, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-      const buffer = Buffer.from(await excelBlob.arrayBuffer());
-      const workbook = await readExcelFile(buffer);
-      assert.deepEqual(workbook.map((s) => s.sheet), ["History"], "one sheet for every record and all its laps");
-      assertWorkbookRecords(workbook[0].data, json.History);
-      await history.exportJson("sprint");
-      const filtered = JSON.parse(await downloadBlob.mock.calls.at(-1)[0].text());
-      assert.deepEqual(filtered.History, snapshot.History);
-      assert.equal(filtered.recovery.results.length, 4);
-      await history.exportExcel("sprint");
-      const [filteredExcel] = downloadBlob.mock.calls.at(-1);
-      assertWorkbookRecords(await readSheet(Buffer.from(await filteredExcel.arrayBuffer()), "History"), history.exportData("sprint").History);
-    } finally {
-      evidence.mockRestore();
-    }
+    await history.exportJson();
+    const [jsonBlob, jsonName] = downloadBlob.mock.calls.at(-1);
+    assert.match(jsonName, /\.json$/);
+    const json = JSON.parse(await jsonBlob.text());
+    assert.deepEqual(json.History, snapshot.History);
+    assert.equal(json.version, 1);
+    assert.equal(json.recovery.results.length, 4);
+    assert.equal(json.recovery.results.find(r => r.runId === "sprint").masterBootId, "18446744073709551615");
+    await history.exportExcel();
+    const [excelBlob, filename] = downloadBlob.mock.calls.at(-1);
+    assert.match(filename, /^fsk-timekeeper-all-.*\.xlsx$/);
+    assert.equal(excelBlob.type, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    const buffer = Buffer.from(await excelBlob.arrayBuffer());
+    const workbook = await readExcelFile(buffer);
+    assert.deepEqual(workbook.map((s) => s.sheet), ["History"], "one sheet for every record and all its laps");
+    assertWorkbookRecords(workbook[0].data, json.History);
+    await history.exportJson("sprint");
+    const filtered = JSON.parse(await downloadBlob.mock.calls.at(-1)[0].text());
+    assert.deepEqual(filtered.History, snapshot.History);
+    assert.equal(filtered.recovery.results.length, 4);
+    await history.exportExcel("sprint");
+    const [filteredExcel] = downloadBlob.mock.calls.at(-1);
+    assertWorkbookRecords(await readSheet(Buffer.from(await filteredExcel.arrayBuffer()), "History"), history.exportData("sprint").History);
   });
 
   it("later Stop or fault preserves the last recorded laps and total", async () => {
@@ -252,24 +238,6 @@ describe("history rows and exports", () => {
     assert.equal(history.rows.length, 1);
     assert.equal(history.rows[0].closed, true);
     assert.equal(resultNs(history.rows[0]), 2_000_000_000n);
-  });
-
-  it("a DNF row, a verified sprint and a pre-v3 row side by side", async () => {
-    const history = useHistoryStore();
-    const s = run({ runId: "s", mode: "sprint", verification: "verified", startTick: tick(10), finishTick: tick(4010) });
-    s.calibration = freezeCalibration([], [s.startTick, s.finishTick], 1);
-    s.durationNs = "4000000000";
-    await history.upsert(s);
-    // Previously saved classifications remain readable.
-    history.rows.push({ ...run({ runId: "d", mode: "sprint", verification: "dnf", dnfReason: "DNF", startTick: tick(10) }), id: 8, createdAt: 0 });
-    history.rows.push({ id: 9, runId: "old", mode: "laps", note: "", result: 12345.4, laps: [6000, 6345], verification: "verified", createdAt: 0, ppb: 12 });
-    const exported = history.exportData();
-    const sprint = exported.History.find((r) => r.Result === "00:04.000");
-    assert.equal(sprint.Status, "Verified\nNot Saved");
-    assert.equal(exported.History.find((r) => r.Status === "DNF").Result, "-");
-    assert.equal(exported.History.find((r) => r.Mode === "Laps").Result, "00:12.345");
-    assert.deepEqual(exported.History.find((r) => r.Mode === "Laps")["Lap Times"].map((r) => r.Time), ["00:06.000", "00:06.345"]);
-    assert.equal(history.status(history.rows.find((r) => r.runId === "d")), "DNF");
   });
 
   it("the list and the result come from the same points", () => {

@@ -16,8 +16,6 @@ import { buildTimeline, freezeCalibration, utcMsAt, durationNs } from "../lib/ca
 import { resultTicks, resultNs as resultNsOf, lapsNs as lapsNsOf, spanNs } from "../lib/results";
 import { formatDuration } from "../lib/format";
 
-const KEY_RUN = "tk.run.v3";
-const KEY_RUN_OLD = "tk.run.v2";
 const VERSION_CHANGED = "The master reports another protocol version.";
 
 function makeLive() {
@@ -75,25 +73,6 @@ export const useTimingStore = defineStore("timing", () => {
 
   function openCursor() {
     return run.value && !run.value.closed ? run.value.cursor : Infinity;
-  }
-
-  // Restore the stored run before the event log loads so its cursor is protected.
-  function restore() {
-    run.value = null;
-    try {
-      let decoded = decodeRun(localStorage.getItem(KEY_RUN));
-      if (!decoded) {
-        decoded = decodeRun(localStorage.getItem(KEY_RUN_OLD));
-      }
-      if (decoded && MODES.includes(decoded.run.mode)) {
-        // Older versions kept stopped runs open while awaiting sensor checkpoints.
-        const stopped = !decoded.run.closed && decoded.run.stopTick != null;
-        run.value = stopped ? stopRun(decoded.run) : decoded.run;
-      }
-    } catch {
-      run.value = null;
-    }
-    return openCursor();
   }
 
   function setRun(next) {
@@ -400,13 +379,9 @@ export const useTimingStore = defineStore("timing", () => {
       restored = true;
       if (runLog.hasActiveState()) {
         const stored = runLog.active();
-        run.value = stored && !stored.deleted ? decodeRun(encodeRun(stored))?.run ?? null : null;
+        run.value = stored && !stored.deleted ? decodeRun(encodeRun(stored)) : null;
       }
-      const migrated = await persist();
-      if (migrated) {
-        try { localStorage.removeItem(KEY_RUN); localStorage.removeItem(KEY_RUN_OLD); }
-        catch (error) { useDeviceStore().reportStorageFailure(error); }
-      }
+      await persist();
       for (const stored of runLog.all()) {
         if (stored.finalizeAt == null || stored.calibration) continue;
         const diskEdges = await ppsLog.loadEdges(stored.masterBootId);
@@ -424,12 +399,6 @@ export const useTimingStore = defineStore("timing", () => {
     if (!current) return;
     const device = useDeviceStore();
     if (current.masterBootId != null && !device.connected) await device.useEdgesOf(current.masterBootId);
-    // A pre-fix Start placeholder may have been removed during history migration.
-    if (current.historyId != null && current.verification === "pending" && !RESULT_CLASSIFICATIONS.includes(current.classification) && resultNsOf(current) == null &&
-        !useHistoryStore().rows.some((row) => row.runId === current.runId)) {
-      current = { ...current, historyId: null };
-      setRun(current);
-    }
     await syncHistory(current, {});
     if (current.closed) {
       if (current.mode === "sprint") {
@@ -465,7 +434,6 @@ export const useTimingStore = defineStore("timing", () => {
     resultNs,
     lapRows,
     crossingRows,
-    restore,
     reevaluate,
     start,
     stop,

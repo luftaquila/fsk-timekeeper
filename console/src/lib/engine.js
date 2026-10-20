@@ -7,10 +7,9 @@
  *   nodes: { [node_id]: { boot, seq, role, cpSeq } },   // START checkpoint per mapped sensor
  *   cursor: number,                                    // evidence = event-log rows with seq > cursor
  *   lapTarget: number|null, debounceMs: number,        // frozen at START
- *   stopTick: string|null,                             // legacy Stop fence; new runs leave this null
  *   armed, closed,
  *   stoppedClockDisplay?: string,                     // live timer snapshot at manual Stop, not the result
- *   verification: "pending" | "verified" | "invalid" | "dnf", dnfReason: "DNF" | "DNS" | null,
+ *   verification: "pending" | "verified" | "invalid",
  *   classification: "DNS" | "DNF" | "DSQ" | null,    // explicit operator decision
  *   startTick, finishTick: string|null,                // sprint result S1, F1
  *   crossingTicks: string[], totalValid: boolean,       // laps: confirmed crossings C0..Ck
@@ -92,12 +91,10 @@ export function createRun({
     cursor,
     lapTarget: mode === "laps" && Number.isInteger(lapTarget) && lapTarget > 0 ? lapTarget : null,
     debounceMs: Number.isInteger(debounceMs) && debounceMs >= 0 ? debounceMs : DEFAULT_DEBOUNCE_MS,
-    stopTick: null,
     armed: true,
     closed: false,
     verification: "pending",
     classification: null,
-    dnfReason: null,
     startTick: null,
     finishTick: null,
     crossingTicks: [],
@@ -123,8 +120,8 @@ export function createClassifiedRun({ mode, note = "", classification, cursor = 
     schema: RUN_SCHEMA, radioProto: RADIO_PROTO_VERSION, usbProto: USB_PROTO_VERSION,
     runId: uuid(), mode, note, classification,
     boundaryTick: null, masterBootId: null, nodes: {}, cursor,
-    lapTarget: null, debounceMs: DEFAULT_DEBOUNCE_MS, stopTick: null,
-    armed: false, closed: true, verification: "pending", dnfReason: null,
+    lapTarget: null, debounceMs: DEFAULT_DEBOUNCE_MS,
+    armed: false, closed: true, verification: "pending",
     startTick: null, finishTick: null, crossingTicks: [], totalValid: true,
     calibration: null, durationNs: null, fault: null, masterSessionEnded: null,
     gpsAtStart: null, startedUtc: null, startedAt: now, historyId: null, durable,
@@ -143,19 +140,6 @@ function makeFault(run, reasons, kind, now) {
     kind,
     occurred_at: new Date(now).toISOString(),
     reasons: Array.isArray(reasons) ? reasons : [],
-  };
-}
-
-// Close as invalid with explicit reasons (protocol change, lost storage, ...).
-export function invalidateRun(run, reasons, { kind = "quality", now = Date.now() } = {}) {
-  return {
-    ...run,
-    armed: false,
-    closed: true,
-    verification: "invalid",
-    dnfReason: null,
-    totalValid: run.mode === "laps" ? false : run.totalValid,
-    fault: run.fault || makeFault(run, reasons, kind, now),
   };
 }
 
@@ -268,7 +252,7 @@ export function evaluateRun(run, rows, { now = Date.now() } = {}) {
   // timebase, an invalid result, or an explicit lap target ends the run.
   const decided = state === "invalid" || sessionEnd != null ||
     (state === "verified" && run.mode === "laps" && run.lapTarget && crossingTicks.length === run.lapTarget + 1);
-  let next = { ...run, verification: state, dnfReason: null, startTick, finishTick, crossingTicks, totalValid };
+  let next = { ...run, verification: state, startTick, finishTick, crossingTicks, totalValid };
   if (decided) next = { ...next, armed: false, closed: true };
   if (state === "invalid") next.fault = run.fault || makeFault(run, (faultCuts || []).map(reasonOf), "measurement", now);
   else if (state === "verified") next.fault = null;

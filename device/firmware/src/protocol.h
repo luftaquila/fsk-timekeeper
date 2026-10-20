@@ -154,7 +154,6 @@ typedef struct __attribute__((packed)) {
  * users. Only the authenticated radio payload is compacted. At 16 MHz, 48 bits
  * cover 203.6 days; supported uptime is at most one day, with no epoch extension.
  * Random boot ids are NOT ticks and retain all 64 bits. */
-#define PROTO_TICK_MAX UINT64_C(0xffffffffffff)
 #define PL_BEACON     66
 #define PL_ADMISSION  71
 #define PL_UPLINK     62

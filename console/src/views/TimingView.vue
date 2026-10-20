@@ -40,7 +40,6 @@ const status = computed(() => {
   };
   if (v === "verified") return null;
   if (v === "invalid") return { cls: "badge-danger", text: "Invalid" };
-  if (v === "dnf") return { cls: "badge-default", text: timing.run.dnfReason || "DNF" };
   if (timing.run.closed) return { cls: "badge-default", text: "Stopped" };
   return { cls: "badge-warning", text: "Pending" };
 });

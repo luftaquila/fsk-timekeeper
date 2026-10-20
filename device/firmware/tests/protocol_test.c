@@ -4,6 +4,8 @@
 #include "protocol.h"
 #include "config.h"
 
+#define TICK48_MAX UINT64_C(0xffffffffffff) /* largest tick on the wire */
+
 static void uplink_packing(void)
 {
     uplink_pl_t u = {
@@ -42,7 +44,7 @@ static void uplink_packing(void)
         }
     }
     const uint64_t ticks[] = {0, 1, UINT32_MAX, UINT64_C(0x100000000),
-                             UINT64_C(86400000) * TICKS_PER_MS, PROTO_TICK_MAX};
+                             UINT64_C(86400000) * TICKS_PER_MS, TICK48_MAX};
     u.kind = UL_KIND_LOSS; u.flags = 7; u.u.loss.end_seq = UINT32_MAX;
     for (unsigned i = 0; i < sizeof(ticks)/sizeof(*ticks); i++) {
         u.tick = ticks[i]; u.u.loss.end_tick = ticks[i];
@@ -65,7 +67,7 @@ static void uplink_packing(void)
 static void beacon_packing(void)
 {
     admission_beacon_t a = {
-        .base = {.seq = 0x12, .flags = 3, .m_tx_prev = PROTO_TICK_MAX, .cp_req = 0x34,
+        .base = {.seq = 0x12, .flags = 3, .m_tx_prev = TICK48_MAX, .cp_req = 0x34,
                  .slot = {{0xfedc0001, 0x5678, UINT32_MAX}},
                  .m_rx_prev = UINT64_C(0x010203040506), .rx_entry = 4},
         .schedule = {SLOT_ROLE_IDLE, SLOT_ROLE_REQUEST, SLOT_ROLE_DATA,
@@ -128,7 +130,6 @@ int main(void)
             if (ver <= 16) { assert(SEC_VT(ver, type) == (uint8_t)((ver << 4) | type)); }
         }
     }
-    assert(SEC_VT(15, PKT_TYPE_BEACON) == 0xf1 && SEC_VT(16, PKT_TYPE_BEACON) == 0x01);
     assert(SEC_VT(17, PKT_TYPE_BEACON) == 0x19 && SEC_VT(17, PKT_TYPE_CONFIRM) == 0x1d);
     assert(SEC_VT(32, PKT_TYPE_BEACON) == 0x09);
     assert(protocol_payload_size(PKT_TYPE_BEACON, -1) < 0 && protocol_payload_size(0, sizeof(beacon_pl_t)) < 0);

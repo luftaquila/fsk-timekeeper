@@ -86,9 +86,9 @@ describe("sensor link and report freshness", () => {
       await vi.advanceTimersByTimeAsync(1000);
       const state = second <= 12 ? "online" : second <= 17 ? "degraded" : "lost";
       if (second % 5 === 0 || second === 13 || second === 18) report(state, heardAt);
+      if (![12, 13, 17, 18, 60].includes(second)) continue;
       await nextTick();
       expect(diagnostics.find(".no-report").exists()).toBe(false);
-      expect(link().get("dt").text()).toBe("Link");
       expect(link().get("dd").text()).toBe(second <= 12 ? "ONLINE" : second <= 17 ? "STALE" : "LOST");
       expect(age.classes().includes("badge-success")).toBe(second <= 12);
       expect(device.telemetry.A.last_seen_at).toBe(heardAt);

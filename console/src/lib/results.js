@@ -1,11 +1,6 @@
 /* Result durations of a run or history row, from its raw ticks and calibration.
- * The frozen calibration wins; before it exists the PPS edges at hand give a provisional value.
- * Rows of run schema < 3 kept only rounded ms (`result`, `laps`); they are read as is. */
+ * The frozen calibration wins; before it exists the PPS edges at hand give a provisional value. */
 import { calibrationPoints, durationNs } from "./calibration";
-
-export function isOldFormatRow(row) {
-  return !!row && row.schema == null;
-}
 
 // Ticks the result depends on.
 export function resultTicks(run) {
@@ -28,7 +23,6 @@ export function spanNs(run, a, b, source = null) {
 // The result: sprint F1 − S1, laps last − first confirmed crossing (only while the total is valid).
 export function resultNs(run, source = null) {
   if (!run) return null;
-  if (isOldFormatRow(run)) return Number.isFinite(run.result) ? BigInt(Math.round(run.result)) * 1_000_000n : null;
   if (run.durationNs != null) return BigInt(run.durationNs);
   if (run.mode === "sprint") return run.startTick && run.finishTick ? spanNs(run, run.startTick, run.finishTick, source) : null;
   const c = run.crossingTicks || [];
@@ -39,7 +33,6 @@ export function resultNs(run, source = null) {
 // Confirmed laps (ns, bigint) of a laps run; the confirmed ones only, also for an invalid run.
 export function lapsNs(run, source = null) {
   if (!run) return [];
-  if (isOldFormatRow(run)) return (run.laps || []).filter(Number.isFinite).map((ms) => BigInt(Math.round(ms)) * 1_000_000n);
   const c = run.crossingTicks || [];
   if (c.length < 2) return [];
   const points = pointsFor(run, c, source);

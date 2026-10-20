@@ -294,46 +294,20 @@ int sec_unseal(const uint8_t *in, int in_len, sec_meta_t *meta, void *out_payloa
 int sec_authentic_any_version(const uint8_t *in, int in_len)
 {
     if (!g_provisioned || in_len < 1 || in_len > WIRE_MAX) { return 0; }
-    unsigned ver = SEC_VT_VER(in[0]);
-    if (ver >= 10u && ver <= 12u) {
-        for (int has_node = 0; has_node <= 1; has_node++) {
-            int hdr = has_node ? 12 : 8;
-            int len = in_len - hdr - SEC_MAC_LEN;
-            if (len < 0) { continue; }
-            uint32_t boot, node = NODE_MASTER;
-            memcpy(&boot, in + 1, 4);
-            uint32_t ctr = (uint32_t)in[5] | ((uint32_t)in[6] << 8) | ((uint32_t)in[7] << 16);
-            if (has_node) { memcpy(&node, in + 8, 4); }
-            uint8_t nonce[24] = {NONCE_DOMAIN, SEC_VT_TYPE(in[0])};
-            memcpy(nonce + 2, &node, 4);
-            memcpy(nonce + 6, &boot, 4);
-            memcpy(nonce + 10, &ctr, 4);
-            uint8_t plain[WIRE_MAX];
-            int ok = crypto_aead_unlock(plain, in + hdr + len, KEY, nonce, in, (size_t)hdr,
-                                        in + hdr, (size_t)len) == 0;
-            crypto_wipe(plain, sizeof(plain));
-            if (ok) { return 1; }
-        }
-        return 0;
-    }
-    int hdr = SEC_TYPE_HAS_NODE(SEC_VT_TYPE(in[0])) ? SEC_HDR_UL : SEC_HDR_DL;
+    /* Diagnostic authentication needs no payload decoding. Control keys bind the
+     * version; per-link DATA/CONFIRM keys are private to their handshake and
+     * cannot be diagnosed using only the fleet key. */
+    uint8_t type = SEC_VT_TYPE(in[0]);
+    if (!control_type(type)) { return 0; }
+    int hdr = SEC_TYPE_HAS_NODE(type) ? SEC_HDR_UL : SEC_HDR_DL;
     int len = in_len - hdr - SEC_MAC_LEN;
     if (len < 0) { return 0; }
-    uint8_t plain[WIRE_MAX];
+    uint64_t boot; memcpy(&boot, in + 1, 8);
+    uint8_t key[32], plain[WIRE_MAX];
     sec_meta_t meta;
-    int ok;
-    if (ver >= 15u) {
-        /* Diagnostic authentication needs no payload decoding. v15 and later
-         * control keys bind the version; per-link DATA/CONFIRM keys are private
-         * to their handshake and cannot be diagnosed using only the fleet key. */
-        uint8_t type = SEC_VT_TYPE(in[0]);
-        if (!control_type(type)) { return 0; }
-        uint64_t boot; memcpy(&boot, in + 1, 8);
-        uint8_t key[32];
-        control_key_version(key, type, boot, (uint8_t)ver);
-        ok = open_sealed(key, in, hdr, SEC_TYPE_HAS_NODE(type), len, plain, &meta) == 0;
-        crypto_wipe(key, sizeof(key));
-    } else { ok = open_sealed(KEY, in, hdr, SEC_TYPE_HAS_NODE(SEC_VT_TYPE(in[0])), len, plain, &meta) == 0; }
+    control_key_version(key, type, boot, SEC_VT_VER(in[0]));
+    int ok = open_sealed(key, in, hdr, SEC_TYPE_HAS_NODE(type), len, plain, &meta) == 0;
+    crypto_wipe(key, sizeof(key));
     crypto_wipe(plain, sizeof(plain));
     return ok;
 }

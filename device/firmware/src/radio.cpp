@@ -226,15 +226,6 @@ extern "C" int radio_begin(void)
     return RADIOLIB_ERR_NONE;
 }
 
-extern "C" int radio_transmit(const uint8_t *data, int len)
-{
-    uint32_t until = board_micros() + TX_SETUP_MS * 1000u + LORA_TOA_US((unsigned)len) + 5000u;
-    if (radio_tx_start(data, len, until) != 0) { return -1; }
-    int done;
-    do { done = radio_tx_poll(); } while (done == 0);
-    return done == 1 ? 0 : -1;
-}
-
 extern "C" int radio_tx_start(const uint8_t *data, int len, uint32_t end_us)
 {
     if (s_tx_active || radio_needs_reset() || len <= 0 || len > 128) { return -1; }

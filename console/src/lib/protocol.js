@@ -47,10 +47,8 @@ export const FLAG_TIME_UNKNOWN = 0x40;
 export const FLAG_HEALTHY = FLAG_SYNC | FLAG_SKEW | FLAG_XTAL;
 const FLAGS_KNOWN = FLAG_HEALTHY | FLAG_INTERPOLATED | FLAG_TIME_UNKNOWN;
 
-export const MAX_SENSORS = 5;
 export const EDGES_PER_LINE_MAX = 5;
 export const MASTER_QUEUE_CAPACITY = 16;
-export const LINK_STALE_MS = 17000;
 
 // Reset-reason byte of the I line and of sensor diagnostics.
 export const RESET_BITS = Object.freeze({ PIN: 0x01, DOG: 0x02, SREQ: 0x04, LOCKUP: 0x08, OFF: 0x10, VBUS: 0x20, FAULT: 0x40, OTHER: 0x80 });
@@ -58,7 +56,6 @@ const RESET_LABEL = { PIN: "reset pin", DOG: "watchdog", SREQ: "soft reset", LOC
 
 // Active radio faults and sticky non-radio error flags (D line err_flags).
 export const ERROR_BITS = Object.freeze({
-  RADIO_RESET: 0x0001,
   CAD_TIMEOUT: 0x0002,
   SPI_TIMEOUT: 0x0004,
   TX_FAIL: 0x0008,
@@ -69,12 +66,10 @@ export const ERROR_BITS = Object.freeze({
   QUEUE_FULL: 0x0100,
   USB_DROP: 0x0200,
   ACK: 0x0400,
-  ID_COLLISION: 0x0800,
   RADIO_CLOCK: 0x1000,
   RADIO_INIT: 0x2000,
 });
 const ERROR_LABEL = {
-  RADIO_RESET: "radio reset",
   CAD_TIMEOUT: "CAD timeout",
   SPI_TIMEOUT: "SPI timeout",
   TX_FAIL: "TX failure",
@@ -85,7 +80,6 @@ const ERROR_LABEL = {
   QUEUE_FULL: "host queue full",
   USB_DROP: "USB line dropped",
   ACK: "ACK anomaly",
-  ID_COLLISION: "sensor id collision",
   RADIO_CLOCK: "radio oscillator / PLL failure",
   RADIO_INIT: "radio initialization failure",
 };
@@ -93,7 +87,7 @@ const ERROR_LABEL = {
 export function errorNames(flags) {
   if (!Number.isInteger(flags)) return [];
   return Object.entries(ERROR_BITS)
-    .filter(([name, bit]) => name !== "RADIO_RESET" && (flags & bit))
+    .filter(([, bit]) => flags & bit)
     .map(([name]) => ERROR_LABEL[name]);
 }
 
@@ -136,11 +130,8 @@ function tickToText(v) {
   return undefined;
 }
 
-// New wire ids are canonical decimal strings. Safe legacy numbers remain readable.
+// Wire ids are canonical decimal strings.
 export function bootIdText(value) {
-  if (typeof value === "number") {
-    return Number.isSafeInteger(value) && value >= 0 && value <= U32_MAX ? String(value) : null;
-  }
   if (typeof value !== "string" || !/^\d{1,20}$/.test(value)) return null;
   const n = BigInt(value);
   return n <= MASTER_TICK_MAX ? String(n) : null;
@@ -230,9 +221,6 @@ export function parseLine(line) {
         pps: { tick: t[1], utc: num(t[2]), ppb: num(t[3]), valid: num(t[4]), fix: num(t[5]), sats: num(t[6]), span: num(t[7]), seg: num(t[8]), n: num(t[9]) },
       };
     case "I": {
-      // v1 boards put the firmware version where v2 has the protocol number.
-      const v1 = !/^\d+$/.test(t[2] || "");
-      if (v1) return { type: "I", product: t[1], usbProto: null, fw: t[2] ?? null, devid: t[3] ?? null, role: null, radioProto: null, ticksPerMs: num(t[7]), v1: true };
       return {
         type: "I",
         product: t[1],
@@ -248,7 +236,6 @@ export function parseLine(line) {
         resetReason: num(t[11]),
         powerDbm: num(t[12]),
         lbt: num(t[13]),
-        v1: false,
       };
     }
     case "A":
@@ -457,7 +444,7 @@ export function radioCommand(c) {
   return `R ${c.freqKhz} ${c.powerDbm} ${c.lbt}`;
 }
 
-// Stored target radio settings from I, not proof of a running receiver; null on an older board.
+// Stored target radio settings from I, not proof of a running receiver; null when invalid.
 export function radioOf(identity) {
   const c = identity ? { freqKhz: identity.freqKhz, powerDbm: identity.powerDbm, lbt: identity.lbt } : null;
   return isRadioConfig(c) ? c : null;

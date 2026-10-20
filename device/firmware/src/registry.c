@@ -27,31 +27,6 @@ reg_entry_t *reg_lookup(registry_t *r, uint32_t id)
     return NULL;
 }
 
-reg_entry_t *reg_claim(registry_t *r, uint32_t id, uint32_t now_ms, int *why)
-{
-    int free_slot = -1, lost_slot = -1;
-    for (unsigned i = 0; i < MAX_NODES; i++) {
-        const reg_entry_t *e = &r->e[i];
-        if (!e->used) {
-            if (free_slot < 0) { free_slot = (int)i; }
-        } else if (reg_state(e, now_ms) == PU_STATE_LOST) {
-            if (lost_slot < 0) { lost_slot = (int)i; }
-        }
-    }
-    int slot = free_slot >= 0 ? free_slot : lost_slot;
-    if (slot < 0) {
-        *why = REG_FULL;
-        return NULL;
-    }
-    reg_entry_t *e = &r->e[slot];
-    memset(e, 0, sizeof(*e));
-    e->used = 1;
-    e->id = id;
-    e->heard_ms = now_ms;
-    e->last_state = -1;
-    return e;
-}
-
 void reg_slot_table(const registry_t *r, uint32_t now_ms, beacon_slot_t out[MAX_NODES])
 {
     for (unsigned i = 0; i < MAX_NODES; i++) {

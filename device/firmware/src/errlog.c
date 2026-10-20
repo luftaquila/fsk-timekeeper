@@ -19,7 +19,6 @@ static const struct {
     [EL_USB_DROP]      = { "usb_drop",      ERR_USB_DROP },
     [EL_ACK_GAP]       = { "ack_gap",       ERR_ACK },
     [EL_ACK_MISMATCH]  = { "ack_mismatch",  ERR_ACK },
-    [EL_ID_COLLISION]  = { "id_collision",  ERR_ID_COLLISION },
     [EL_REGISTRY_FULL] = { "registry_full", 0 },
     [EL_FIFO_FULL]     = { "fifo_full",     ERR_FIFO_FULL },
     [EL_RADIO_CLOCK]   = { "radio_clock",   ERR_RADIO_CLOCK },

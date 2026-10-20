@@ -30,7 +30,6 @@ describe("firmware <-> console constants", () => {
     assert.equal(p.HEALTH_CLOCK_XTAL, protocol.FLAG_XTAL);
     assert.equal(p.EVENT_INTERPOLATED, protocol.FLAG_INTERPOLATED);
     assert.equal(p.EVENT_TIME_UNKNOWN, protocol.FLAG_TIME_UNKNOWN);
-    assert.equal(p.MAX_NODES, protocol.MAX_SENSORS);
     assert.equal(p.UL_EDGES_MAX, protocol.EDGES_PER_LINE_MAX);
   });
 
@@ -45,7 +44,6 @@ describe("firmware <-> console constants", () => {
     assert.equal(c.TICKS_PER_MS, Number(MASTER_TICKS_PER_MS));
     assert.equal(c.MASTER_EVENT_QUEUE_LEN, protocol.MASTER_QUEUE_CAPACITY);
     assert.equal(c.LINK_OK_MS, WIRELESS_STATUS_MAX_AGE_MS);
-    assert.equal(c.LINK_STALE_MS, protocol.LINK_STALE_MS);
     assert.equal(c.RADIO_FREQ_MIN_KHZ, protocol.RADIO_FREQ_MIN_KHZ);
     assert.equal(c.RADIO_FREQ_MAX_KHZ, protocol.RADIO_FREQ_MAX_KHZ);
     assert.equal(c.RADIO_POWER_MIN_DBM, protocol.RADIO_POWER_MIN_DBM);

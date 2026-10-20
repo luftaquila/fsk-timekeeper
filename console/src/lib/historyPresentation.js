@@ -4,7 +4,7 @@ import { resultNs, lapsNs } from "./results";
 
 export function statusValue(row) {
   if (RESULT_CLASSIFICATIONS.includes(row.classification)) return row.classification;
-  return row.verification === "dnf" ? row.dnfReason || "DNF" : row.verification;
+  return row.verification;
 }
 
 export function statusLabel(row) {

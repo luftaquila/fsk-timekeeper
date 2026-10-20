@@ -106,12 +106,11 @@ describe("firmware upgrade lifecycle", () => {
     await store.chooseDevice(); expect(serial.requestPort).toHaveBeenCalledTimes(2);
     store.cancel(); expect(store.phase).toBe("ready"); expect(device.updateInProgress).toBe(false);
   });
-  it("blocks measurement, simulator use and incompatible packages", async () => {
+  it("blocks measurement and incompatible packages", async () => {
     const store = await ready();
     for (const key of ["armed", "starting", "classifying"]) {
       timing[key] = true; await store.start(); expect(store.canStart).toBe(false); timing[key] = false;
     }
-    device.transportKind = "fake"; expect(store.canStart).toBe(false); device.transportKind = null;
     await ready({ usb_protocol: 99 }); expect(store.canStart).toBe(false);
     expect(serial.requestPort).not.toHaveBeenCalled(); expect(flash).not.toHaveBeenCalled();
   });

@@ -33,17 +33,12 @@ typedef struct {
     reg_entry_t e[MAX_NODES];
 } registry_t;
 
-#define REG_FULL      1
-
 void reg_init(registry_t *r);
 
 /* PU_STATE_* from the time since the last uplink. */
 int reg_state(const reg_entry_t *e, uint32_t now_ms);
 
 reg_entry_t *reg_lookup(registry_t *r, uint32_t id);
-
-/* Entry for a new id: a free entry, else a LOST one. NULL with *why = REG_FULL. */
-reg_entry_t *reg_claim(registry_t *r, uint32_t id, uint32_t now_ms, int *why);
 
 /* Slot table for the next beacon: live entries only (LOST entries are free). */
 void reg_slot_table(const registry_t *r, uint32_t now_ms, beacon_slot_t out[MAX_NODES]);

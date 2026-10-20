@@ -32,7 +32,7 @@ describe("PPS timeline", () => {
     const timeline = buildTimeline(edgesOf(osc, range(0, 120)));
     let worst = 0;
     for (let i = 0; i < 500; i++) {
-      const t = 0.5 + Math.random() * 119;
+      const t = 0.5 + (i * 0.37) % 119; // spread over the whole segment
       const err = Math.abs(seconds(timeline, osc(t)) - (t - 0)) * 1e9;
       worst = Math.max(worst, err);
     }

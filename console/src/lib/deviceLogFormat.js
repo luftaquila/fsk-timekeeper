@@ -26,17 +26,6 @@ function recoveryLine(r) {
   return `Resets: ${total(r.count)}\nFailed: ${total(r.failures)}\nLast Reason: ${reason}\nLast Result: ${result}`;
 }
 
-// Before snapshots were stored, radio logs contained the same fields in a sentence.
-// Only known field separators are converted; unknown details are preserved.
-function legacyRadioLine(value) {
-  let text = String(value).replace(/^(?:Master|Sensor \S+): /, "");
-  text = text.replace(/\. Reported at this time; event times are unavailable\.$/, "\nEvent Time: Unknown");
-  text = text.replace(/radio reinitializations:? (\d+\+?), failed:? (\d+\+?); latest reason: ([^;]+); latest result: ([^\n]+)/,
-    (_, count, failed, reason, result) => `Resets: ${count}\nFailed: ${failed}\nLast Reason: ${reason}\nLast Result: ${result.replace(/\.$/, "")}`);
-  text = text.replace(/ since boot(?=;|\.|$)/g, "").replace(/; (?=[^;]+:)/g, "\n");
-  return `Since Boot\n${text}`;
-}
-
 function logLine(e, code) {
   if (e.kind === "boot") return `Reset: ${code.replaceAll("_", " ")}.`;
   if (code === "radio_history" && e.historySnapshot) {
@@ -46,7 +35,6 @@ function logLine(e, code) {
     return `Since Boot\n${parts.join("\n")}\nEvent Time: Unknown`;
   }
   if (code === "radio_recovery" && e.radioSnapshot) return `Since Boot\n${recoveryLine(e.radioSnapshot)}`;
-  if ((code === "radio_history" || code === "radio_recovery") && e.text) return legacyRadioLine(e.text);
   if (code === "radio_fault" || code === "radio_restored") {
     return String(e.text ?? "").replace(/^(?:Master|Sensor \S+): /, "").replace(/, /g, "\n");
   }
@@ -65,15 +53,13 @@ function logLine(e, code) {
 }
 
 function boardId(id) {
-  // Older simulator logs used a non-hex identity and bypassed the short-ID format.
-  if (id === "F4KEF4KE00000001") return "00000001";
   if (!/^[0-9a-f]{16}$/i.test(id ?? "")) return id || "-";
   const low = id.slice(8).toUpperCase();
   const high = id.slice(0, 8).toUpperCase();
   return low !== "00000000" ? low : high !== "00000000" ? high : "00000001";
 }
 
-// One representation for both the table and JSON export, including older entries.
+// One representation for both the table and JSON export.
 export function logRecord(entry) {
   const code = logCode(entry.code);
   return { time: fmtDateTime(entry.at), type: LOG_TYPES[entry.kind] ?? entry.kind, code,

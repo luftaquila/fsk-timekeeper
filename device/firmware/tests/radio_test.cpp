@@ -161,6 +161,16 @@ void NrfHal::unlimit(void) { _limited = _deadlineHit = false; }
 bool NrfHal::expired() const { return _limited && (int32_t)(board_micros() - _deadline) >= 0; }
 
 /* ---- scenarios ------------------------------------------------------------ */
+/* One transmission through the MAC's start/poll calls: 0 sent, -1 failed. */
+static int transmit(const uint8_t *data, int len)
+{
+    uint32_t until = board_micros() + TX_SETUP_MS * 1000u + LORA_TOA_US((unsigned)len) + 5000u;
+    if (radio_tx_start(data, len, until) != 0) { return -1; }
+    int done;
+    do { done = radio_tx_poll(); } while (done == 0);
+    return done == 1 ? 0 : -1;
+}
+
 static void power_on(void)
 {
     chip_reset();
@@ -364,13 +374,13 @@ int main(int argc, char **argv)
         assert(!(active_faults & (1u << EL_CAD_TIMEOUT)) && notes[EL_CAD_TIMEOUT] == 1);
         uint8_t tx[8] = {0};
         set_line(PIN_LORA_DIO1, false);
-        assert(radio_transmit(tx, sizeof tx) != 0);
+        assert(transmit(tx, sizeof tx) != 0);
         assert(active_faults & (1u << EL_TX_FAIL));
         assert(radio_needs_reset());
         assert(radio_begin() == 0 && radio_start_rx() == 0);
         assert(active_faults & (1u << EL_TX_FAIL)); /* RX is not proof of TX */
         set_line(PIN_LORA_DIO1, true);
-        assert(radio_transmit(tx, sizeof tx) == 0);
+        assert(transmit(tx, sizeof tx) == 0);
         assert(!(active_faults & (1u << EL_TX_FAIL)) && notes[EL_TX_FAIL] == 1);
     } else if (!strcmp(scenario, "rx_fault_recovery")) {
         power_on(); assert(radio_begin() == 0 && radio_start_rx() == 0);

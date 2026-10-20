@@ -75,7 +75,7 @@ int sec_unseal(const uint8_t *in, int in_len, sec_meta_t *meta,
                void *out_payload, int payload_len);
 
 /* 1 when a received packet authenticates under the fleet/control key (diagnostics
- * only). v15+ DATA/CONFIRM require connection keys and cannot be checked here. */
+ * only). DATA/CONFIRM require connection keys and cannot be checked here. */
 int sec_authentic_any_version(const uint8_t *in, int in_len);
 
 /* Counter for one explicitly authenticated connection. Changing a packet's

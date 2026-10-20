@@ -17,10 +17,7 @@ const device = useDeviceStore();
 const ready = ref(false);
 
 onMounted(async () => {
-  // Restore the open run first so its evidence window is loaded and protected.
-  const minSeq = timing.restore();
-  const { durable, error } = await eventLog.init({ minSeq });
-  eventLog.protect(minSeq);
+  const { durable, error } = await eventLog.init();
   device.durable = durable;
   device.durableError = error?.message || null;
   if (error) await deviceLog.addEntry({ kind: "console", code: "storage_failure", at: Date.now(), text: error.message || String(error) });

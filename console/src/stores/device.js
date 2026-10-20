@@ -38,7 +38,6 @@ export const useDeviceStore = defineStore("device", () => {
   const keyReadState = ref("idle");
   let keyReadTimer = null;
   const contract = ref(contractOf(null)); // { ok, reason }
-  const identityOk = computed(() => contract.value.ok);
   const lastLineAt = ref(0);
   const heartbeat = ref(null); // { tick: bigint, wallMs, uptimeMs, beaconSeq, nseen }
   const admissionNotice = ref("");
@@ -46,7 +45,6 @@ export const useDeviceStore = defineStore("device", () => {
   const telemetry = reactive({}); // node_id -> normalized telemetry
   const masterBootId = ref(null);
   const pps = ref(null); // latest P report
-  let lastPpsTick = null; // retained across reconnects to the same master boot
   const ppsEdges = ref([]); // qualified PPS edges of ppsBootId, sorted by tick
   const ppsBootId = ref(null);
   const unprovisioned = ref(false);
@@ -265,7 +263,7 @@ export const useDeviceStore = defineStore("device", () => {
 
   function onIdentity(msg, raw) {
     // The same boot answering ?ID again, or after R changed its radio settings.
-    const key = msg.v1 ? raw : [msg.product, msg.usbProto, msg.fw, msg.devid, msg.role, msg.radioProto, msg.ticksPerMs, msg.resetReason].join(" ");
+    const key = [msg.product, msg.usbProto, msg.fw, msg.devid, msg.role, msg.radioProto, msg.ticksPerMs, msg.resetReason].join(" ");
     const repeated = identityKey === key;
     identityKey = key;
     identity.value = msg;
@@ -363,7 +361,6 @@ export const useDeviceStore = defineStore("device", () => {
   function setMasterBoot(id) {
     if (masterBootId.value === id) return;
     pps.value = null;
-    lastPpsTick = null;
     masterBootId.value = id;
     useTimingStore().onMasterBoot(id);
     if (ppsBootId.value !== id) useEdgesOf(id);
@@ -386,10 +383,6 @@ export const useDeviceStore = defineStore("device", () => {
     if (!p) {
       return drop("pps", line);
     }
-    // Legacy zero/duplicate reports are status traffic, not evidence of a new PPS.
-    const tick = BigInt(p.tick);
-    if (tick === 0n || (lastPpsTick != null && tick <= lastPpsTick)) return;
-    lastPpsTick = tick;
     pps.value = p;
     const bootId = masterBootId.value;
     if (!p.fix || !p.seg || bootId == null || ppsBootId.value !== bootId) return;
@@ -692,7 +685,6 @@ export const useDeviceStore = defineStore("device", () => {
     radioReports.clear();
     ppsEdges.value = [];
     ppsBootId.value = null;
-    lastPpsTick = null;
     masterBootId.value = null;
     consoleLines.value = [];
     quarantine.value = null;
@@ -723,7 +715,6 @@ export const useDeviceStore = defineStore("device", () => {
 
   return {
     supported,
-    reportStorageFailure: onStorageFailure,
     connected,
     connecting,
     clearingData,
@@ -733,7 +724,6 @@ export const useDeviceStore = defineStore("device", () => {
     identity,
     radioKey,
     keyReadState,
-    identityOk,
     contract,
     lastLineAt,
     heartbeat,

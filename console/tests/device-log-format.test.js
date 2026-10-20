@@ -3,17 +3,15 @@ import assert from "node:assert/strict";
 import { logCode, logRecord } from "../src/lib/deviceLogFormat";
 
 describe("device log presentation and export", () => {
-  it("shows current and saved legacy fake board identities in the real board format", () => {
-    for (const devid of ["F4AEF4AE00000001", "F4KEF4KE00000001"]) {
-      assert.equal(logRecord({ kind: "boot", code: "power_on", devid }).board, "00000001");
-    }
+  it("shows the simulator identity in the real board format", () => {
+    assert.equal(logRecord({ kind: "boot", code: "power_on", devid: "F4AEF4AE00000001" }).board, "00000001");
     assert.equal(logRecord({ devid: "unrecognized" }).board, "unrecognized");
   });
   it("identifies cumulative queue retries without presenting them as lost records", () => {
     assert.equal(logRecord({ kind: "X", code: "queue_full", text: "X queue_full 751" }).line,
       "Queue Full Deferrals: 751 Since Boot");
   });
-  it("normalizes legacy codes without changing source entries", () => {
+  it("normalizes logged codes without changing source entries", () => {
     for (const [raw, code] of [["USB wake", "usb_wake"], ["power-on", "power_on"],
       ["tel.format", "tel_format"], ["soft reset, CPU lockup", "soft_reset_cpu_lockup"]]) {
       assert.equal(logCode(raw), code);
@@ -44,11 +42,4 @@ describe("device log presentation and export", () => {
     assert.ok(!JSON.stringify(logRecord(e)).includes("malformed payload"));
     assert.equal(logRecord({ kind: "X", code: "spi_timeout", text: "X spi_timeout 7" }).line, "Count: 7 since boot.");
   });
-  it("formats legacy recovery logs and keeps details absent from the current schema", () => {
-    const text = "Sensor 0250FEB2: radio reinitializations: 1, failed: 0; latest reason: no master beacon for 10 s; latest result: receiver restarted. Reported at this time; event times are unavailable.";
-    assert.equal(logRecord({ kind: "radio", code: "radio_history", text }).line,
-      "Since Boot\nResets: 1\nFailed: 0\nLast Reason: no master beacon for 10 s\nLast Result: receiver restarted\nEvent Time: Unknown");
-    assert.equal(logRecord({ kind: "radio", code: "radio_history", text: "unknown future detail" }).line, "Since Boot\nunknown future detail");
-  });
-
 });

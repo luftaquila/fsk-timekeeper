@@ -11,6 +11,9 @@ extern "C" {
 #include "config.h"
 }
 
+static_assert(RADIO_SPI_TIMEOUT_MS * 4u < RADIO_HANG_MS && RADIO_PROBE_MS + RADIO_SPI_TIMEOUT_MS < RADIO_HANG_MS,
+              "every bounded radio wait must end well before the hang limit");
+
 /* A 1 MHz transfer of the largest SX1262 command (~260 B) takes ~2 ms. */
 #define SPI_TRANSFER_MAX_US 10000u
 

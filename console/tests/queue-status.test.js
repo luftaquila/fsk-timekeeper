@@ -14,7 +14,7 @@ vi.mock("../src/composables/useNotification", () => ({
 }));
 
 describe("current master queue status", () => {
-  it("recovers despite legacy latched flags and 751 historical retries, then warns on a new full queue", async () => {
+  it("clears the full-queue warning as the queue drains despite 751 historical retries, then warns on a new full queue", async () => {
     const pinia = createPinia();
     const device = useDeviceStore(pinia);
     device.connected = true;
@@ -33,6 +33,7 @@ describe("current master queue status", () => {
       assert.equal(pipelineHealth({ master: device.telemetry[0] }).ok, false);
 
       device.telemetry[0].queue_depth = 8;
+      device.telemetry[0].err_flags = ERROR_BITS.USB_DROP;
       await nextTick();
       assert.match(timing().text(), /^8\s+QUEUED$/);
       assert.doesNotMatch(errors(), /host queue full/);
@@ -46,12 +47,8 @@ describe("current master queue status", () => {
       assert.equal(device.telemetry[0].queue_overflow, 751);
       assert.equal(pipelineHealth({ master: device.telemetry[0] }).ok, true);
 
-      device.telemetry[0].err_flags = ERROR_BITS.QUEUE_FULL;
-      await nextTick();
-      assert.equal(wrapper.find(".diagnostic-errors").exists(), false);
-
       // Full even before the first refused enqueue: no historical count is needed.
-      device.telemetry[0].err_flags = 0;
+      device.telemetry[0].err_flags = ERROR_BITS.QUEUE_FULL;
       device.telemetry[0].queue_overflow = 0;
       device.telemetry[0].queue_depth = MASTER_QUEUE_CAPACITY;
       await nextTick();

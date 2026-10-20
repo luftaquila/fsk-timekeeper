@@ -1,6 +1,5 @@
 /* Results history (IndexedDB `results`, memory fallback) + Excel/JSON export.
- * Rows keep raw ticks, the frozen calibration and exact ns; rows from before schema 3
- * (`result`/`laps` in ms) are shown as stored. */
+ * Rows keep raw ticks, the frozen calibration and exact ns; rows of another run schema are not shown. */
 import writeExcelFile from "write-excel-file/universal";
 import { defineStore } from "pinia";
 import { ref, toRaw } from "vue";
@@ -10,9 +9,10 @@ import { enqueue, flush } from "../lib/storageQueue";
 import * as runLog from "../lib/runLog";
 import * as backup from "../lib/backup";
 import { useTimingStore } from "./timing";
+import { RUN_SCHEMA } from "../lib/engine";
 import { ROLE_LABEL, RESULT_CLASSIFICATIONS } from "../lib/constants";
 import { downloadBlob, timestampSlug, formatDuration } from "../lib/format";
-import { isOldFormatRow, resultNs, resultTicks, lapsNs } from "../lib/results";
+import { resultNs, resultTicks, lapsNs } from "../lib/results";
 import { historyRecord, lapSummary, lapDelta, statusValue } from "../lib/historyPresentation";
 import { faultWindow, formatFaultReason } from "../lib/fault-text";
 import { useDeviceStore } from "./device";
@@ -23,7 +23,6 @@ const RUN_FIELDS = [
   "verification",
   "classification",
   "closed",
-  "dnfReason",
   "startTick",
   "finishTick",
   "crossingTicks",
@@ -60,11 +59,7 @@ export const useHistoryStore = defineStore("history", () => {
     try {
       if (db()) {
         const all = await getAll(db(), eventLog.STORE_RESULTS);
-        // Old versions created a result row on Start, before any measured result existed.
-        const empty = all.filter((row) => !isOldFormatRow(row) && row.verification === "pending" && !RESULT_CLASSIFICATIONS.includes(row.classification) && resultNs(row) == null);
-        for (const row of empty) await remove(db(), eventLog.STORE_RESULTS, row.id);
-        const emptyIds = new Set(empty.map((row) => row.id));
-        rows.value = all.filter((row) => !emptyIds.has(row.id)).sort((a, b) => b.createdAt - a.createdAt);
+        rows.value = all.filter((row) => row.schema === RUN_SCHEMA).sort((a, b) => b.createdAt - a.createdAt);
       }
     } catch (error) {
       eventLog.reportWriteFailure(error);
@@ -102,7 +97,7 @@ export const useHistoryStore = defineStore("history", () => {
   // Runs and capture evidence are stored separately. Results begin only once a measured
   // interval is verified or the operator assigns a classification; later updates use that same row.
   function hasResult(run) {
-    return !isOldFormatRow(run) && run.verification === "verified" && resultNs(run) != null;
+    return run.verification === "verified" && resultNs(run) != null;
   }
 
   async function saveResult(run, { throughSeq = null } = {}) {
@@ -118,7 +113,7 @@ export const useHistoryStore = defineStore("history", () => {
       throughSeq: null,
       createdAt: run.startedAt || Date.now(),
     };
-    if ((measured || !existing) && !isOldFormatRow(run)) {
+    if (measured || !existing) {
       const frozen = row.calibration && JSON.stringify(resultTicks(row)) === JSON.stringify(resultTicks(run))
         ? { calibration: row.calibration, durationNs: row.durationNs } : null;
       Object.assign(row, fieldsOf(run));
@@ -218,9 +213,6 @@ export const useHistoryStore = defineStore("history", () => {
       await timing.settleResults();
       await eventLog.flush();
       await flush();
-      // Prevent migration of a legacy localStorage run after the next reload.
-      localStorage.removeItem("tk.run.v3");
-      localStorage.removeItem("tk.run.v2");
       await enqueue(() => eventLog.clearAllData());
       rows.value = [];
       memoryId = 0;

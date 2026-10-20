@@ -32,27 +32,21 @@ let chain = Promise.resolve();
 let insertsSincePrune = 0;
 const failureListeners = new Set();
 
-function upgrade(database, oldVersion, tx) {
-  if (oldVersion < 1) {
-    const events = database.createObjectStore(STORE_EVENTS, { keyPath: "seq", autoIncrement: true });
-    events.createIndex("node_boot", ["node_id", "master_boot_id"]);
-    const results = database.createObjectStore(STORE_RESULTS, { keyPath: "id", autoIncrement: true });
-    results.createIndex("runId", "runId", { unique: true });
-    results.createIndex("mode", "mode");
-    results.createIndex("createdAt", "createdAt");
-  }
-  if (oldVersion < 2) {
-    const events = tx.objectStore(STORE_EVENTS);
-    if (events.indexNames.contains("key")) events.deleteIndex("key");
-    events.createIndex("row", ROW_INDEX, { unique: true });
-    database.createObjectStore(STORE_PPS, { keyPath: ["master_boot_id", "tick"] }).createIndex("received_at", "received_at");
-    database.createObjectStore(STORE_LOG, { keyPath: "id", autoIncrement: true }).createIndex("at", "at");
-    database.createObjectStore(STORE_QUARANTINE, { keyPath: "id", autoIncrement: true }).createIndex("line", "line", { unique: true });
-  }
-  if (oldVersion < 3) {
-    database.createObjectStore(runLog.STORE_RUNS, { keyPath: "runId" });
-    database.createObjectStore(runLog.STORE_META, { keyPath: "key" });
-  }
+// A database of another version is not migrated: its stores are dropped and recreated.
+function upgrade(database) {
+  for (const name of [...database.objectStoreNames]) database.deleteObjectStore(name);
+  const events = database.createObjectStore(STORE_EVENTS, { keyPath: "seq", autoIncrement: true });
+  events.createIndex("node_boot", ["node_id", "master_boot_id"]);
+  events.createIndex("row", ROW_INDEX, { unique: true });
+  const results = database.createObjectStore(STORE_RESULTS, { keyPath: "id", autoIncrement: true });
+  results.createIndex("runId", "runId", { unique: true });
+  results.createIndex("mode", "mode");
+  results.createIndex("createdAt", "createdAt");
+  database.createObjectStore(STORE_PPS, { keyPath: ["master_boot_id", "tick"] }).createIndex("received_at", "received_at");
+  database.createObjectStore(STORE_LOG, { keyPath: "id", autoIncrement: true }).createIndex("at", "at");
+  database.createObjectStore(STORE_QUARANTINE, { keyPath: "id", autoIncrement: true }).createIndex("line", "line", { unique: true });
+  database.createObjectStore(runLog.STORE_RUNS, { keyPath: "runId" });
+  database.createObjectStore(runLog.STORE_META, { keyPath: "key" });
 }
 
 export function getDb() {
@@ -97,14 +91,13 @@ function remember(row) {
   if (row.hseq != null) lines.add(lineKey(row.master_boot_id, row.hseq));
 }
 
-// minSeq: rows with seq > minSeq must be in memory (open-run cursors); the last
-// MEMORY_WINDOW rows are always loaded.
-export async function init({ minSeq = Infinity } = {}) {
+// The open run's evidence (rows after its cursor) and the last MEMORY_WINDOW rows are loaded.
+export async function init() {
   try {
     db = await openDb(DB_NAME, DB_VERSION, upgrade);
     durable = true;
     const activeRun = await runLog.init(db);
-    if (activeRun && !activeRun.closed) minSeq = Math.min(minSeq, activeRun.cursor);
+    const minSeq = activeRun && !activeRun.closed ? activeRun.cursor : Infinity;
     const tail = await getAllDesc(STORE_EVENTS, MEMORY_WINDOW);
     let loaded = tail;
     if (Number.isFinite(minSeq) && tail.length && tail[tail.length - 1].seq > minSeq + 1) {
@@ -314,22 +307,6 @@ export async function pruneStore() {
   if (!(cutoff > 0)) return 0;
   await removeRange(db, STORE_EVENTS, IDBKeyRange.upperBound(cutoff, true));
   return total - RETENTION;
-}
-
-export async function rowsBetween(fromSeqExclusive, toSeqInclusive) {
-  if (toSeqInclusive <= fromSeqExclusive) return [];
-  if (db) return getAll(db, STORE_EVENTS, IDBKeyRange.bound(fromSeqExclusive, toSeqInclusive, true, false));
-  return rows.filter((r) => r.seq > fromSeqExclusive && r.seq <= toSeqInclusive);
-}
-
-// Imported ranges can be noncontiguous and reordered in this DB. Keep source order.
-export async function rowsFor(record) {
-  if (record.evidenceSeqs == null) return rowsBetween(record.cursorSeq ?? record.cursor ?? 0, record.throughSeq ?? lastSeq);
-  if (!record.evidenceSeqs.length) return [];
-  const low = record.evidenceSeqs.reduce((n, seq) => Math.min(n, seq), Infinity);
-  const high = record.evidenceSeqs.reduce((n, seq) => Math.max(n, seq), 0);
-  const bySeq = new Map((await rowsBetween(low - 1, high)).map(row => [row.seq, row]));
-  return record.evidenceSeqs.map(seq => bySeq.get(seq)).filter(Boolean);
 }
 
 export function close() {

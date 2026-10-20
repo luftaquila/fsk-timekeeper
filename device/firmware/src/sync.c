@@ -13,13 +13,6 @@ void sync_init(sync_t *s)
     memset(s, 0, sizeof(*s));
 }
 
-void sync_session(sync_t *s)
-{
-    uint16_t rx_miss = s->rx_miss;
-    sync_init(s);
-    s->rx_miss = rx_miss;
-}
-
 void sync_clock_lost(sync_t *s)
 {
     s->have_prev = 0;

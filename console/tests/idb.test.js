@@ -1,6 +1,6 @@
 import { describe, it } from "vitest";
 import assert from "node:assert/strict";
-import { transaction, add, put, addAll, remove, removeRange, clear, STRICT } from "../src/lib/idb.js";
+import { transaction, add, put, addAll, remove, removeRange, clear } from "../src/lib/idb.js";
 
 // fake-indexeddb ignores the durability hint, so check what the wrapper asks for.
 function recordingDb() {
@@ -43,6 +43,5 @@ describe("idb wrapper", () => {
     }
     transaction(db, "events");
     assert.equal(calls.at(-1).options, undefined);
-    assert.deepEqual(STRICT, { durability: "strict" });
   });
 });

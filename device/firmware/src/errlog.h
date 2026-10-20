@@ -25,7 +25,6 @@ typedef enum {
     EL_USB_DROP,
     EL_ACK_GAP,
     EL_ACK_MISMATCH,
-    EL_ID_COLLISION,
     EL_REGISTRY_FULL,
     EL_FIFO_FULL,
     EL_RADIO_CLOCK,

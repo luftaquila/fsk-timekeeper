@@ -19,12 +19,11 @@ describe("crc32", () => {
 });
 
 describe("parseLine", () => {
-  it("requires an explicit diagnostic validity flag and rejects the old live contract", () => {
+  it("requires an explicit diagnostic validity flag", () => {
     const tokens = D_LINE.split(" ");
     const prefix = tokens.slice(0, 32).join(" ");
     for (const suffix of ["", " 2", " -1", " x", " 1 extra"]) assert.equal(parseLine(prefix + suffix).telemetry, null);
     assert.equal(normalizeTelemetry(parseLine(prefix + " 0").telemetry).diag_valid, 0);
-    assert.equal(contractOf(parseLine("I FSK-WL 6 1.0.0 0123456789ABCDEF M 15 922900 7 250.00 16000 4 -9 0")).ok, false);
   });
   it("distinguishes radio clock and initialization faults from MCU HFXO", () => {
     assert.deepEqual(errorNames(0x3020), ["HFXO restart", "radio oscillator / PLL failure", "radio initialization failure"]);
@@ -38,21 +37,13 @@ describe("parseLine", () => {
   });
   it("parses I v7 and checks the contract", () => {
     const i = parseLine("I FSK-WL 7 1.0.0 0123456789ABCDEF M 17 922900 7 250.00 16000 4 -9 0");
-    assert.deepEqual(i, { type: "I", product: "FSK-WL", usbProto: 7, fw: "1.0.0", devid: "0123456789ABCDEF", role: "M", radioProto: 17, freqKhz: 922900, sf: 7, bw: 250, ticksPerMs: 16000, resetReason: 4, powerDbm: -9, lbt: 0, v1: false });
+    assert.deepEqual(i, { type: "I", product: "FSK-WL", usbProto: 7, fw: "1.0.0", devid: "0123456789ABCDEF", role: "M", radioProto: 17, freqKhz: 922900, sf: 7, bw: 250, ticksPerMs: 16000, resetReason: 4, powerDbm: -9, lbt: 0 });
     assert.deepEqual(radioOf(i), { freqKhz: 922900, powerDbm: -9, lbt: 0 });
-    assert.equal(radioOf(parseLine("I FSK-WL 3 1.0.0 0123456789ABCDEF M 15 921.30 7 250.00 16000 4")), null);
     assert.deepEqual(contractOf(i), { ok: true, reason: null });
-    assert.equal(contractOf({ ...i, usbProto: 3 }).reason, CONTRACT_VERSION);
+    assert.equal(contractOf({ ...i, usbProto: i.usbProto + 1 }).reason, CONTRACT_VERSION);
     assert.equal(contractOf({ ...i, role: "S" }).reason, CONTRACT_SENSOR_ROLE);
-    assert.equal(contractOf({ ...i, radioProto: 16 }).reason, CONTRACT_VERSION);
-    assert.equal(contractOf({ ...i, radioProto: 15 }).reason, CONTRACT_VERSION);
-    assert.equal(contractOf({ ...i, radioProto: 11 }).reason, CONTRACT_VERSION);
-    assert.equal(contractOf({ ...i, radioProto: 12, usbProto: 2 }).reason, CONTRACT_VERSION);
+    assert.equal(contractOf({ ...i, radioProto: i.radioProto + 1 }).reason, CONTRACT_VERSION);
     assert.equal(contractOf({ ...i, ticksPerMs: 16001 }).reason, CONTRACT_VERSION);
-    const v1 = parseLine("I FSK-WL 1.0.0 0123456789ABCDEF 921.30 7 250.00 16000");
-    assert.equal(v1.v1, true);
-    assert.equal(v1.fw, "1.0.0");
-    assert.equal(contractOf(v1).reason, CONTRACT_VERSION);
     assert.equal(contractOf(null).ok, false);
   });
 
@@ -77,7 +68,6 @@ describe("parseLine", () => {
       assert.equal(parseLine(`${prefix} ${suffix} 1`).telemetry, null, suffix);
     }
     assert.deepEqual(normalizeTelemetry(parseLine(D_LINE).telemetry).recovery, { count: 3, failures: 1, reason: 2, result: 2 });
-    assert.deepEqual(errorNames(1), []); // legacy reset history must never become an active error
   });
 
   it("parses the 33-token D line", () => {
@@ -128,7 +118,6 @@ describe("parseEventLine", () => {
       assert.equal(packets[i].rows[0].sensor_boot_id, ids[i]);
       assert.equal(formatAck(packets[i]), `C 1 ${ids[i]} ${packets[i].crc}`);
     }
-    assert.equal(bootIdText(0xffffffff), "4294967295"); // legacy history
     assert.equal(bootIdText("00000000000000000000"), "0");
     for (const id of ["18446744073709551616", "-1", "1e3", 9007199254740992]) {
       assert.equal(bootIdText(id), null);
@@ -206,11 +195,10 @@ describe("radio settings", () => {
 });
 
 describe("admission contract", () => {
-  it("parses only full sensor IDs and defined states, and rejects the prior live protocol", () => {
+  it("parses only full sensor IDs and defined states", () => {
     for (const state of ["WAIT", "SYNC", "READY"]) {
       assert.deepEqual(parseLine(`J 1234ABCD ${state}`), { type: "J", node: "1234ABCD", state });
     }
-    for (const line of ["J 0 READY", "J 00000000 READY", "J 1234ABCD YES", "J 1234ABCD READY extra", "J 1234ABCD REMOVED"]) assert.equal(parseLine(line), null);
-    assert.equal(contractOf(parseLine("I FSK-WL 5 v1.0.0 0123456789ABCDEF M 14 922900 7 250.00 16000 0 12 1")).ok, false);
+    for (const line of ["J 0 READY", "J 00000000 READY", "J 1234ABCD YES", "J 1234ABCD READY extra"]) assert.equal(parseLine(line), null);
   });
 });

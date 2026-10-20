@@ -13,17 +13,6 @@ spec.loader.exec_module(metadata)
 
 
 class MetadataTest(unittest.TestCase):
-    def test_incremental_header_tracks_version_without_spurious_rewrites(self):
-        with tempfile.TemporaryDirectory() as d:
-            p = Path(d) / "firmware_info.h"
-            metadata.header("v1.2.3", p)
-            before = p.stat().st_mtime_ns
-            metadata.header("v1.2.3", p)
-            self.assertEqual(before, p.stat().st_mtime_ns)
-            metadata.header("v1.2.4", p)
-            self.assertIn('#define FW_VERSION "v1.2.4"', p.read_text())
-            self.assertNotIn("v1.2.3", p.read_text())
-
     def test_package_copies_identical_metadata_and_binds_files(self):
         with tempfile.TemporaryDirectory() as d:
             folder = Path(d)

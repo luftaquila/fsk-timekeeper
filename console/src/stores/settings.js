@@ -5,7 +5,6 @@ import * as eventLog from "../lib/eventLog";
 import { validateNodeId } from "../lib/protocol";
 
 const KEY = "tk.settings.v2";
-const OLD_KEYS = ["tk.settings.v1", "tk.runs.v1", "tk.fleetKey.v1"];
 
 function defaults() {
   return {
@@ -25,7 +24,6 @@ function clampDebounce(ms) {
 function load() {
   const base = defaults();
   try {
-    for (const k of OLD_KEYS) localStorage.removeItem(k);
     const raw = localStorage.getItem(KEY);
     if (!raw) return base;
     const saved = JSON.parse(raw);
@@ -36,8 +34,7 @@ function load() {
       if (saved.mapping && typeof saved.mapping === "object") {
         for (const [node, m] of Object.entries(saved.mapping)) {
           if (!validateNodeId(node) || !m || !ROLES.includes(m.role)) continue;
-          // Preserve notes while migrating the former Enabled checkbox.
-          base.mapping[node.toUpperCase()] = { role: m.enabled === false ? "unused" : m.role, note: typeof m.note === "string" ? m.note : "" };
+          base.mapping[node.toUpperCase()] = { role: m.role, note: typeof m.note === "string" ? m.note : "" };
         }
       }
       if (MODES.includes(saved.mode)) base.mode = saved.mode;

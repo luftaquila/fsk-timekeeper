@@ -4,7 +4,7 @@ import MetricValue from "./MetricValue.vue";
 import { useDeviceStore } from "../stores/device";
 import { fmtNum, fmtPpm, fmtAgeMs } from "../lib/format";
 import { telemetryFresh, timingHealth } from "../lib/quality";
-import { errorNames, ERROR_BITS, MASTER_QUEUE_CAPACITY } from "../lib/protocol";
+import { errorNames } from "../lib/protocol";
 
 const props = defineProps({ nodeId: { type: String, required: true } });
 const device = useDeviceStore();
@@ -46,13 +46,7 @@ function clockDrift(r) {
 }
 const errors = computed(() => {
   const r = report.value;
-  let flags = r?.err_flags;
-  // Older firmware latched this flag even after ACKs drained the queue.
-  if (props.nodeId === "0" && Number.isInteger(r?.queue_depth)) {
-    flags = ((flags ?? 0) & ~ERROR_BITS.QUEUE_FULL) |
-      (r.queue_depth >= MASTER_QUEUE_CAPACITY ? ERROR_BITS.QUEUE_FULL : 0);
-  }
-  const items = errorNames(flags).map((label) => ({ label, tone: "badge-danger" }));
+  const items = errorNames(r?.err_flags).map((label) => ({ label, tone: "badge-danger" }));
   if (props.nodeId !== "0" && r?.diag_valid === 1) {
     if (r.capture_overflow > 0) items.push({ label: `Capture losses (total): ${r.capture_overflow}`, tone: "badge-warning" });
     if (r.fifo_drop > 0) items.push({ label: `FIFO losses (total): ${r.fifo_drop}`, tone: "badge-warning" });

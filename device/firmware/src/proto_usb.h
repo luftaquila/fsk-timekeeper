@@ -63,7 +63,6 @@ extern "C" {
 #define RESET_OTHER  0x80u
 
 /* Radio faults clear on verified recovery; other bits are sticky (errlog.h). */
-#define ERR_RADIO_RESET  0x0001u /* legacy history bit; v5 does not emit it */
 #define ERR_CAD_TIMEOUT  0x0002u
 #define ERR_SPI_TIMEOUT  0x0004u
 #define ERR_TX_FAIL      0x0008u
@@ -74,7 +73,6 @@ extern "C" {
 #define ERR_QUEUE_FULL   0x0100u
 #define ERR_USB_DROP     0x0200u
 #define ERR_ACK          0x0400u
-#define ERR_ID_COLLISION 0x0800u
 #define ERR_RADIO_CLOCK  0x1000u /* SX1262 XOSC startup / PLL lock, not MCU HFXO */
 #define ERR_RADIO_INIT   0x2000u /* device calibration / unexpected radio mode */
 

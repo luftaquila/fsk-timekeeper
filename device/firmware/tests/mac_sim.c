@@ -1078,32 +1078,6 @@ static void reboot(int same_tag, int sensors)
     printf("PASS reboot (%s tag, %d sensors)\n", same_tag ? "same" : "new", sensors);
 }
 
-/* Same low 16-bit ids and low boot byte must still get distinct slots and ACKs. */
-static void id_collision(void)
-{
-    add_node(1, 0, 0, 0);
-    add_node(0, 0x0D2243B0u, 13, 0);
-    add_node(0, 0x7A1C43B0u, -9, 0);
-    nodes[2].boot_id = nodes[1].boot_id ^ (UINT64_C(1) << 40);
-    add_node(0, 0x11110003u, 4, 0);
-    for (int s = 1; s <= 3; s++) { random_edges(s, 12000000u, 90000000u, 2500, (uint32_t)s * 31u); }
-    run(100000000u, NULL);
-    check_slots(15000000u);
-    unsigned got[4] = { 0 };
-    for (unsigned j = 0; j < n_recs; j++) {
-        for (int s = 1; s <= 3; s++) { if (recs[j].node == nodes[s].sender_id) { got[s]++; } }
-    }
-    assert(got[1] > 0 && got[2] > 0 && got[3] > 0);
-    assert(el_count(EL_ID_COLLISION) == 0);
-    unsigned interp, lost;
-    check_records(1, 12000000u, TOL_TICKS, &interp, &lost);
-    assert(lost == 0);
-    check_records(2, 12000000u, TOL_TICKS, &interp, &lost);
-    check_records(3, 12000000u, TOL_TICKS, &interp, &lost);
-    assert(lost == 0);
-    printf("PASS id_collision\n");
-}
-
 /* ev_seq wraps (it skips 0): the master takes it as the next packet, no gap. */
 static void ev_wrap(void)
 {
@@ -1454,14 +1428,21 @@ static void init_recovery(void)
     puts("PASS init_recovery");
 }
 
+/* A registered sensor as admission leaves it (master_admission.c). */
+static reg_entry_t *sim_entry(unsigned slot, uint32_t id, uint32_t heard_ms)
+{
+    reg_entry_t *e = &mm.reg.e[slot];
+    memset(e, 0, sizeof(*e));
+    e->used = 1; e->id = id; e->heard_ms = heard_ms; e->last_state = -1;
+    return e;
+}
+
 static void status_reports(void)
 {
     add_node(1, NODE_MASTER, 0, 0);
-    reg_entry_t *e = reg_claim(&mm.reg, 1, 0, NULL);
-    assert(e);
+    reg_entry_t *e = sim_entry(0, 1, 0);
     e->last_state = PU_STATE_OK;
-    reg_entry_t *other = reg_claim(&mm.reg, 2, 0, NULL);
-    assert(other);
+    reg_entry_t *other = sim_entry(1, 2, 0);
     other->last_state = PU_STATE_OK;
     unsigned previous = d_lines;
     /* Both sensors stop transmitting at t=0. Report ages keep increasing;
@@ -1488,8 +1469,7 @@ static void status_reports(void)
     /* Periodic refresh also works across board_millis wrap. */
     cur->now_us = (uint64_t)(UINT32_MAX - 2000u) * 1000u;
     mac_master_init(&mm, &mq);
-    e = reg_claim(&mm.reg, 3, board_millis(), NULL);
-    assert(e);
+    e = sim_entry(0, 3, board_millis());
     e->last_state = PU_STATE_OK;
     previous = d_lines;
     cur->now_us += 4999u * 1000u;
@@ -1735,7 +1715,6 @@ int main(int argc, char **argv)
     else if (!strcmp(argv[1], "reboot")) { reboot(1, 2); }
     else if (!strcmp(argv[1], "reboot_new_tag")) { reboot(0, 2); }
     else if (!strcmp(argv[1], "reboot_full")) { reboot(0, 5); }
-    else if (!strcmp(argv[1], "id_collision")) { id_collision(); }
     else if (!strcmp(argv[1], "ev_wrap")) { ev_wrap(); }
     else if (!strcmp(argv[1], "hfxo_stop")) { hfxo_stop(); }
     else if (!strcmp(argv[1], "faults")) { faults(); }

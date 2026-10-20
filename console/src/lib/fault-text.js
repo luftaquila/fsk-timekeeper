@@ -14,18 +14,6 @@ export function faultWindow(reason, boundaryTick) {
   return `between ${from} and ${offset(reason.hi, boundaryTick)}`;
 }
 
-// Older saved runs retain their original evidence; normalize known labels for display.
-const LEGACY_REASONS = {
-  "lost captures": "Capture Loss",
-  "lost a capture at an unknown time": "Capture Loss (Time Unknown)",
-  "captured an edge without a valid clock": "Invalid Capture Clock",
-  "reported capture times out of order": "Capture Times Out of Order",
-  "sent an event the console quarantined": "Invalid Event Quarantined",
-  "rebooted during the run": "Reboot During Run"
-};
-
 export function formatFaultReason(value) {
-  const text = String(value ?? "Unknown Cause");
-  const match = /^Sensor (\S+) (.+)\.$/.exec(text);
-  return match && LEGACY_REASONS[match[2]] ? `Sensor ${match[1]}: ${LEGACY_REASONS[match[2]]}` : text;
+  return String(value ?? "Unknown Cause");
 }

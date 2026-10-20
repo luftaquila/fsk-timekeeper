@@ -22,8 +22,6 @@ const radio_cfg_t *radio_config(void);
  * error code. Initialization remains pending until radio_start_rx() succeeds. */
 int radio_begin(void);
 
-/* Compatibility wrapper: setup + airtime + 5 ms, returns to RX; MAC uses start/poll. */
-int radio_transmit(const uint8_t *data, int len);
 /* Absolute TIMER2 microsecond limit, less than 2^31 us ahead. Every HAL wait
  * inherits it; a timed-out command holds NRST low until recovery. */
 void radio_limit(uint32_t end_us);

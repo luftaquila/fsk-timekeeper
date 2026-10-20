@@ -101,20 +101,14 @@ static pu_cmd_t feed(const char *line)
     return cmd;
 }
 
-static void removed_commands_and_counter_rollover(void)
+static void counter_rollover(void)
 {
     boot_ready = ready = xtal = 1; radio_fault = init_pending = 0;
-    const char *removed[] = { "JOIN\n", "DROP 1234ABCD\n" };
-    for (unsigned i = 0; i < sizeof(removed) / sizeof(removed[0]); i++) {
-        pu_cmd_t cmd = feed(removed[i]);
-        assert(cmd == PU_CMD_BAD); command(cmd);
-        assert(!strcmp(output, "X badcmd\n"));
-    }
     mq_init(&g_queue); exhausted = 1; uint64_t old = boot;
     unsigned count = sessions;
     assert(!master_clock_check() && sessions == count + 1 && boot != old && mq_depth(&g_queue) == 1);
     boot_ready = ready = 1;
-    puts("PASS main_removed_commands_and_counter_rollover");
+    puts("PASS main_counter_rollover");
 }
 
 /* R stores the settings, reconfigures the running radio and answers I, then A R. */
@@ -298,6 +292,6 @@ int main(void)
     assert(!strstr(output, "X fault "));
     puts("PASS main_deferred_boot_fault");
     queue_pressure_report();
-    removed_commands_and_counter_rollover();
+    counter_rollover();
     return 0;
 }

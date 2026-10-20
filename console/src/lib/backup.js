@@ -71,12 +71,12 @@ function validateTree(v, depth = 0) {
 }
 function validateRun(r, full) {
   if (!object(r) || typeof r.runId !== "string" || !r.runId.length || r.runId.length > 160 ||
-      !["sprint", "laps"].includes(r.mode) || !["pending", "verified", "invalid", "dnf"].includes(r.verification) ||
+      !["sprint", "laps"].includes(r.mode) || !["pending", "verified", "invalid"].includes(r.verification) ||
       (r.classification != null && !["DNS", "DNF", "DSQ"].includes(r.classification))) fail("Invalid run record.");
-  if (r.schema != null && r.schema !== 3) fail("Unsupported run schema.");
-  for (const key of ["startTick", "finishTick", "boundaryTick", "stopTick"]) if (!optionalTick(r[key])) fail("Invalid run timestamp.");
+  if (r.schema !== 3) fail("Unsupported run schema.");
+  for (const key of ["startTick", "finishTick", "boundaryTick"]) if (!optionalTick(r[key])) fail("Invalid run timestamp.");
   if (r.durationNs != null && (!decimal(r.durationNs) || BigInt(r.durationNs) < 0n)) fail("Invalid result duration.");
-  if (r.masterBootId != null && !(tick(r.masterBootId) || uint(r.masterBootId))) fail("Invalid master session.");
+  if (r.masterBootId != null && !tick(r.masterBootId)) fail("Invalid master session.");
   if (r.crossingTicks != null && (!Array.isArray(r.crossingTicks) || r.crossingTicks.some(t => !tick(t)))) fail("Invalid lap timestamps.");
   if (r.finalizeAt != null && !uint(r.finalizeAt)) fail("Invalid finalization deadline.");
   for (const key of ["cursor", "cursorSeq", "throughSeq"]) if (r[key] != null && !uint(r[key])) fail("Invalid evidence cursor.");

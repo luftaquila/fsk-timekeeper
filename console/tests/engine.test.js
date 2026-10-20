@@ -1,6 +1,7 @@
 import { describe, it } from "vitest";
 import assert from "node:assert/strict";
-import { createRun, evaluateRun, invalidateRun, stopRun, endMasterSession, shouldInvalidateOnMasterBoot, EngineError, RUN_SCHEMA } from "../src/lib/engine.js";
+import { createRun, evaluateRun, stopRun, endMasterSession, shouldInvalidateOnMasterBoot, EngineError, RUN_SCHEMA } from "../src/lib/engine.js";
+import { RADIO_PROTO_VERSION, USB_PROTO_VERSION } from "../src/lib/protocol.js";
 import { nominalNs } from "../src/lib/event-timing.js";
 
 const MS = 16000n;
@@ -116,8 +117,8 @@ describe("createRun", () => {
     assert.equal(run.verification, "pending");
     assert.equal(run.boundaryTick, String(T0));
     assert.equal(run.schema, RUN_SCHEMA);
-    assert.equal(run.radioProto, 17);
-    assert.equal(run.usbProto, 7);
+    assert.equal(run.radioProto, RADIO_PROTO_VERSION);
+    assert.equal(run.usbProto, USB_PROTO_VERSION);
     assert.equal(run.calibration, null);
     assert.equal(run.durationNs, null);
   });
@@ -247,7 +248,6 @@ describe("reference cases (D = 300 ms)", () => {
     log.capture("A", 10);
     const stopped = stopRun(ev(run, log).run);
     assert.equal(stopped.verification, "pending");
-    assert.equal(stopped.dnfReason, null);
     assert.equal(stopped.startTick, tick(10));
     assert.equal(stopped.finishTick, null);
     assert.equal(stopped.closed, true);
@@ -260,7 +260,6 @@ describe("reference cases (D = 300 ms)", () => {
     log.capture("B", 1000); // a finish without a start is ignored
     const stopped = stopRun(ev(run, log).run);
     assert.equal(stopped.verification, "pending");
-    assert.equal(stopped.dnfReason, null);
     assert.equal(stopped.closed, true);
     assert.equal(stopped.startTick, null);
     assert.equal(stopped.finishTick, null);
@@ -588,7 +587,6 @@ describe("laps", () => {
       for (const ms of crossings) log.capture("A", ms);
       const stopped = stopRun(ev(run, log).run);
       assert.equal(stopped.verification, "pending");
-      assert.equal(stopped.dnfReason, null);
       assert.equal(stopped.closed, true);
       assert.deepEqual(stopped.crossingTicks, crossings.map(tick));
     }
@@ -596,15 +594,6 @@ describe("laps", () => {
 });
 
 describe("run state helpers", () => {
-  it("invalidateRun closes with the first fault", () => {
-    const run = { mode: "laps", runId: "r", armed: true, closed: false, verification: "pending", fault: null, totalValid: true };
-    const a = invalidateRun(run, [{ node_id: "0", reason: "x" }]);
-    assert.equal(a.armed, false);
-    assert.equal(a.closed, true);
-    assert.equal(a.totalValid, false);
-    assert.equal(a.fault.reasons[0].reason, "x");
-    assert.equal(invalidateRun(a, [{ node_id: "0", reason: "y" }]).fault.reasons[0].reason, "x");
-  });
   it("master boot change only matters for an open run", () => {
     const run = { armed: true, closed: false, masterBootId: 1 };
     assert.equal(shouldInvalidateOnMasterBoot(run, 2), true);

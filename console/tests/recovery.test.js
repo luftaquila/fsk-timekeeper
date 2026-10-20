@@ -34,6 +34,7 @@ const { useHistoryStore } = await import("../src/stores/history.js");
 const runLog = await import("../src/lib/runLog.js");
 const backup = await import("../src/lib/backup.js");
 const { getAll, put } = await import("../src/lib/idb.js");
+const { RADIO_PROTO_VERSION, USB_PROTO_VERSION } = await import("../src/lib/protocol.js");
 
 fakeDefaults.slotDelayMin = 10;
 fakeDefaults.slotDelayMax = 30;
@@ -60,9 +61,7 @@ async function boot({ keepStorage = false } = {}) {
   }
   setActivePinia(createPinia());
   const timing = useTimingStore();
-  const minSeq = timing.restore();
-  await eventLog.init({ minSeq });
-  eventLog.protect(minSeq);
+  await eventLog.init();
   const history = useHistoryStore();
   await history.init();
   const device = useDeviceStore();
@@ -119,7 +118,7 @@ describe("durable run recovery", () => {
 
   it("recovers a deadline that expired while closed using nominal timing without PPS", async () => {
     const { history } = await boot();
-    const run = { schema: 3, usbProto: 7, radioProto: 17, runId: "expired", mode: "sprint", verification: "verified",
+    const run = { schema: 3, usbProto: USB_PROTO_VERSION, radioProto: RADIO_PROTO_VERSION, runId: "expired", mode: "sprint", verification: "verified",
       classification: null, armed: false, closed: true, nodes: {}, cursor: 0, crossingTicks: [],
       startTick: "16000000", finishTick: "32000000", calibration: null, durationNs: null,
       finalizeAt: Date.now() - 5000, calibrationEdges: [], startedAt: 1, durable: true };
@@ -306,42 +305,15 @@ it("restores result-only deletions explicitly and remaps device-log evidence wat
   assert.equal(log.throughSeq,event.seq);
 });
 
-it("upgrades an existing version-2 database and migrates its active localStorage run", async () => {
-  await boot(); await runLog.flush(); eventLog._reset();
-  await new Promise((resolve,reject)=>{
-    const req=indexedDB.deleteDatabase(eventLog.DB_NAME);
-    req.onsuccess=resolve;req.onerror=()=>reject(req.error);
-  });
-  const oldDb = await new Promise((resolve,reject)=>{
-    const req=indexedDB.open(eventLog.DB_NAME,2);
-    req.onupgradeneeded=()=>{
-      const db=req.result;
-      db.createObjectStore("events",{keyPath:"seq",autoIncrement:true})
-        .createIndex("row",["master_boot_id","node_id","sensor_boot_id","kind","capture_seq","master_tick"],{unique:true});
-      db.createObjectStore("results",{keyPath:"id",autoIncrement:true}).createIndex("runId","runId",{unique:true});
-      db.createObjectStore("pps",{keyPath:["master_boot_id","tick"]}).createIndex("received_at","received_at");
-      db.createObjectStore("quarantine",{keyPath:"id",autoIncrement:true}).createIndex("line","line",{unique:true});
-      db.createObjectStore("log",{keyPath:"id",autoIncrement:true}).createIndex("at","at");
-    };
-    req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);
-  });
-  const row={schema:3,runId:"pre-upgrade",mode:"sprint",verification:"pending",classification:"DNS",closed:true,
-    armed:false,nodes:{},cursor:0,crossingTicks:[],usbProto:6,radioProto:15,createdAt:1,durable:true};
-  await put(oldDb,"results",row);oldDb.close();
-  localStorage.setItem("tk.run.v3",JSON.stringify(row));
-  const {timing,history}=await boot({keepStorage:true});
-  await runLog.flush();
-  assert.equal(eventLog.getDb().version,3);
-  assert.equal(timing.run.runId,row.runId);
-  assert.equal(history.rows.length,1);
-  assert.equal(runLog.active().runId,row.runId);
-  assert.equal(localStorage.getItem("tk.run.v3"),null);
-});
-
-const reviewedRun = (runId, extra = {}) => ({ schema:3, usbProto:6, radioProto:15, runId, mode:"sprint", verification:"verified",
+const reviewedRun = (runId, extra = {}) => ({ schema:3, usbProto:USB_PROTO_VERSION, radioProto:RADIO_PROTO_VERSION, runId, mode:"sprint", verification:"verified",
   classification:null, armed:false, closed:true, nodes:{}, cursor:0, throughSeq:0, crossingTicks:[], masterBootId:"500",
   startTick:"16000000", finishTick:"32000000", calibration:null, durationNs:null, startedAt:1, durable:true, ...extra });
 const recoveryFile = text => ({ size:new TextEncoder().encode(text).length, text:async()=>text });
+// Evidence rows an imported record refers to, in its own order.
+const membersOf = async record => {
+  const bySeq = new Map((await getAll(eventLog.getDb(), eventLog.STORE_EVENTS)).map(e => [e.seq, e]));
+  return record.evidenceSeqs.map(seq => bySeq.get(seq));
+};
 
 it("preserves operator classifications and explicit Clear while detached results finalize", async () => {
   for (const [before, after] of [[null,"DSQ"],["DSQ",null],["DNF","DNS"]]) {
@@ -421,8 +393,8 @@ it("preserves exact evidence membership and source order across partial overlap,
     const text=await backup.pack([],data);
     await history.importJson(recoveryFile(text));
     const assertMembers=async()=>{
-      assert.deepEqual((await eventLog.rowsFor(history.rows[0])).map(e=>e.capture_seq),[2,3]);
-      assert.deepEqual((await eventLog.rowsFor(runLog.get(run.runId))).map(e=>e.capture_seq),[2,3]);
+      assert.deepEqual((await membersOf(history.rows[0])).map(e=>e.capture_seq),[2,3]);
+      assert.deepEqual((await membersOf(runLog.get(run.runId))).map(e=>e.capture_seq),[2,3]);
       assert.ok(history.rows[0].throughSeq>history.rows[0].cursorSeq);
     };
     await assertMembers();await history.importJson(recoveryFile(text));await assertMembers();
@@ -444,7 +416,7 @@ it("remaps imported log-clear membership without clearing unrelated or later evi
     log:[{at:1,kind:"state",code:"radio_history_clear",throughSeq:2,text:""}]};
   await history.importJson(recoveryFile(await backup.pack([],data)));
   const [mark]=await getAll(eventLog.getDb(),eventLog.STORE_LOG);
-  assert.deepEqual((await eventLog.rowsFor(mark)).map(e=>e.capture_seq),[1,2]);
+  assert.deepEqual((await membersOf(mark)).map(e=>e.capture_seq),[1,2]);
   assert.equal(mark.evidenceSeqs.includes(2),false); // unrelated capture 99
   const loggedNodes=async()=>(await getAll(eventLog.getDb(),eventLog.STORE_LOG))
     .filter(e=>e.code==="radio_history").map(e=>e.nodeId).sort();
@@ -462,8 +434,6 @@ it("clears all records and caches, survives reload, and records again", async ()
   await waitFor(() => timing.run.verification === "verified");
   await timing.stop();
   await eventLog.ingestQuarantine({raw:"invalid", reason:"invalid", node:null, hseq:999, masterBootId:"500"});
-  localStorage.setItem("tk.run.v3", "legacy");
-  localStorage.setItem("tk.run.v2", "legacy");
   localStorage.setItem("unrelated-setting", "keep");
   assert.ok(history.rows.length);
   assert.ok(eventLog.since(0).length);
@@ -478,8 +448,6 @@ it("clears all records and caches, survives reload, and records again", async ()
   assert.equal(device.logEntries.length, 0);
   assert.equal(device.ppsEdges.length, 0);
   assert.equal(device.quarantine, null);
-  assert.equal(localStorage.getItem("tk.run.v3"), null);
-  assert.equal(localStorage.getItem("tk.run.v2"), null);
   assert.equal(localStorage.getItem("unrelated-setting"), "keep");
   for (const name of eventLog.getDb().objectStoreNames) assert.deepEqual(await getAll(eventLog.getDb(), name), [], name);
   const exported = await backup.unpack(await history.recoveryJson());
@@ -536,14 +504,4 @@ it("retains data and releases the deletion lock when clearing fails", async () =
   assert.equal(history.rows[0].runId, id);
   assert.equal(timing.run.runId, id);
   assert.equal((await getAll(eventLog.getDb(), eventLog.STORE_RESULTS))[0].runId, id);
-});
-
-it("reads completed v14/USB5 results without changing their time or classification", async () => {
-  const { decodeRun } = await import("../src/lib/run-codec.js");
-  const run = reviewedRun("prior-radio", { usbProto: 5, radioProto: 14, classification: "DNF", durationNs: "1234567890" });
-  const decoded = decodeRun(JSON.stringify(run));
-  assert.equal(decoded.protocolChanged, false);
-  assert.deepEqual(decoded.run, run);
-  const open = decodeRun(JSON.stringify({ ...run, closed: false, armed: true }));
-  assert.equal(open.protocolChanged, true); assert.equal(open.run.closed, true); assert.equal(open.run.armed, false);
 });

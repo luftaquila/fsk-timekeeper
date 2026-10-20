@@ -1,17 +1,14 @@
-// Run <-> JSON, including migration from localStorage. Another run format or protocol version is
-// closed as invalid on load (its evidence cannot be judged by this console); history keeps it.
-import { DEFAULT_DEBOUNCE_MS } from "./constants";
-import { RUN_SCHEMA, invalidateRun } from "./engine";
+// Run <-> JSON. A run of another format or protocol version is not restored: its evidence
+// cannot be judged by this console.
+import { RUN_SCHEMA } from "./engine";
 import { RADIO_PROTO_VERSION, USB_PROTO_VERSION } from "./protocol";
-
-const PROTOCOL_CHANGE_REASON = "Closed by a protocol change.";
 
 export function encodeRun(run) {
   return JSON.stringify(run, (_key, value) => (typeof value === "bigint" ? String(value) : value));
 }
 
-// -> { run, protocolChanged } | null
-export function decodeRun(text, { now = Date.now() } = {}) {
+// -> run | null
+export function decodeRun(text) {
   if (!text) return null;
   let run;
   try {
@@ -20,12 +17,6 @@ export function decodeRun(text, { now = Date.now() } = {}) {
     return null;
   }
   if (!run || typeof run !== "object" || !run.runId || !run.mode) return null;
-  if (run.schema !== RUN_SCHEMA || run.radioProto !== RADIO_PROTO_VERSION || run.usbProto !== USB_PROTO_VERSION) {
-    // A finished run keeps its result (read-only); an open one has no evidence this console can judge.
-    if (run.closed) return { run: { ...run, armed: false }, protocolChanged: false };
-    return { run: invalidateRun(run, [{ node_id: null, reason: PROTOCOL_CHANGE_REASON }], { kind: "protocol", now }), protocolChanged: true };
-  }
-  if (!Number.isInteger(run.debounceMs) || run.debounceMs < 0) run.debounceMs = DEFAULT_DEBOUNCE_MS;
-  if (!Array.isArray(run.crossingTicks)) run.crossingTicks = [];
-  return { run, protocolChanged: false };
+  if (run.schema !== RUN_SCHEMA || run.radioProto !== RADIO_PROTO_VERSION || run.usbProto !== USB_PROTO_VERSION) return null;
+  return run;
 }
