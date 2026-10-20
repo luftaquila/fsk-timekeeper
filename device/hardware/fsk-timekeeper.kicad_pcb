@@ -1425,6 +1425,17 @@
 			(uuid "1fced6b2-5732-489f-bc8e-04286f2a0a10")
 		)
 		(embedded_fonts no)
+		(model "${KIPRJMOD}/lib/3dshapes/ATGM336H_GPS_Module.step"
+			(offset
+				(xyz 0 -6.4 2.54)
+			)
+			(scale
+				(xyz 1 1 1)
+			)
+			(rotate
+				(xyz -90 0 -90)
+			)
+		)
 	)
 	(footprint "MountingHole:MountingHole_2.2mm_M2_Pad"
 		(layer "F.Cu")
@@ -1766,6 +1777,7 @@
 		)
 		(embedded_fonts no)
 		(model "${KICAD10_3DMODEL_DIR}/Connector_PinHeader_2.54mm.3dshapes/PinHeader_1x02_P2.54mm_Vertical.step"
+			(hide yes)
 			(offset
 				(xyz 0 0 0)
 			)
@@ -2269,15 +2281,15 @@
 			(uuid "6f397324-867d-48c0-a87e-6a1e3310713f")
 		)
 		(embedded_fonts no)
-		(model "${KICAD10_3DMODEL_DIR}/Connector_Molex.3dshapes/Molex_Mini-Fit_Jr_5569-04A2_2x02_P4.20mm_Horizontal.step"
+		(model "${KIPRJMOD}/lib/3dshapes/Molex_Mini-Fit_Jr_5569-04A2_2x02_P4.20mm_Horizontal.step"
 			(offset
-				(xyz 0 0 0)
+				(xyz 2.1 7.3 0)
 			)
 			(scale
 				(xyz 1 1 1)
 			)
 			(rotate
-				(xyz 0 0 0)
+				(xyz 0 0 180)
 			)
 		)
 	)
@@ -3538,6 +3550,17 @@
 			)
 		)
 		(embedded_fonts no)
+		(model "${KIPRJMOD}/lib/3dshapes/SuperMini_NRF52840.step"
+			(offset
+				(xyz 7.62 -15.24 2.54)
+			)
+			(scale
+				(xyz 1 1 1)
+			)
+			(rotate
+				(xyz 0 0 0)
+			)
+		)
 	)
 	(footprint "MountingHole:MountingHole_2.2mm_M2_Pad"
 		(layer "F.Cu")
@@ -6542,7 +6565,7 @@
 			(uuid "7b25bd21-5054-4218-b6de-38207afbac54")
 		)
 		(embedded_fonts no)
-		(model "${KICAD10_3DMODEL_DIR}/RF_Module.3dshapes/Ai-Thinker-Ra-01-LoRa.step"
+		(model "${KIPRJMOD}/lib/3dshapes/Ai-Thinker_Ra-01SH.step"
 			(offset
 				(xyz 0 0 0)
 			)

@@ -631,4 +631,15 @@
 		)
 	)
 	(embedded_fonts no)
+	(model "${KIPRJMOD}/lib/3dshapes/SuperMini_NRF52840.step"
+		(offset
+			(xyz 7.62 -15.24 2.54)
+		)
+		(scale
+			(xyz 1 1 1)
+		)
+		(rotate
+			(xyz 0 0 0)
+		)
+	)
 )

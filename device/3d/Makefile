@@ -1,13 +1,19 @@
-# Printable housings. Requires OpenSCAD.
+# Printable housings and sensor holder. Requires OpenSCAD.
 #
-#   make          render master-{base,lid}.stl and sensor-{base,lid}.stl
+#   make          render master.stl, sensor.stl (base and lid together), and sensor-holder.stl
 #   make clean    remove the STLs
 
 OPENSCAD ?= openscad
-PARTS := master-base master-lid sensor-base sensor-lid
+PARTS := master sensor sensor-holder
 
 .PHONY: all clean
 all: $(addsuffix .stl,$(PARTS))
+
+sensor-holder.stl: sensor-holder.scad
+	$(OPENSCAD) -o $@ $<
+
+%.stl: %.scad
+	$(OPENSCAD) -o $@ -D 'part="both"' $<
 
 %-base.stl: %.scad
 	$(OPENSCAD) -o $@ -D 'part="base"' $<

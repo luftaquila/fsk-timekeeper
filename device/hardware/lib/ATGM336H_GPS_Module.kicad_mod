@@ -135,4 +135,15 @@
 		(uuid "ce73e91e-7040-4133-a9a0-d816b249cb4e")
 	)
 	(embedded_fonts no)
+	(model "${KIPRJMOD}/lib/3dshapes/ATGM336H_GPS_Module.step"
+		(offset
+			(xyz 0 -6.4 2.54)
+		)
+		(scale
+			(xyz 1 1 1)
+		)
+		(rotate
+			(xyz -90 0 -90)
+		)
+	)
 )

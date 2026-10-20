@@ -6,6 +6,7 @@ on:
       - '**'
     paths:
       - 'device/3d/**'
+      - 'device/hardware/**'
       - '.github/workflows/3d.yml'
   workflow_call:
   workflow_dispatch:
@@ -16,29 +17,44 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Add KiCad repository
+        run: |
+          sudo add-apt-repository -y ppa:kicad/kicad-10.0-releases
+          sudo apt-get update
+
+      - uses: awalsh128/cache-apt-pkgs-action@latest
+        with:
+          packages: kicad
+          version: 1.0
+
       # The housings use minkowski() with a sphere; the Manifold backend of the
       # OpenSCAD nightlies renders them in seconds, where the 2021.01 release in
       # apt (CGAL only) needs minutes. Bump the dated tag occasionally.
       #
       # apt fallback (no Docker):
       #   sudo apt-get install -y openscad
-      #   openscad -o master-lid.stl -D 'part="lid"' master.scad   # no --backend flag
+      #   openscad -o master.stl -D 'part="both"' master.scad   # no --backend flag
       - name: Render STL files from OpenSCAD sources
         run: |
           docker run --rm --entrypoint sh \
             -v "$PWD/device/3d:/work" -w /work \
             openscad/openscad:dev.2026-09-23 -ec '
               for v in master sensor; do
-                for p in lid base; do
-                  openscad --backend=manifold -o "$v-$p.stl" -D "part=\"$p\"" "$v.scad"
-                done
-              done'
-          ls -la device/3d/*.stl
+                openscad --backend=manifold -o "$v.stl" -D "part=\"both\"" "$v.scad"
+              done
+              openscad --backend=manifold -o sensor-holder.stl sensor-holder.scad'
+          ls -la device/3d/master.stl device/3d/sensor.stl device/3d/sensor-holder.stl
+
+      - name: Export PCB STEP model
+        run: |
+          kicad-cli pcb export step -o device/3d/fsk-timekeeper-pcb.stp --include-tracks device/hardware/fsk-timekeeper.kicad_pcb
 
       - uses: actions/upload-artifact@v7
         with:
           name: fsk-timekeeper-3d
           path: |
-            device/3d/*.stl
-            device/3d/*.scad
+            device/3d/master.stl
+            device/3d/sensor.stl
+            device/3d/sensor-holder.stl
+            device/3d/fsk-timekeeper-pcb.stp
           if-no-files-found: error
