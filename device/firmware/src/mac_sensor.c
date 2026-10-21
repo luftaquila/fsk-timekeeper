@@ -13,9 +13,8 @@
 
 #define TPM ((uint64_t)TICKS_PER_MS)
 
-/* An uplink let through at SLOT_LATE_MS ends SLOT_GUARD_MS before the LBT listen of the next slot
- * starts, and the last slot ends before the next beacon even when this one went out as late as
- * the absolute beacon channel-access deadline allows. */
+/* An uplink sent at SLOT_LATE_MS ends SLOT_GUARD_MS before the next slot's LBT listen; the last
+ * slot ends before the next beacon even if this beacon left at its channel-access deadline. */
 static_assert((SLOT_LATE_MS + TX_SETUP_MS + SLOT_GUARD_MS + LBT_LISTEN_MS) * 1000u + LORA_TOA_US(WIRE_UPLINK_ADMISSION) <=
               SLOT_LEN_MS * 1000u, "an uplink must fit its slot");
 static_assert((SLOT_OFFSET_MS + SLOT_COUNT * SLOT_LEN_MS + BEACON_ACCESS_MS + TX_SETUP_MS) * 1000u +
@@ -92,8 +91,7 @@ static void on_offer(mac_sensor_t *s, const uint8_t *buf, int n)
         memcpy(j->nm, p.nm, 16); j->link_id = p.link_id;
         j->phase = SENSOR_JOIN_CONFIRM_READY;
         sync_init(&j->sync);
-        /* Only the exact advertised beacon may seed this candidate. Its first
-         * RxDone was cached before the offer; duplicate packets never replace it. */
+        /* Seed only from the advertised beacon's first RxDone, cached before the offer. */
         if (s->hint_valid && s->hint_boot == j->master_boot && s->hint_ctr == floor) {
             (void)sync_beacon(&j->sync, s->hint.base.seq, s->hint_rx, 1, 0, 0,
                               !!(s->hint.base.flags & BEACON_ADMISSION));
@@ -118,8 +116,7 @@ static int beacon_schedule(const admission_beacon_t *b, uint8_t slots[SLOT_COUNT
     return 1;
 }
 
-/* Same-clock reauthentication keeps FIFO, sync and capture identity. Only an
- * authenticated change of master epoch clears records tied to the old clock. */
+/* Same-epoch reauthentication keeps FIFO, sync and capture identity; a new epoch clears them. */
 static void activate_join(mac_sensor_t *s, int entry, uint32_t ctr)
 {
     sensor_join_t *j = &s->join;
@@ -246,7 +243,7 @@ static void on_beacon(mac_sensor_t *s, const uint8_t *buf, int n)
 
 static void record_capture(mac_sensor_t *s, uint32_t seq, uint64_t tick, int xtal)
 {
-    if (!s->timing_ready || tick < s->timing_ready_tick) { return; } /* before this session's sync */
+    if (!s->timing_ready || tick < s->timing_ready_tick) { return; } /* before the session's sync */
     uint64_t master;
     uint8_t flags;
     int r = sync_stamp(&s->sync, tick, xtal, &master, &flags);
@@ -295,17 +292,13 @@ static void drain_captures(mac_sensor_t *s)
     }
 }
 
-/* On request, or to announce ourselves, at once. The periodic one waits for our last slot of its
- * cycle: one packet per cycle, so an earlier one would hold that cycle's captures back a beacon. */
+/* On request or to announce: now. Periodic: last slot, else it would delay captures a beacon. */
 static int checkpoint_due(const mac_sensor_t *s)
 {
     if (s->cp_pending || s->entry < 0 || !s->sync.cur.have) { return 1; }
     if (s->tx_slots) { return 0; }
-    /* Measure five frames from the last confirmed exchange, independently of
-     * the 8-bit seq wrap. A reply addressed to another node does not postpone
-     * our next attempt; the report-only follow-up does not postpone it either.
-     * Use beacon captures, not the slot-dependent anchor midpoint. A half-frame
-     * tolerance covers clock drift and beacon channel-access jitter. */
+    /* Five frames since our last non-report exchange, by beacon RxDone (not seq or anchor
+     * midpoint); half a frame of slack covers clock drift and beacon channel-access jitter. */
     return !s->sync_refresh_rx ||
            (s->cycle_rx > s->sync_refresh_rx && s->cycle_rx - s->sync_refresh_rx >=
             (CHECKPOINT_PERIOD_BEACONS * BEACON_PERIOD_MS - BEACON_PERIOD_MS / 2u) * TPM);
@@ -329,8 +322,7 @@ static uplink_pl_t *make_checkpoint(mac_sensor_t *s)
     return p;
 }
 
-/* Diagnostics ride every DATA uplink and are refilled on each send (the evidence
- * part of an in-flight packet never changes); JOIN and CONFIRM carry none. */
+/* Refilled on every DATA send; the evidence part of an in-flight packet never changes. */
 static void fill_diag(mac_sensor_t *s, uplink_pl_t *p)
 {
     uint64_t now = capture_now64();
@@ -374,18 +366,13 @@ static void slot_tx(mac_sensor_t *s)
         p = sq_packet(&s->q, s->master_boot_id);
         if (!p && checkpoint_due(s)) {
             p = make_checkpoint(s);
-            /* Held captures need a fresh two-way anchor before they can leave
-             * the FIFO. A probe carries no checkpoint/evidence and cannot ACK
-             * past them; it uses this same scheduled transmission opportunity. */
+            /* Held captures need a fresh two-way anchor to leave the FIFO; a probe
+             * carries no checkpoint or evidence, so its ACK cannot pass them. */
             if (!p) { p = &probe; }
         }
         if (!p && s->sync_report_pending && !s->tx_slots) {
-            /* The preceding uplink reported the old anchor. Publish the new
-             * one even while idle; ordinary evidence takes priority and carries
-             * these same diagnostics. Wait for our last slot so captures that
-             * arrive later in this frame can still use its earlier slots.
-             * This report must not start a report loop when its own two-way
-             * echo arrives in the following beacon. */
+            /* Publish a new anchor even while idle, in our last slot so later captures can
+             * use the earlier slots; its own two-way echo must not start a report loop. */
             p = &probe;
             report_only = 1;
         }
@@ -439,8 +426,7 @@ static void radio_recovery(mac_sensor_t *s)
 void mac_sensor_step(mac_sensor_t *s)
 {
     (void)capture_now64(); /* at least once per TIMER1 wrap, beacons or not (capture.h) */
-    /* Retire an elapsed backoff even while no beacon asks us to join. An old
-     * deadline must never turn into a future wait after half a millis period. */
+    /* Retire join backoff without a beacon: half a millis period later it would look future. */
     if (s->join_retry_pending && (int32_t)(board_millis() - s->retry_join_ms) >= 0) {
         s->join_retry_pending = 0;
     }
@@ -467,9 +453,7 @@ void mac_sensor_step(mac_sensor_t *s)
 
     uint32_t stops = board_hfxo_stops();
     if (!board_hfclk_xtal() || stops != s->hfxo_stops) {
-        /* A recovered oscillator needs fresh anchors: the old skew cannot
-         * certify captures across the clock-source change, even when the
-         * restart finished before this check. */
+        /* Need fresh anchors even if the HFXO already restarted: old skew can't span the switch. */
         s->hfxo_stops = stops;
         sync_clock_lost(&s->sync);
         sync_clock_lost(&s->join.sync);

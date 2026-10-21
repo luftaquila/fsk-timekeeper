@@ -63,8 +63,7 @@ int mq_push_timebase_end(mq_t *q, uint64_t master_boot_id, uint64_t tick)
 
 int mq_ack(mq_t *q, uint32_t hseq, uint64_t master_boot_id, uint32_t crc)
 {
-    /* A repeated ack of a line already popped (the host saw a re-send) is
-     * harmless and ignored; anything else that does not match is counted. */
+    /* Re-acks of a popped line (the host saw a re-send) are harmless; other mismatches count. */
     if (!q->count) { return 0; }
     const mq_item_t *h = &q->item[q->head];
     if ((int32_t)(hseq - h->hseq) < 0) { return 0; }

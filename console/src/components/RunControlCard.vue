@@ -5,7 +5,6 @@ import { useTimingStore } from "../stores/timing";
 import { useDeviceStore } from "../stores/device";
 import { useSettingsStore } from "../stores/settings";
 
-// note = the run note input
 defineProps({ note: { type: String, default: "" } });
 
 const timing = useTimingStore();

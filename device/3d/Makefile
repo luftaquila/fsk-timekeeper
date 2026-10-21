@@ -1,5 +1,4 @@
-# Printable housings and sensor holder. Requires OpenSCAD.
-#
+# Printable housings and sensor holder (requires OpenSCAD).
 #   make          render master.stl, sensor.stl (base and lid together), and sensor-holder.stl
 #   make clean    remove the STLs
 

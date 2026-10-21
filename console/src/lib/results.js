@@ -1,5 +1,4 @@
-/* Result durations of a run or history row, from its raw ticks and calibration.
- * The frozen calibration wins; before it exists the PPS edges at hand give a provisional value. */
+// Result durations from raw ticks: frozen calibration, else provisional from PPS edges at hand.
 import { calibrationPoints, durationNs } from "./calibration";
 
 // Ticks the result depends on.
@@ -20,7 +19,7 @@ export function spanNs(run, a, b, source = null) {
   return durationNs(pointsFor(run, [a, b], source), a, b);
 }
 
-// The result: sprint F1 − S1, laps last − first confirmed crossing (only while the total is valid).
+// The result: sprint F1 − S1; laps last − first confirmed crossing, only while the total is valid.
 export function resultNs(run, source = null) {
   if (!run) return null;
   if (run.durationNs != null) return BigInt(run.durationNs);

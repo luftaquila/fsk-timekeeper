@@ -24,16 +24,14 @@ jobs:
           packages: kicad
           version: 1.0
 
-      # ImageMagick's postinst registers `convert` via update-alternatives;
-      # restoring package files alone does not recreate that command.
+      # Plain apt: a cache restore skips the postinst update-alternatives that adds `convert`.
       - name: Install ImageMagick
         run: |
           sudo apt-get install -y --no-install-recommends imagemagick
           convert -version
 
-      # Both checks run with --exit-code-violations so violations are annotated,
-      # and continue-on-error keeps them from blocking the artifact. Known ERC
-      # items are excluded in the project file (erc.erc_exclusions).
+      # --exit-code-violations annotates violations; continue-on-error keeps them from blocking
+      # the artifact. Known ERC items are excluded in the project file (erc.erc_exclusions).
       - name: Schematic ERC
         continue-on-error: true
         run: |

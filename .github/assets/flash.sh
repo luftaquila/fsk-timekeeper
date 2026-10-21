@@ -1,15 +1,13 @@
 #!/bin/sh
-# Flash the fsk-timekeeper firmware over the Adafruit nRF52 bootloader's serial DFU.
+# Flash the firmware over the Adafruit nRF52 bootloader's serial DFU.
 #
 #   ./flash.sh [--serial <devid>] [port]
 #
-# Finds the board by itself. A board running the FSK-WL app is rebooted into the
-# bootloader first (1200-baud touch); a board that is already in the bootloader
-# (new board, or after a double-tap on RST) is flashed directly. With several
-# boards plugged in, --serial picks the board whose USB serial number is the given
-# chip id (the 16 hex digits of its `I` line); the bootloader reports it too. An
-# app from before chip-id serials reports 0001 instead.
-# Linux users need permission on the serial port (usually the `dialout` group).
+# An app board is rebooted into the bootloader first (1200-baud touch); a board already in the
+# bootloader (new, or after a double-tap on RST) is flashed directly. --serial picks one of several
+# boards by chip id (the 16 hex digits of its `I` line), which the app and the bootloader both
+# report as USB serial number; apps from before chip-id serials report 0001.
+# Linux needs serial-port access (usually the `dialout` group).
 set -eu
 cd "$(dirname "$0")"
 
@@ -23,8 +21,7 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-# Serial port of the first USB device with this vendor id (and product id and
-# serial number when given), hex.
+# Serial port of the first USB device matching vid [pid] [serial] (hex ids).
 usb_port() {
     vid="$1"
     pid="${2:-}"

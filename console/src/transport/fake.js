@@ -1,12 +1,10 @@
-/* Development fake of the FSK-WL master, USB line protocol v7. Same interface as serial.js.
- *
- * Each sensor keeps its records (captures, losses, checkpoints) in order; a record reaches the
- * master queue one slot delay after it was made, consecutive captures bundled up to 5 per E
- * line. The master queue (16 lines) re-sends its head every 100 ms until an exact
- * `C <hseq> <master_boot_id> <crc>`. `H` every second, `D 0` every 5 s, a sensor `D` with every
- * uplink and every 5 s, a periodic checkpoint per idle sensor every 5 s, checkpoints one beacon
- * after `CP`, one `P` line per PPS edge with seg/n. Scenario helpers inject the rest.
- */
+/* Development fake of the FSK-WL master (USB line protocol v7), same interface as serial.js:
+ *   records (captures, losses, checkpoints) reach the master queue one slot after they are made,
+ *     up to 5 consecutive captures per E line
+ *   queue of 16 lines; the head is re-sent every 100 ms until an exact `C <hseq> <boot> <crc>`
+ *   `H` every second, `D 0` every 5 s, a sensor `D` with every uplink and every 5 s
+ *   a checkpoint per idle sensor every 5 s and one beacon after `CP`; one `P` per PPS edge (seg/n)
+ * Scenario helpers inject the rest. */
 import { crc32Hex } from "../lib/crc32";
 import { USB_PROTO_VERSION, RADIO_PROTO_VERSION, bootIdText, isRadioConfig } from "../lib/protocol";
 
@@ -92,8 +90,7 @@ export function createFakeTransport({ onLine, onDisconnect }) {
 
   function removeSensor(id) {
     if (!sensors.delete(id.toUpperCase())) return false;
-    // Stop future uplinks and checkpoints. Records already accepted by the
-    // master remain in its ACK queue, just as when a real sensor disappears.
+    // Records the master already accepted stay in its ACK queue, as when a real sensor disappears.
     emit(heartbeat());
     return true;
   }
@@ -252,8 +249,7 @@ export function createFakeTransport({ onLine, onDisconnect }) {
     s.lastTick = null;
     checkpoint(node, { immediate: true });
   }
-  // An event whose crc is right but whose content is not (quarantined by the console); it
-  // stands for one capture record, so the sensor's next record shows the gap.
+  // Right crc, wrong content (quarantined); uses one capture seq, so the next record shows a gap.
   function injectBadLine(node) {
     const s = addSensor(node);
     s.captureSeq = (s.captureSeq + 1) >>> 0;

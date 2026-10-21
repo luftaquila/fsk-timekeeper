@@ -14,7 +14,7 @@ const mode = computed(() => timing.run?.mode ?? settings.state.mode);
 
 function onMode(e) {
   settings.setMode(e.target.value);
-  // A finished run belongs to the old mode; clear it so the page shows the new one (History keeps it).
+  // A finished run belongs to the old mode: clear it from the page (History keeps it).
   if (timing.run && !timing.armed) timing.reset();
 }
 

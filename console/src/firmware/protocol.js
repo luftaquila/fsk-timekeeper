@@ -1,7 +1,6 @@
-/* Adafruit nRF52 legacy serial DFU (HCI over SLIP), not Nordic Secure DFU.
- * Wire reference: Adafruit_nRF52_nrfutil/nordicsemi/dfu/dfu_transport_serial.py.
- * The first transmitted sequence is 1; ACK contains the next expected sequence.
- */
+/* Adafruit nRF52 legacy serial DFU (HCI over SLIP), not Nordic Secure DFU; wire reference:
+ * Adafruit_nRF52_nrfutil/nordicsemi/dfu/dfu_transport_serial.py. The first sequence sent is 1;
+ * an ACK carries the next expected sequence. */
 export function crc16(bytes) {
   let crc = 0xffff;
   for (const byte of bytes) {
@@ -92,8 +91,7 @@ export async function flashFirmware(port, firmware, { onProgress = () => {}, del
         }
       } catch (e) { if (!closing) fail(e); }
     })();
-    // Match nrfutil's port-open settling time, including when a previously
-    // authorized bootloader is selected immediately after USB enumeration.
+    // nrfutil's port-open settling time, also for a bootloader selected right after enumeration.
     await delay(100);
     await port.setSignals({ dataTerminalReady: false, requestToSend: false });
     await delay(50);
@@ -103,9 +101,8 @@ export async function flashFirmware(port, firmware, { onProgress = () => {}, del
       if (failure) throw failure;
       sequence = (sequence + 1) & 7;
       const encoded = packet(payload, sequence);
-      // HCI drops duplicate sequences and re-sends its ACK. Retry DATA with
-      // the identical frame so a lost ACK cannot duplicate application bytes.
-      // START/STOP are not retried: they can erase flash or reset the device.
+      // HCI drops duplicate sequences and re-sends its ACK: retry DATA with the identical frame so
+      // a lost ACK cannot duplicate bytes. START/STOP are not retried (they erase flash or reset).
       for (let attempt = 1; attempt <= attempts; attempt++) {
         let timer;
         const acknowledged = new Promise((resolve, reject) => {

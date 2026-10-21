@@ -1,6 +1,4 @@
-/* Execute the production parser/estimator/poll/report path with injected DMA
- * bytes, PPS captures and board time. Every scenario runs in a new process, as
- * on MCU boot; only the hardware boundary is fake. */
+/* Production gps.c with injected DMA bytes, PPS captures and time; one process per scenario. */
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -194,8 +192,7 @@ int main(int argc, char **argv)
     } else if (!strcmp(scenario, "resume_after_silence")) {
         warm();
         for (unsigned i = 10; i <= 13; i++) edge(i, -1);
-        // No report was requested during the outage. A fresh A must not revive
-        // the old window, even if the PPS never stopped.
+        // A fresh A after an unreported outage must not revive the old window, even with PPS on.
         rmc(1);
         assert(report().pps_valid == 0);
         for (unsigned i = 14; i <= 21; i++) edge(i, 1);
@@ -309,9 +306,8 @@ int main(int argc, char **argv)
         out = report();
         assert(out.seg == 3 && out.n == 0 && out.pps_tick == next_pps);
     } else if (!strcmp(scenario, "glitch")) {
-        /* A spurious pulse after an edge, before its RMC: it restarts the window and
-         * takes that RMC, but neither it nor the next real edge is qualified, so no
-         * one-edge segment can pin the timeline to it. */
+        /* A glitch between an edge and its RMC restarts the window and takes that RMC; neither it
+         * nor the next real edge qualifies, so no one-edge segment can pin the timeline to it. */
         warm();
         now_ms = 10000;
         next_pps = capture_now64(); have_pps = 1;

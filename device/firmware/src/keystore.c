@@ -5,9 +5,8 @@
 #include "crc32.h"
 #include "nvmc.h"
 
-/* Top page of the application flash region (0x26000..0xF4000). The linker's
- * FLASH length stops below the radio settings page at 0xF2000 (nrf52840_app.ld),
- * so the app image never covers this page and the key survives DFU. */
+/* Top page of the app flash region (0x26000..0xF4000); the linker's FLASH stops below the radio
+ * settings page at 0xF2000 (nrf52840_app.ld), so the app image never covers this page. */
 #define KEY_PAGE_ADDR  0x000F3000u
 #define KEYSTORE_MAGIC 0x4B50534Bu /* 'KPSK' */
 #define KEYSTORE_VER   1u

@@ -1,5 +1,4 @@
-/* Results history (IndexedDB `results`, memory fallback) + Excel/JSON export.
- * Rows keep raw ticks, the frozen calibration and exact ns; rows of another run schema are not shown. */
+// Results history (IndexedDB `results`, memory fallback): raw ticks, frozen calibration, exact ns.
 import writeExcelFile from "write-excel-file/universal";
 import { defineStore } from "pinia";
 import { ref, toRaw } from "vue";
@@ -94,8 +93,7 @@ export const useHistoryStore = defineStore("history", () => {
     return out;
   }
 
-  // Runs and capture evidence are stored separately. Results begin only once a measured
-  // interval is decided or the operator assigns a classification; later updates use that same row.
+  // A row begins once an interval is decided or a classification is set; updates reuse that row.
   // A laps run keeps its confirmed laps when a loss voids the total, as on the timing screen.
   function hasResult(run) {
     if (run.mode === "laps") return run.verification !== "pending" && (run.crossingTicks?.length ?? 0) >= 2;
@@ -143,14 +141,12 @@ export const useHistoryStore = defineStore("history", () => {
   }
 
   function upsert(run, options = {}) {
-    // Capture the state now and serialize writes: several laps or calibration can arrive
-    // while IndexedDB is still inserting the first result.
+    // Snapshot now and serialize: more laps or calibration can arrive while the first insert runs.
     const snapshot = plain(run);
     return enqueue(() => saveResult(snapshot, options));
   }
 
-  // Finalization changes timing only. Read the latest row inside the mutation queue
-  // so an operator's classification (including Clear) always survives a late freeze.
+  // Timing only, on the row read in-queue: a classification (even Clear) survives a late freeze.
   function updateCalibration(run) {
     const snapshot = plain(run);
     return enqueue(async () => {

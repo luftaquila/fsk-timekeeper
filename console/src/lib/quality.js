@@ -1,5 +1,4 @@
-/* Shared current timing status and START gate. Missing diagnostics are uncertainty,
- * not evidence of a hardware fault or a lost capture. */
+// Timing status and START gate: missing diagnostics are uncertainty, not a fault or lost capture.
 import { REQUIRED_ROLES, WIRELESS_STATUS_MAX_AGE_MS, WIRELESS_MAX_SKEW_PPM, WIRELESS_SYNC_TTL_MS, QUEUE_HEALTH_RATIO, HEAD_STUCK_MS } from "./constants";
 import { MASTER_QUEUE_CAPACITY } from "./protocol";
 
@@ -50,8 +49,7 @@ export function timingHealth(report, { nodeId = report?.node_id, connected = tru
     if (report.skew_valid !== 1 || !Number.isFinite(report.skew_ppm)) issues.push(["SYNC INVALID", `${who} clock skew is not valid`]);
   }
   if (issues.length) {
-    // Initial clock acquisition is expected. Keep actual clock/key faults visible,
-    // and keep START blocked until synchronization is valid.
+    // First clock acquisition shows SYNCING, not a fault (others still show); START stays blocked.
     if (!master && report.sync_established === false && issues.every(([label]) => label === "SYNC INVALID")) {
       return result("SYNCING", "warn", [`${who} is synchronizing its clock`], syncAgeMs);
     }
@@ -72,9 +70,8 @@ export function pipelineHealth({ master, head, connected, now = Date.now() }) {
   return { ok: true, reason: null };
 }
 
-// mappings: enabled rows whose role the mode requires [{ node_id, role }]
-// telemetry: { [node_id]: normalized telemetry } (node "0" = master)
-// masterFresh: the USB link is up and the master has spoken recently
+// mappings: enabled [{ node_id, role }] with a required role; telemetry: { [node_id]: normalized
+// telemetry } (node "0" = master); masterFresh: USB link up and the master spoke recently.
 export function wirelessQuality({ mode, mappings, telemetry, masterFresh, connected = false, contract = { ok: true }, pipeline = { ok: true }, now = Date.now() }) {
   const reasons = [];
   if (!masterFresh) reasons.push({ node_id: "0", reason: connected ? "No recent data from master" : "Master not connected" });

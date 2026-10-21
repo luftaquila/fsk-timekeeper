@@ -98,8 +98,7 @@ function validateEvidenceRefs(row) {
       new Set(refs).size !== refs.length) fail("Invalid evidence references.");
 }
 
-// Import closes unfinished snapshots. Freeze their existing measurements using
-// same-session PPS, or nominal timing when no qualified edges are available.
+// Import closes unfinished snapshots: frozen with same-session PPS, else nominal timing.
 function finalizeImported(row, edges, old, full, now) {
   if (row.schema !== 3 || row.calibration || !resultTicks(row).length) return row;
   const withoutCalibration = r => ({ ...r, calibration: null, durationNs: null });
@@ -152,7 +151,7 @@ export async function unpack(text) {
 
 const evidenceKey = r => r.kind === "quarantine" ? `q:${r.master_boot_id}:${r.hseq}` : rowKey(r);
 
-// Records are checked while they are merged in one transaction: any conflict rolls every store back.
+// Checked while merging in one transaction: any conflict rolls every store back.
 export function merge(data) {
   return enqueue(async () => {
     const db = eventLog.getDb();
@@ -197,8 +196,7 @@ export function merge(data) {
         }
       }
       const sourceSeqs = [...remap.keys()].sort((a, b) => a - b);
-      // Numeric ranges are local to the source DB. Preserve membership and order,
-      // including ranges already represented explicitly by an earlier import.
+      // Seq ranges are source-local: keep membership and order, even of an earlier import's list.
       const evidence = (row, from = row.cursorSeq ?? row.cursor ?? 0) => {
         const source = row.evidenceSeqs ?? sourceSeqs.filter(seq => seq > from && (row.throughSeq == null || seq <= row.throughSeq));
         const evidenceSeqs = [...new Set(source.filter(seq => remap.has(seq)).map(seq => remap.get(seq)))];

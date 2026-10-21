@@ -49,8 +49,7 @@ static void acc_merge(sensor_queue_t *q, sq_item_t it)
         el_note(EL_FIFO_FULL);
         return;
     }
-    /* Records arrive in seq order; should one not, the range still must not
-     * shrink below a seq it already covers, or that seq would never be sent. */
+    /* Even on an out-of-order record never shrink past a covered seq, or it would never be sent. */
     if ((int32_t)(it.end_seq - q->acc.end_seq) > 0) {
         q->acc.end_seq = it.end_seq;
         q->acc.end_tick = it.end_tick;

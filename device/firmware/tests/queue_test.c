@@ -1,5 +1,4 @@
-/* Sensor FIFO, host queue, registry and the USB line formats, with the USB and
- * clock boundary faked. */
+/* Sensor FIFO, host queue, registry and USB line formats, with USB and clock faked. */
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -352,8 +351,7 @@ static void console_lifecycle(void)
     assert(usb_n == 1 && mq_depth(&q) == 1);
     assert(!strcmp(usb_out[0], q.item[q.head].line));
 
-    /* Close/reopen between service calls must discard the old command fragment
-     * and control reply, while retaining the unacknowledged event. */
+    /* Close/reopen between service calls drops the old fragment and reply, not unacked events. */
     usb_ok = 0;
     pu_emit_ack("OLD");
     pu_feed('K'); pu_feed(' ');

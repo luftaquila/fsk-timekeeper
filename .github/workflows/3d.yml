@@ -27,10 +27,8 @@ jobs:
           packages: kicad
           version: 1.0
 
-      # The housings use minkowski() with a sphere; the Manifold backend of the
-      # OpenSCAD nightlies renders them in seconds, where the 2021.01 release in
-      # apt (CGAL only) needs minutes. Bump the dated tag occasionally.
-      #
+      # Nightly image: its Manifold backend renders the minkowski() housings in seconds, where
+      # apt's 2021.01 release (CGAL only) takes minutes. Bump the dated tag occasionally.
       # apt fallback (no Docker):
       #   sudo apt-get install -y openscad
       #   openscad -o master.stl -D 'part="both"' master.scad   # no --backend flag

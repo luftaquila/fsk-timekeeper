@@ -74,8 +74,7 @@ export const useFirmwareStore = defineStore("firmware", () => {
   async function prepareBoard() {
     const appPort = await device.enterBootloader();
     phase.value = "bootloader";
-    // Wait for the reset, then open the bootloader chooser. Never select a
-    // remembered port silently; a browser may require a new click here.
+    // Wait for the reset; never pick a remembered port silently (the browser may need a new click).
     let ports = [];
     for (let i = 0; i < 50; i++) {
       ports = await navigator.serial.getPorts();

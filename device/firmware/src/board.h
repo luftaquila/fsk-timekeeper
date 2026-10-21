@@ -8,33 +8,26 @@
 extern "C" {
 #endif
 
-/* Clear UICR.NFCPINS once (resets), relocate the vector table, start HFXO,
- * start TIMER2, drive EXT_POWER high, set up the LED. Call once at the top of main(). */
+/* NFC pins (may reset once), vector table, HFXO, TIMER2, EXT_POWER, LED. Once, at top of main(). */
 void board_init(void);
 
-/* Non-zero only while the 16 MHz clock is sourced from HFXO. Timing work must
- * fail closed when this is false. */
+/* Non-zero only while the 16 MHz clock runs from HFXO; timing work must fail closed otherwise. */
 int board_hfclk_xtal(void);
 
-/* Keep HFXO running: when HFCLK is not on the crystal, request HFXO again
- * (non-blocking) and count the restart. Call every main-loop pass in both roles. */
+/* Off the crystal: re-request HFXO (non-blocking), count the stop. Call every pass, both roles. */
 void board_hfxo_service(void);
 
-/* HFXO stops board_hfxo_service() has seen since boot. The restart may finish
- * within the same main-loop pass, before a later board_hfclk_xtal() check:
- * timing code compares this count as well. */
+/* HFXO stops since boot: a restart may end before a later board_hfclk_xtal(), so check this too. */
 uint32_t board_hfxo_stops(void);
 
-/* EXT_POWER gate (P0.13): switches on the module's VCC (3V3) output, which feeds
- * the radio, the GPS and the sensor pull-up. The 12 V boost runs from the battery. */
+/* EXT_POWER (P0.13): module VCC (3V3) for radio, GPS, sensor pull-up; 12 V boost is battery-fed. */
 void board_ext_power_on(void);
 
 void board_led_off(void);
 void board_led_toggle(void);
 
-/* Free-running 1 MHz TIMER2 (32-bit, wraps every ~71.6 min) and a 32-bit ms
- * count extended through that wrap. Main-loop context only (not ISR safe);
- * board_millis() must run at least once per micros wrap. */
+/* Free-running 1 MHz TIMER2 (wraps ~71.6 min) and a 32-bit ms count extended through that wrap.
+ * Main loop only (not ISR safe); board_millis() must run at least once per micros wrap. */
 uint32_t board_micros(void);
 uint32_t board_millis(void);
 

@@ -2,8 +2,7 @@
 
 #include <string.h>
 
-/* The existing packed integer fields use the nRF's little-endian layout.
- * Explicit helpers handle the fields whose wire width differs from the model. */
+/* Packed fields keep the nRF's little-endian layout; helpers handle differing wire widths. */
 static void put48(uint8_t *p, uint64_t v)
 {
     for (unsigned i = 0; i < 6; i++) { p[i] = (uint8_t)(v >> (8u * i)); }
@@ -16,8 +15,7 @@ static uint64_t get48(const uint8_t *p)
     return v;
 }
 
-/* Six slots, each one of 17 values: IDLE, REQUEST, DATA[0..4], OFFER[0..4],
- * CONFIRM[0..4]. Dense indices take 30 bits; the top two bits stay zero. */
+/* Six slots of 17 values (IDLE, REQUEST, DATA/OFFER/CONFIRM[0..4]) in 30 bits; top two stay 0. */
 static int schedule_code(uint8_t role)
 {
     if (role == SLOT_ROLE_IDLE) { return 0; }

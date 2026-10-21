@@ -1,6 +1,5 @@
-/* Master host queue. Each record the master accepts becomes one E line
- * with a fresh hseq and its crc, formatted once; the head line is re-sent
- * unchanged every MASTER_USB_RETRY_MS until the host acks exactly that
+/* Master host queue: each accepted record becomes one E line (fresh hseq and crc, formatted once);
+ * the head is re-sent unchanged every MASTER_USB_RETRY_MS until the host acks exactly that
  * (hseq, master_boot_id, crc). Main-loop context only. */
 #ifndef MASTER_QUEUE_H
 #define MASTER_QUEUE_H
@@ -37,8 +36,7 @@ int mq_push_uplink(mq_t *q, uint32_t node_id, uint64_t sensor_boot_id, const upl
                    float rssi, float snr);
 int mq_push_timebase_end(mq_t *q, uint64_t master_boot_id, uint64_t tick);
 
-/* Host ack. Pops the head on an exact match (1). An empty queue or an hseq older than
- * the head is ignored (0); anything else counts a mismatch (0). */
+/* 1: exact match pops the head. 0: empty queue or older hseq ignored, else a counted mismatch. */
 int mq_ack(mq_t *q, uint32_t hseq, uint64_t master_boot_id, uint32_t crc);
 
 /* Send or re-send the head line when due. */

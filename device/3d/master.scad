@@ -1,24 +1,22 @@
-// PCB Housing — FSK Timekeeper (wireless LoRa timing node) — MASTER variant (USB-only, no light/sensor I/O)
-// Board: 92 x 57 mm, corner r 3, 4x M2 mounting holes (86 x 51 rectangle),
-// all tall components on the TOP side (18650 holder dominates the cavity height).
+// PCB housing for the FSK Timekeeper, MASTER variant (USB only, no light/sensor I/O).
+// Board: 92 x 57 mm, corner r 3, 4x M2 holes on an 86 x 51 rectangle; all tall parts on TOP
+// (the 18650 holder sets the cavity height).
 //
-// Two parts:
-//   lid  (본체 하우징)  — fully-rounded outer shell (ALL edges filleted) + ceiling + 4 self-tapping
-//                         posts + connector cutouts + tripod boss. Open at the bottom.
-//   base (바닥판)        — plate that inserts UP into the bottom opening of the lid (tucked under),
-//                         carries the PCB on standoffs, fixed by the 4 screws into the lid posts.
+// Parts:
+//   lid  (본체 하우징) — fully-rounded shell + ceiling + 4 self-tapping posts + cutouts
+//                        + tripod boss; open at the bottom
+//   base (바닥판)      — plate inserted up into the lid's bottom opening; carries the PCB
+//                        on standoffs
+// Assembly: M2 self-tapping screws from outside the base bottom go through base + PCB into the
+// lid posts, pulling both up and seating the base flush in the opening.
 //
-// Assembly: M2 self-tapping screws inserted from OUTSIDE the base bottom pass through the
-// base plate + PCB and self-tap into the posts hanging from the lid ceiling, pulling the
-// base + PCB up against the posts and seating the base flush in the lid's bottom opening.
-//
-// Wall features (MASTER):
-//   - left (-X): centred SMA antenna; GPS antenna slide bracket on the inner ceiling
-//   - right (+X): tripod mount at the original position
-//   - front (-Y): USB-C only (J1 and toggle not fitted)
-//   - back (+Y): blank
-// Coordinate frame: PCB centred at XY origin; Z=0 at assembly bottom.
-// Current KiCad centre: (147.1648, 98.03); model = (boardX-cx, cy-boardY).
+// Walls (MASTER):
+//   left  (-X): centred SMA antenna; GPS antenna slide bracket on the inner ceiling
+//   right (+X): tripod mount at its original position
+//   front (-Y): USB-C only (J1 and toggle not fitted)
+//   back  (+Y): blank
+// Frame: PCB centred at the XY origin, Z=0 at the assembly bottom.
+// KiCad board centre (147.1648, 98.03); model = (boardX-cx, cy-boardY).
 
 /* [Rendering] */
 part = "exploded";   // [base, lid, both, assembled, exploded]
@@ -41,7 +39,7 @@ base_th = 3;       // base plate thickness (>= edge_r so its bottom edge can be 
 pcb_clear = 0.5;   // gap between PCB edge and wall inner face
 standoff_h = 2.5;  // PCB bottom height above base top
 edge_r = 2.5;      // fillet radius for ALL outer edges of the body
-batt_h = 21;       // PCB TOP to installed CELL TOP; retained at user-specified 21 mm
+batt_h = 21;       // PCB TOP to installed CELL TOP (user-specified)
 ra01_h = 6;        // assumed module height above PCB
 gps_h = 6.5;       // installed GPS height above PCB TOP
 
@@ -50,10 +48,8 @@ batt_d = 18.5;             // installed cell diameter, including wrapper
 batt_x = 147.1 - pcb_cx;
 batt_y = pcb_cy - 80.45;
 /* [GPS antenna slide bracket] */
-// Antenna axes: width 6 -> X, thickness 6.4 -> Y, length 19 -> Z.
-// Insert from the cover's open -Z face toward the inner ceiling (+Z).
-// With part="lid", the ceiling is the print floor and this socket grows upright.
-// Dimensions are for the separate antenna, not the U4 GPS receiver module.
+// Separate GPS antenna (not the U4 module): width 6 -> X, thickness 6.4 -> Y, length 19 -> Z.
+// Inserted from the open -Z face toward the ceiling, so it stands upright in the lid print.
 gps_ant_l = 19;
 gps_ant_w = 6;
 gps_ant_h = 6.4;
@@ -81,22 +77,17 @@ head_h = 2;            // counterbore depth
 base_fit = 0.3;        // base clearance per side inside the lid bottom opening
 
 /* [USB-C cutout — front/-Y wall] */
-// U1 at (154.74401,124.704948), rotated 180 degrees.
-// USB outline local X=3.12001..12.11999 -> centre 7.62.
+// U1 at (154.74401,124.704948), rotated 180; USB outline local X=3.12001..12.11999 -> centre 7.62.
 usb_x = 154.74401 - 7.62 - pcb_cx;
 usb_front_y = pcb_cy - (124.704948 + 1.95244);
 usb_cut_w = 13;
 usb_cut_h = 7;
 usb_above_bot = 6.4;       // measured port centre above PCB BOTTOM
 
-// Master: J1 and toggle are not fitted; their openings remain closed.
-
 /* [SMA antenna — centre of left wall] */
 ant_d = 6.5;
 
 /* [Tripod mount — right/+X wall] */
-// Keep the original position. GPS is 6.5 mm above PCB; the box starts
-// 8 mm above PCB, leaving 1.5 mm vertical clearance over the GPS module.
 tri_box_w = 12;
 tri_y = -1.5;
 tri_box_d = 10;
@@ -121,15 +112,15 @@ base_r = inner_r - base_fit;
 
 pcb_bot_z = base_th + standoff_h;    // PCB underside
 pcb_top_z = pcb_bot_z + pcb_th;      // PCB top surface
-usb_z     = pcb_bot_z + usb_above_bot;   // USB-C port centre Z (measured from the PCB bottom face)
+usb_z     = pcb_bot_z + usb_above_bot;   // USB-C port centre Z
 // Preserve shell/tripod height: battery clearance and centred tripod bore above Ra-01.
 cavity    = max(batt_h + tri_gap, 2*(pcb_top_z + ra01_h + 4 + tri_pilot_d/2) - pcb_top_z - lid_th);
 ceil_z    = pcb_top_z + cavity;      // lid inner ceiling
 outer_h   = ceil_z + lid_th;         // overall height
 post_len  = ceil_z - pcb_top_z;      // = cavity
 
-tri_hole_z  = outer_h/2;                          // 1/4" bore at the vertical CENTRE of the right face
-tri_box_bot = pcb_top_z + ra01_h + 2;             // original height: 8 mm above PCB, clears GPS by 1.5 mm
+tri_hole_z  = outer_h/2;                          // 1/4" bore, vertical centre of the right face
+tri_box_bot = pcb_top_z + ra01_h + 2;             // 8 mm above PCB, clears GPS by 1.5 mm
 ant_y       = 0;
 ant_z       = outer_h/2;
 
@@ -139,7 +130,7 @@ batt_axis_z = batt_top_z - batt_d/2;
 gps_ant_slot_w = gps_ant_w + 2*gps_ant_clear;
 gps_ant_slot_d = gps_ant_h + 2*gps_ant_clear;
 gps_ant_bracket_h = gps_ant_l + gps_ant_end_clear;
-// The existing cover wall is the -X guide face; no extra wall inside it.
+// The cover wall is the -X guide face; no extra wall inside it.
 gps_ant_x = -inner_l/2 + gps_ant_slot_w/2;
 // Move down the left wall to just before the front corner post.
 gps_ant_post_front = max(-inner_w/2 + (post_style == "corner" ? post_pad : 0),
@@ -176,10 +167,10 @@ module rbox_all(l,w,h,vr,er) {
     }
 }
 
-// self-tapping posts (ceiling -> PCB top) at original post_d, integrated into the corners.
-// post_style: "corner" = post embedded in a solid filled corner pad (rounded cavity edge);
-//             "rib"    = post cylinder + two slim ribs to the adjacent walls;
-//             "plain"  = bare cylinder.
+// Self-tapping posts (ceiling -> PCB top) in the corners; post_style:
+//   "corner" = post in a solid corner pad (rounded cavity edge)
+//   "rib"    = cylinder + two slim ribs to the adjacent walls
+//   "plain"  = bare cylinder
 module posts() {
     if (post_style == "rib") {
         for (p=mount_pos) {
@@ -213,13 +204,11 @@ module tripod_box() {
         cube([tri_box_d, tri_box_w, ceil_z - tri_box_bot + eps]);
 }
 
-// Upright slide guide: the housing wall is -X, and both side walls turn inward
-// across the +X face for their entire height. No isolated spring post.
-// Every wall and the recess filler starts on the inner ceiling/print floor.
+// Side walls, full-height +X returns and recess filler, all starting on the ceiling/print floor.
 module gps_antenna_bracket() {
     translate([gps_ant_x,gps_ant_y,ceil_z]) mirror([0,0,1]) {
         for (sy=[-1,1]) {
-            // Side wall, fused into the existing -X housing wall.
+            // Side wall, fused into the -X housing wall.
             translate([-gps_ant_slot_w/2-eps,
                        sy < 0 ? -gps_ant_slot_d/2-gps_ant_rail : gps_ant_slot_d/2,
                        -eps])
@@ -230,9 +219,7 @@ module gps_antenna_bracket() {
                        -eps])
                 cube([gps_ant_rail,gps_ant_return+eps,gps_ant_bracket_h+eps]);
         }
-        // Antenna recess at the +Z end: nominal Z=6 mm, X=1 mm.
-        // Span both side walls; 0.2 mm fit allowance leaves 5.8 mm length and
-        // 0.8 mm penetration into the nominal antenna envelope.
+        // +Z-end recess filler across both walls: nominal Z 6 / X 1 mm, less 0.2 fit -> 5.8 / 0.8.
         translate([gps_ant_fill_x,-gps_ant_slot_d/2-eps,-eps])
             cube([gps_ant_slot_w/2+gps_ant_rail-gps_ant_fill_x,
                   gps_ant_slot_d+2*eps,gps_ant_fill_l+eps]);
@@ -250,17 +237,14 @@ module gps_antenna_ref() {
         }
 }
 
-// ============================================================
-//  LID  (본체 하우징) — fully-rounded shell, open bottom
-// ============================================================
+// ---------- LID (본체 하우징): fully-rounded shell, open bottom ----------
 module lid() {
     difference() {
         union() {
             difference() {
                 rbox_all(outer_l, outer_w, outer_h, outer_r, edge_r);          // fully-rounded body
-                translate([0,0,-eps]) rbox(inner_l, inner_w, ceil_z+eps, inner_r); // cavity (open bottom)
+                translate([0,0,-eps]) rbox(inner_l, inner_w, ceil_z+eps, inner_r); // cavity
             }
-            // self-tapping posts (fused to corners) + ceiling-integrated tripod box
             posts();
             tripod_box();
             gps_antenna_bracket();
@@ -269,22 +253,18 @@ module lid() {
         // post pilot bores
         for (p=mount_pos) translate([p[0],p[1],pcb_top_z-eps]) cylinder(h=post_pilot_depth, d=post_pilot_d);
 
-        // Master: no J1 opening.
-        // USB-C (-Y wall) — opening with r=1 rounded corners, centred at usb_z
+        // USB-C opening (-Y wall)
         translate([usb_x, -inner_w/2+eps, usb_z])
             rotate([90,0,0])
                 linear_extrude(wall+pcb_clear+1+eps) rrect(usb_cut_w, usb_cut_h, 1);
-        // toggle switch bushing — master variant: blanked off (no toggle switch).
-        // SMA antenna bulkhead at the horizontal and vertical centre of the left wall
+        // SMA antenna bulkhead, centre of the left wall
         xcyl(-outer_l/2-eps, ant_y, ant_z, wall+pcb_clear+1+2*eps, ant_d);
-        // tripod self-tap pilot (+X / right wall, blind, horizontal into the box, centred Y)
+        // tripod self-tap pilot (+X wall, blind, horizontal into the box)
         xcyl(outer_l/2 - tri_depth - eps, tri_y, tri_hole_z, tri_depth + 2*eps, tri_pilot_d);
     }
 }
 
-// ============================================================
-//  BASE  (바닥판) — plugs the bottom opening, rounded bottom edge
-// ============================================================
+// ---------- BASE (바닥판): flat plate plugging the bottom opening ----------
 module base() {
     difference() {
         union() {
@@ -301,10 +281,7 @@ module base() {
     }
 }
 
-// ============================================================
-//  REFERENCE (assembled / exploded views)
-// ============================================================
-// PCB + 18650 cell reference — drawn ONLY in F5 preview ($preview); never in F6 render / STL export
+// ---------- REFERENCE: F5 preview only ($preview), never in F6 render / STL export ----------
 module pcb_ref() {
     if ($preview) {
         color([0,0.45,0.15,0.55]) translate([0,0,pcb_bot_z]) rbox(pcb_l,pcb_w,pcb_th,pcb_r);
@@ -327,12 +304,10 @@ module pcb_ref() {
     }
 }
 
-// ============================================================
-//  RENDER
-// ============================================================
+// ---------- RENDER ----------
 if (part=="base") base();
 else if (part=="lid")
-    translate([0,0,outer_h]) rotate([180,0,0]) lid();          // flipped onto its ceiling for printing
+    translate([0,0,outer_h]) rotate([180,0,0]) lid();          // flipped ceiling-down to print
 else if (part=="both") {
     translate([-(outer_l/2+8),0,0]) base();
     translate([ (outer_l/2+8),0,outer_h]) rotate([180,0,0]) lid();

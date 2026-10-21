@@ -83,8 +83,7 @@ int fault_note(fault_rec_t *r, uint32_t pc, uint32_t lr, uint32_t cfsr, uint32_t
 #include "gpio.h"
 #include "nrf.h"
 
-/* Fixed RAM block outside what the bootloader (0x20007F7C..) and the
- * SoftDevice/MBR init (low RAM) touch across a system reset (nrf52840_app.ld). */
+/* Retained RAM, clear of bootloader (0x20007F7C..) and SoftDevice/MBR init (nrf52840_app.ld). */
 __attribute__((section(".retained"))) static fault_rec_t s_rec;
 
 static uint8_t s_reason;
@@ -104,8 +103,7 @@ static void halt_blink(void)
 
 void fault_boot(void)
 {
-    /* Without these enables every fault escalates to HardFault and the record
-     * always says "hard" (CFSR still holds the cause). */
+    /* Without these, faults escalate to HardFault, recorded as "hard" (CFSR keeps the cause). */
     SCB->SHCSR |= SCB_SHCSR_MEMFAULTENA_Msk | SCB_SHCSR_BUSFAULTENA_Msk | SCB_SHCSR_USGFAULTENA_Msk;
     uint32_t rr = NRF_POWER->RESETREAS;
     NRF_POWER->RESETREAS = rr; /* bits clear by writing 1; the bootloader leaves them */
@@ -148,8 +146,7 @@ void fault_hang(uint32_t pc, uint32_t cause)
     NVIC_SystemReset();
 }
 
-/* frame = the exception stack frame (r0 r1 r2 r3 r12 lr pc xpsr). For an
- * unexpected interrupt the cfsr slot carries IPSR (the vector number). */
+/* frame = exception stack (r0-r3 r12 lr pc xpsr); unexpected IRQs store IPSR (vector) as cfsr. */
 __attribute__((used, noreturn)) void fault_capture(const uint32_t *frame, uint32_t cause)
 {
     uint32_t detail = cause == FAULT_CAUSE_IRQ ? __get_IPSR() : SCB->CFSR;

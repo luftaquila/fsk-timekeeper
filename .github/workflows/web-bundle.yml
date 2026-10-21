@@ -27,7 +27,7 @@ jobs:
           cache-dependency-path: console/package-lock.json
       - name: Install
         run: cd console && npm ci
-      # The constants and firmware-lines tests read firmware files, so the whole repo is checked out.
+      # The constants and firmware-lines tests read firmware files, hence the full checkout.
       - name: Test
         run: cd console && npm test
       - name: Build

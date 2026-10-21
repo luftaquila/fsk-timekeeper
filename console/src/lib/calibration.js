@@ -1,15 +1,6 @@
-/* PPS timeline: master ticks -> GPS seconds (exact rationals), from the qualified PPS edges
- * of one master boot. DESIGN §8.
- *
- * Edges of one segment are exactly one GPS second apart per unit of n. Neighbouring segments
- * are bridged when the whole seconds between them are known (UTC, or tick rounding within an
- * hour) and the ticks across the gap match that many seconds at the neighbours' measured
- * frequencies; otherwise they belong to separate islands. Inside a bridge T follows the
- * frequencies at both ends (cubic Hermite), so a drifting crystal is not averaged over the gap.
- * Ticks outside PPS coverage are
- * extrapolated with the nearest segment's measured frequency; islands meet at the midpoint of
- * their gap. A boot without qualified edges is converted at the nominal 16 MHz.
- */
+/* PPS timeline: master ticks -> GPS seconds (exact rationals) from one master boot's qualified PPS
+ * edges (one second per unit of n in a segment); segments are bridged (bridgeOf) or form islands.
+ * Ticks outside PPS coverage extrapolate at the nearest measured frequency; no edges: 16 MHz. */
 import { MASTER_TICKS_PER_S } from "./event-timing";
 
 const F_NOMINAL = MASTER_TICKS_PER_S;
@@ -70,9 +61,8 @@ const abs = (v) => (v < 0n ? -v : v);
 // |r| > t for rationals (denominators are positive).
 const exceeds = (r, t) => abs(r.n) * t.d > t.n * r.d;
 
-// Ticks per second over at most WINDOW_S seconds at one end of a segment, with the window's
-// middle in seconds from that end edge (<= 0 at the end, >= 0 at the start); null with fewer
-// than two edges there.
+// { f: ticks/s over at most WINDOW_S s at one end of seg, mid: window middle in s from that edge
+// (<= 0 at the end, >= 0 at the start) }; null with fewer than two edges there.
 function endWindow(seg, atEnd) {
   const edges = seg.edges;
   if (atEnd) {
@@ -89,9 +79,8 @@ function endWindow(seg, atEnd) {
   return { f: q(last.tick - first.tick, last.n - first.n), mid: q(last.n - first.n, 2n) };
 }
 
-// Ticks per second at one end of segs[index]: measured over at most WINDOW_S seconds there, else
-// at the facing end of the nearest segment in time that has a measured window (the crystal
-// runs on whatever the GPS does), else nominal.
+// Ticks/s at one end of segs[index]: its own end window, else the facing window of the segment
+// nearest in time (the crystal runs on whatever the GPS does), else nominal.
 function segmentFrequency(segs, index, atEnd) {
   const own = endWindow(segs[index], atEnd);
   if (own) return own.f;
@@ -112,9 +101,8 @@ function segmentFrequency(segs, index, atEnd) {
   return best ?? q(F_NOMINAL);
 }
 
-// Frequencies at L and F (k seconds apart): each end window's frequency moved to its gap end
-// along the trend between the windows, so a linear drift is followed. Null unless both ends
-// have a measured frequency (one side gives no trend).
+// fL, fF at the gap ends (k s apart): each end window's frequency moved along the trend between
+// the windows, so a linear drift is followed; null unless both ends have a window.
 function gapFrequencies(a, b, k) {
   const wa = endWindow(a, true);
   const wb = endWindow(b, false);
@@ -123,9 +111,8 @@ function gapFrequencies(a, b, k) {
   return { fL: sub(wa.f, mul(trend, wa.mid)), fF: sub(wb.f, mul(trend, wb.mid)) };
 }
 
-// { k whole GPS seconds, gap frequencies } from the last edge of a to the first of b, or null:
-// the ticks must be k seconds at the neighbours' frequencies within 1 us + 1 ppm (else, e.g. a
-// PPS phase step, the gap is extrapolated); unmeasured neighbours leave only the 200 ppm gate.
+// { k whole GPS s, freq } from a's last edge to b's first, or null (e.g. a PPS phase step): ticks
+// must match k s at the gap frequencies within 1 us + 1 ppm, or 200 ppm if a side is unmeasured.
 function bridgeOf(a, b) {
   const L = a.edges[a.edges.length - 1];
   const F = b.edges[0];
@@ -205,9 +192,8 @@ function lastAtOrBefore(edges, tick) {
   return found;
 }
 
-// T between the last edge a of one segment and the first edge b of the next, bridged: cubic
-// Hermite in u = (tick − a) / (b − a) with the end slopes 1/fL and 1/fF (seconds per tick).
-// A frequency changing linearly across the gap is followed exactly; the ends stay a.t, b.t.
+// T across a bridge a -> b: cubic Hermite in u = (tick − a) / (b − a), end slopes 1/fL and
+// 1/fF s/tick, so a linearly changing frequency is followed exactly; the ends stay a.t, b.t.
 function hermite(a, b, tick, freq) {
   const dx = q(b.tick - a.tick);
   const u = q(tick - a.tick, b.tick - a.tick);
@@ -253,8 +239,7 @@ function asTimeline(source) {
   return Array.isArray(source) || source == null ? buildTimeline(source || []) : source;
 }
 
-// Point records for every tick (decimal-string keys) from one timeline snapshot.
-// source: a buildTimeline() result or the edge list itself.
+// { [tick string]: point } from one timeline snapshot (a buildTimeline() result or edge list).
 export function calibrationPoints(source, ticks) {
   const timeline = asTimeline(source);
   const points = {};

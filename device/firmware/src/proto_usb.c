@@ -309,8 +309,7 @@ void pu_emit_fault(uint32_t pc, uint32_t lr, const char *cause, uint32_t cfsr)
 }
 
 /* ---- E lines ------------------------------------------------------------------ */
-/* Appends " <crc>\n" over everything written so far. Returns the length, or -1
- * when the line did not fit. */
+/* Appends " <crc>\n" over everything written so far; returns the length, or -1 if it overflows. */
 static int lb_seal(lb_t *b, char *buf, uint32_t *crc)
 {
     uint32_t len = (uint32_t)(b->p - buf);
@@ -342,8 +341,7 @@ static void lb_event_head(lb_t *b, uint32_t hseq, uint32_t node_id, int is_maste
 int pu_format_uplink(char *buf, unsigned cap, uint32_t hseq, uint32_t node_id, uint64_t sensor_boot_id,
                      const uplink_pl_t *u, float rssi, float snr, uint32_t *crc)
 {
-    /* The master forwards what the sensor sealed; a malformed record (unknown
-     * kind, bad count) is formatted as-is so the host quarantines it. */
+    /* Malformed records (unknown kind, bad count) go out as sealed so the host quarantines them. */
     char kind = u->kind == UL_KIND_EDGES ? 'C' : u->kind == UL_KIND_LOSS ? 'L' :
                 u->kind == UL_KIND_CHECKPOINT ? 'K' : '?';
     lb_t b; lb_init(&b, buf, cap);

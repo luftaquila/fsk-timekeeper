@@ -36,8 +36,7 @@ static int control_type(uint8_t type)
 static void control_key_version(uint8_t out[32], uint8_t type, uint64_t boot, uint8_t version)
 {
     uint8_t context[16] = {'F','S','K',version,'C',type,0,0};
-    /* Beacons are tied to the master epoch. Join/offer authenticate bootstrap
-     * traffic; their payload carries the peer's fresh challenge. */
+    /* Only beacon keys bind the master epoch; join/offer payloads carry fresh challenges. */
     put64(context + 8, type == PKT_TYPE_BEACON ? boot : 0);
     crypto_blake2b_keyed(out, 32, KEY, sizeof(KEY), context, sizeof(context));
 }
@@ -172,12 +171,10 @@ static int seal_key(const uint8_t key[32], uint8_t *out, int out_cap, uint8_t ty
     memset(plain + packed_len, 0, (size_t)(sealed_len - packed_len));
     uint32_t ctr = ++g_tx_ctr;
 
-    /* Downlink packets are always from the master: both sides feed NODE_MASTER
-     * to the nonce and the id stays off the wire. */
+    /* Downlink is always the master's: NODE_MASTER goes into the nonce, never on the wire. */
     uint32_t nid = has_node ? node_id : NODE_MASTER;
 
-    /* Cleartext header = AEAD associated data. Little-endian; the 24-bit ctr's
-     * implicit high byte is 0. */
+    /* Cleartext header = AEAD associated data, little-endian; the 24-bit ctr's high byte is 0. */
     uint8_t *p = out;
     *p++ = SEC_VT(PROTO_VER, type);
     memcpy(p, &g_boot_id, 8); p += 8;
@@ -222,8 +219,7 @@ int sec_seal(uint8_t *out, int out_cap, uint8_t type, uint32_t node_id,
     return r;
 }
 
-/* Verify and decrypt with a header of hdr bytes (node id in it when has_node)
- * and payload_len bytes of ciphertext before the tag. 0, or -2 on MAC failure. */
+/* hdr-byte header (with node id if has_node), payload_len ciphertext bytes, tag; 0 or -2 (MAC). */
 static int open_sealed(const uint8_t key[32], const uint8_t *in, int hdr, int has_node, int payload_len,
                        uint8_t *plain, sec_meta_t *meta)
 {
@@ -294,9 +290,7 @@ int sec_unseal(const uint8_t *in, int in_len, sec_meta_t *meta, void *out_payloa
 int sec_authentic_any_version(const uint8_t *in, int in_len)
 {
     if (!g_provisioned || in_len < 1 || in_len > WIRE_MAX) { return 0; }
-    /* Diagnostic authentication needs no payload decoding. Control keys bind the
-     * version; per-link DATA/CONFIRM keys are private to their handshake and
-     * cannot be diagnosed using only the fleet key. */
+    /* No payload decode; only version-bound control keys derive from the fleet key alone. */
     uint8_t type = SEC_VT_TYPE(in[0]);
     if (!control_type(type)) { return 0; }
     int hdr = SEC_TYPE_HAS_NODE(type) ? SEC_HDR_UL : SEC_HDR_DL;

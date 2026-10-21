@@ -1,5 +1,4 @@
-// The arm boundary must be captured after the request reaches the master.
-// A cached heartbeat (or the operator PC's clock) cannot fence queued edges.
+// Boundary read at the master on request: a cached heartbeat or PC clock cannot fence queued edges.
 function randomHex(bytes) {
   const buf = new Uint8Array(bytes);
   globalThis.crypto.getRandomValues(buf);

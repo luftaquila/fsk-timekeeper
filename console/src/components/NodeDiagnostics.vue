@@ -66,9 +66,8 @@ const hasErrors = computed(() => errors.value.length > 0);
 function socPct(mv) {
   return Math.max(0, Math.min(100, Math.round(((mv - 3300) / 900) * 100)));
 }
-// SX126x packet status: RSSI = -u8/2 dBm; SNR = signed u8/4 dB.
-// Fixed display scales make bars comparable across sensors; this is not a quality percentage.
-// SNR focuses on the operating range; only the bar is clamped, never the numeric readout.
+// SX126x packet status: RSSI = -u8/2 dBm, SNR = signed u8/4 dB. Fixed scales, not a quality %,
+// keep bars comparable across sensors; SNR covers the operating range; only the bar is clamped.
 function signalGauge(value, min, max, unit, recommendedMin) {
   const known = Number.isFinite(value);
   return { min, max, unit, number: known ? fmtNum(value) : "-",

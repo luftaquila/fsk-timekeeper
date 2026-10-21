@@ -1,16 +1,5 @@
-/* Minimal bare-metal C/C++ runtime glue for linking RadioLib (C++).
- *
- *  - _sbrk: heap for newlib malloc / operator new, bounded by the linker's
- *    __HeapBase/__HeapLimit (nrf_common.ld); nosys.specs' _sbrk grows from `end`
- *    without a limit.
- *  - operator new/delete: backed by malloc/free (RadioLib allocates two short-lived
- *    buffers per SPI command, as RADIOLIB_STATIC_ONLY is not set).
- *  - __cxa_pure_virtual: pure-virtual call trap (should never run). An undefined
- *    instruction, so the fault handlers record it and reboot.
- *
- * Built with -fno-exceptions -fno-rtti -fno-use-cxa-atexit, so no __cxa_throw /
- * typeinfo / __cxa_atexit are needed.
- */
+/* Bare-metal C/C++ runtime for RadioLib (it mallocs two short-lived buffers per SPI command):
+ * _sbrk stops at __HeapLimit (nosys.specs' never does); pure virtuals trap to the fault handler. */
 #include <cstddef>
 #include <cstdlib>
 #include <cerrno>

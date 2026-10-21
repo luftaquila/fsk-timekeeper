@@ -15,10 +15,9 @@
 #define NMEA_MAX          96u
 #define NMEA_FIELDS       16u
 
-/* ---- UARTE0 receive: one-byte EasyDMA transfers (ENDRX->STARTRX short) moved to a ring by the
- * ENDRX interrupt, as the main loop can block for tens of ms at 1.04 ms per byte. Overflow discards
- * every byte up to the next '$' that fits; the parser drops the torn sentence there. EasyDMA
- * buffers must be in RAM. */
+/* ---- UARTE0 RX: 1-byte EasyDMA (ENDRX->STARTRX short) moved to a ring by the ENDRX ISR, as the
+ * main loop can block tens of ms at 1.04 ms/byte. Overflow drops bytes until a '$' fits (the parser
+ * drops the torn sentence). EasyDMA buffers must be in RAM. */
 static uint8_t s_dma_byte;
 static volatile uint8_t s_rx_ring[RX_RING];
 static volatile uint16_t s_rx_head;
@@ -33,8 +32,7 @@ void UART0_UARTE0_IRQHandler(void)
         NRF_UARTE0->EVENTS_ENDRX = 0;
         uint16_t head = s_rx_head;
         uint8_t c = s_dma_byte;
-        /* Attach each '$' to its arrival tick inside the existing byte ring.
-         * Publish the whole entry atomically; timestamps cost no second buffer. */
+        /* '$' carries its arrival tick in this ring (no second buffer), published atomically. */
         unsigned need = c == '$' ? 5u : 1u;
         unsigned free = (s_rx_tail - head - 1u) & (RX_RING - 1u);
         if ((s_rx_discard && c != '$') || free < need) {
@@ -85,9 +83,7 @@ static int tx_line(const char *s)
     return 1;
 }
 
-/* CASIC $PCAS03: enable GGA and RMC only (checksum 0x02 = XOR of the body). The
- * setting is volatile, so it goes out at every boot and again if the module was
- * still booting and keeps sending the default set. */
+/* CASIC $PCAS03: GGA+RMC only (checksum 0x02 = XOR of the body); volatile, so sent every boot. */
 static const char PCAS03_GGA_RMC[] = "$PCAS03,1,0,0,0,1,0,0,0,0,0,,,0,0*02\r\n";
 static uint32_t s_cfg_sent_ms;
 static int s_cfg_due;
@@ -101,9 +97,8 @@ static uint64_t s_pps_last_tick;
 static uint32_t s_pps_last_ms;
 static int s_pps_have;
 
-/* Qualification segments for the console's PPS timeline: runs of qualified edges one second
- * apart, ended by a window restart. An edge qualifies once its interval to the previous one
- * passed the gate, so a window's first edge (a glitch that reset it, say) is never a segment. */
+/* Segments for the console's PPS timeline: runs of qualified edges 1 s apart, ended by a window
+ * restart. An edge qualifies once its interval passed the gate, so never a window's first edge. */
 static uint32_t s_seg;       /* id of the current segment, 0 before the first */
 static uint32_t s_seg_n;     /* index of the newest edge in it */
 typedef struct {
@@ -117,17 +112,15 @@ static edge_t s_edge;        /* newest edge, until reported */
 static int s_edge_pending;
 static edge_t s_rep;         /* newest consumed edge; only pending edges trigger USB reports */
 
-/* RMC A is a conservative, expiring prerequisite, not a PPS lock or accuracy flag (NMEA has no
- * timepulse validity): a cached A never qualifies edges after UART reception stops. The interval
- * gate rejects outliers but cannot certify an SI-second reference. */
+/* RMC A is an expiring prerequisite, not a PPS lock or accuracy flag (NMEA has no timepulse
+ * validity): a cached A qualifies no edge after UART RX stops. The gate only rejects outliers. */
 static int s_nav_valid;
 static uint32_t s_rmc_last_ms;
 static uint32_t s_hfxo_stops;
 
 static int reference_ready(uint32_t now_ms)
 {
-    /* Run from gps_poll even when no report is sent. A stale pending edge must
-     * not be emitted later as though it were a newly received pulse. */
+    /* Also run from gps_poll, so a stale pending edge is never sent later as a new pulse. */
     if (!s_pps_have || (uint32_t)(now_ms - s_pps_last_ms) >= PPS_STALE_MS) {
         s_pps_count = 0;
         s_pps_observed = 0;
@@ -207,8 +200,7 @@ static unsigned num2(const char *s) { return (unsigned)((s[0] - '0') * 10 + (s[1
 
 static int digits2(const char *s) { return s[0] >= '0' && s[0] <= '9' && s[1] >= '0' && s[1] <= '9'; }
 
-/* Validate the complete fields before accessing fixed offsets. A checksum-valid
- * but truncated/ill-formed A sentence must not renew the navigation lease. */
+/* Whole-field check first: a checksum-valid but ill-formed A must not renew the nav lease. */
 static int rmc_datetime_valid(const char *time, const char *date)
 {
     size_t nt = strlen(time);
@@ -219,8 +211,7 @@ static int rmc_datetime_valid(const char *time, const char *date)
         if (time[6] != '.' || nt == 7u) return 0;
         for (size_t i = 7; i < nt; i++) if (time[i] < '0' || time[i] > '9') return 0;
     }
-    /* A leap-second transition needs a new calibration window; it is not a
-     * normal civil second that civil_to_epoch can represent unambiguously. */
+    /* A leap second needs a new calibration window; civil_to_epoch cannot map it unambiguously. */
     if (num2(time) > 23u || num2(time + 2) > 59u || num2(time + 4) > 59u) return 0;
     unsigned month = num2(date + 2), day = num2(date), year = 2000u + num2(date + 4);
     static const uint8_t days[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
@@ -242,18 +233,15 @@ static uint32_t civil_to_epoch(int y, int m, int d, unsigned hh, unsigned mm, un
     return (uint32_t)days * 86400u + hh * 3600u + mm * 60u + ss;
 }
 
-/* RMC: 1 hhmmss.sss, 2 A|V, 9 ddmmyy. Time and date are what the module stamps
- * on the PPS edge that opened this second. */
+/* RMC: 1 hhmmss.sss, 2 A|V, 9 ddmmyy; time/date stamp the PPS edge that opened this second. */
 static void parse_rmc(char *f[], unsigned nf)
 {
     uint32_t now = board_millis();
     uint32_t age_ms = ((uint32_t)capture_now64() - s_nmea_tick) / (TICKS_PER_S / 1000u);
-    /* Expire BEFORE refreshing: an A arriving after a gap cannot revive samples
-     * accumulated without fresh receiver status, even if no report was requested. */
+    /* Expire BEFORE refreshing: an A after a gap must not revive samples lacking fresh status. */
     reference_ready(now);
     int fixed = age_ms < GPS_RMC_STALE_MS && nf >= 10 && !strcmp(f[2], "A") && rmc_datetime_valid(f[1], f[9]);
-    /* Discard transition-adjacent samples conservatively: PPS phase may realign
-     * on reacquisition. Do not assume every A/V change implies a phase step. */
+    /* Conservatively drop samples around A/V changes: PPS phase may realign on reacquisition. */
     if (!fixed || fixed != s_nav_valid) { s_pps_count = 0; }
     s_nav_valid = fixed;
     if (!fixed) {
@@ -295,8 +283,7 @@ static void nmea_line(char *line, unsigned len)
     const char *type = f[0] + 2;
     if (!strncmp(type, "RMC", 3)) {
         parse_rmc(f, nf);
-        /* The RMC that follows a PPS edge describes that edge's second; one that
-         * ends the window also disqualifies the edge it follows. */
+        /* The next RMC labels the PPS edge's second; one that ends the window disqualifies it. */
         if (s_edge_pending && !s_edge.rmc &&
             (uint32_t)(s_nmea_tick - (uint32_t)s_edge.tick) < GPS_RMC_LAG_MAX_MS * (TICKS_PER_S / 1000u)) {
             s_edge.rmc = 1;
@@ -342,8 +329,7 @@ void gps_discard_pending(void)
     NVIC_EnableIRQ(UART0_UARTE0_IRQn);
     s_nactive = s_nlen = 0;
     s_edge_pending = 0;
-    /* TIMER1 continues across rekey. Keep its frequency window; reference_ready()
-     * independently invalidates it after an HFXO stop or stale navigation status. */
+    /* Keep the window (TIMER1 spans rekey); reference_ready() voids it on HFXO stop/stale nav. */
     uint64_t discarded;
     (void)capture_pps_get(&discarded);
 }

@@ -63,7 +63,7 @@ static admission_result_t on_join(master_admission_t *a, registry_t *r, const ui
     seen->id = meta.node_id; seen->boot = meta.boot_id; memcpy(seen->ns, j.ns, 16);
     a->seen_next = (uint8_t)((a->seen_next + 1u) % 8u);
     if (a->seen_count < 8u) { a->seen_count++; }
-    /* A newly accepted challenge gets its full lifetime even at the end of a window. */
+    /* A new challenge gets its full lifetime even at the end of a window. */
     if (!join_open(a, now)) { open_window(a, now); }
     else if ((int32_t)(a->join_until_ms - now) < (int32_t)JOIN_LIFETIME_MS) {
         a->join_until_ms = now + JOIN_LIFETIME_MS;
@@ -96,8 +96,7 @@ static admission_result_t on_confirm(master_admission_t *a, registry_t *r, const
         }
         e->used = e->have_boot = 1; e->id = id; e->sensor_boot = meta.boot_id;
         e->link_id = p->link_id; e->heard_ms = now;
-        /* CONFIRM proves liveness, not the cached clock health. Keep the ACK
-         * for this sensor boot; only a fresh uplink can restore diagnostics. */
+        /* CONFIRM proves liveness, not clock health; keep this boot's ACK, drop the diagnostics. */
         e->diag.health = 0;
         e->diag.sync_age_ms = UINT16_MAX;
         e->diag_valid = 0;
@@ -135,8 +134,7 @@ static unsigned expire_candidates(master_admission_t *a, uint32_t now, int open)
     return candidates;
 }
 
-/* All live sensors already have a DATA slot. Use only the remaining slots;
- * a full fleet alternates OFFER and CONFIRM across separate frames. */
+/* Uses only the slots left after DATA; a full fleet alternates OFFER and CONFIRM across frames. */
 static void control_slots(master_admission_t *a, unsigned live, uint8_t slots[SLOT_COUNT], unsigned j)
 {
     unsigned first = a->round_robin;

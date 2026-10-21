@@ -1,6 +1,5 @@
-/* Master MAC (DESIGN §2.8): a beacon every BEACON_PERIOD_MS on the TIMER1
- * grid with the slot table and cumulative ACKs, then receive data or service admission in the
- * scheduled slots. Checks transport integrity only (authentication, session, replay,
+/* Master MAC: a beacon every BEACON_PERIOD_MS (slot table + cumulative ACKs), then data or
+ * admission in the scheduled slots. Checks transport integrity only (auth, session, replay,
  * order); judging the evidence is the console's job. Main-loop context. */
 #ifndef MAC_MASTER_H
 #define MAC_MASTER_H
@@ -23,7 +22,7 @@ typedef struct {
     uint64_t m_tx_last;    /* TxDone of the last beacon */
     uint8_t  cp_id;
     unsigned cp_left;
-    uint32_t auth_drop;    /* uplinks from an unknown/unlinked sender, or failing AEAD or boot ID checks */
+    uint32_t auth_drop;    /* unknown/unlinked sender, or failed AEAD/boot ID check */
     uint32_t ver_drop;     /* packets of another radio protocol version */
     uint32_t last_report_ms; /* full registry status refresh over USB */
     retry_t retry;
@@ -49,8 +48,7 @@ void mac_master_checkpoint(mac_master_t *m);
 /* A new master session after sec_init(). */
 void mac_master_session(mac_master_t *m);
 
-/* D line for every registered sensor (`?STATUS`). With changed_only, report
- * transitions immediately and refresh all entries every SENSOR_STATUS_PERIOD_MS. */
+/* `?STATUS` D lines; changed_only: transitions at once, plus all every SENSOR_STATUS_PERIOD_MS. */
 void mac_master_report(mac_master_t *m, int changed_only);
 
 #endif /* MAC_MASTER_H */

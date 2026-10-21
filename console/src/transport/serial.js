@@ -1,9 +1,8 @@
 /* Web Serial transport for the FSK-WL master (CDC-ACM, newline-delimited ASCII).
- *
  * Interface shared with transport/fake.js:
  *   open() -> Promise<info>   close() -> Promise   write(line) -> Promise<boolean>
  *   enterBootloader() -> Promise      kind: "serial"
- * Callbacks: onLine(line), onDisconnect()
+ *   callbacks: onLine(line), onDisconnect()
  */
 import { USB_VID, USB_PID, SERIAL_BAUD } from "../lib/constants";
 
@@ -134,8 +133,7 @@ export function createSerialTransport({ onLine, onDisconnect }) {
     cleanup();
   }
 
-  // Adafruit nRF52 bootloader touch: open at 1200 baud, drop DTR, close.
-  // The app sets GPREGRET=0x57 and resets; the board re-enumerates as the bootloader.
+  // Adafruit 1200-baud touch (open, drop DTR, close): app sets GPREGRET=0x57, resets to bootloader.
   async function enterBootloader() {
     const current = port;
     if (!current) throw new Error("Not connected.");

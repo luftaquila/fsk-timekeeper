@@ -15,7 +15,7 @@ SIM_CASES := sync_reports_1 sync_reports_3 sync_reports_5 sync_reports_loss sync
 	ev_wrap hfxo_stop xtal_lost session_replay late_seal late_slot late_lbt cad_failure load_2 load_5 load_noise $(addprefix admission_,0 1 2 3 4 5 6 7 8 9 10 11)
 RADIO_CASES := fault_recovery rx_fault_recovery xosc_stuck rx_stuck device_errors errors_unreadable probe_frame probe_silent probe_busy_stuck begin init_recovery config_range lbt_listen begin_dead receive receive_zero_length cad_timeout cad_wrong_modem tx_missing_irq tx_busy_deadline rx_access_deadline rx_access_boundary rx_busy_deadline lbt_access_deadline lbt_busy_deadline cad_access_deadline cad_busy_deadline cad_hung_deadline
 
-# The SX126x driver of the vendor RadioLib, built for the host without its warnings.
+# Vendor RadioLib's SX126x driver, built for the host with warnings off.
 RADIOLIB_SRC := $(RADIOLIB)/Module.cpp $(RADIOLIB)/Hal.cpp $(RADIOLIB)/protocols/PhysicalLayer/PhysicalLayer.cpp \
 	$(wildcard $(RADIOLIB)/modules/SX126x/*.cpp) $(wildcard $(RADIOLIB)/utils/*.cpp)
 RADIOLIB_OBJ := $(patsubst $(RADIOLIB)/%.cpp,$(OUT)/radiolib/%.o,$(RADIOLIB_SRC))
@@ -27,8 +27,7 @@ LINES_SRC := $(SRC)/proto_usb.c $(SRC)/master_queue.c $(SRC)/errlog.c $(SRC)/crc
 HEADERS := $(wildcard $(SRC)/*.h)
 
 .PHONY: test
-# usb_lines.txt is what the console's firmware-lines test parses. After a line format
-# change, regenerate it here: ../build/host/usb-lines > usb_lines.txt
+# usb_lines.txt feeds console firmware-lines tests; regen: ../build/host/usb-lines > usb_lines.txt
 test: $(OUT)/gps-test $(OUT)/sync-test $(OUT)/queue-test $(OUT)/fault-test $(OUT)/mac-sim $(OUT)/radio-test \
     $(OUT)/secure-test $(OUT)/protocol-test $(OUT)/capture-test $(OUT)/main-test $(OUT)/hal-test \
 	$(OUT)/usb-lines
@@ -78,8 +77,7 @@ $(OUT)/capture-test: capture_test.c $(SRC)/capture.c fakes/nrf.h $(HEADERS)
 	@mkdir -p $(OUT)
 	$(CC) $(CFLAGS) -Ifakes -I$(SRC) capture_test.c -o $@
 
-# Keep the real command dispatch and clock-session handling; discard the infinite
-# hardware entry loops when linking this host harness.
+# Link-time GC drops main.c's infinite hardware loops; real command and clock-session code stays.
 comma := ,
 HOST_GC := $(if $(filter Darwin,$(shell uname -s)),-Wl$(comma)-dead_strip,-Wl$(comma)--gc-sections)
 $(OUT)/main-test: main_test.c $(SRC)/main.c $(QUEUE_SRC) fakes/nrf.h $(HEADERS)

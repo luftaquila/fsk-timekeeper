@@ -1,5 +1,4 @@
-/* Master-tick primitives (pure). Ticks are the master's 16 MHz TIMER1 counts, carried as
- * decimal strings and handled as BigInt. Durations in seconds come from calibration.js. */
+// Master ticks: 16 MHz TIMER1 counts as decimal strings / BigInt (pure); seconds: calibration.js.
 
 export const MASTER_TICKS_PER_MS = 16000n;
 export const MASTER_TICKS_PER_S = 16_000_000n;
@@ -15,7 +14,7 @@ export function masterTick(value) {
   throw new TypeError("invalid master tick");
 }
 
-// Tick span at the nominal rate as ns (display of intervals that are not results, e.g. fault windows).
+// Tick span as ns at the nominal rate (non-result displays, e.g. fault windows).
 export function nominalNs(ticks) {
   const t = BigInt(ticks);
   return t < 0n ? -nominalNs(-t) : (t * 125n + 1n) / 2n; // ×62.5, half up

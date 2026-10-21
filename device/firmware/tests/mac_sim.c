@@ -1,16 +1,6 @@
-/* MAC simulator: one master and several sensors on a shared virtual air
- * run the production mac_master.c / mac_sensor.c with the real sync, FIFO,
- * registry, host queue and line formats. Only the hardware boundary is fake:
- * radio (airtime, collisions, loss, half duplex), TIMER1 captures, clocks with
- * ppm error, and USB (a host that parses and acks E
- * lines). Each scenario runs in a new process.
- *
- * Invariants checked: sensor transmissions stay inside slots dealt to them (or
- * the free slot, before registration) and never overlap each other or a beacon;
- * every capture reaches the host exactly once and in order, or is covered by a
- * loss range; stamps are within a few ticks of the truth (interpolated ones
- * after a beacon gap too); checkpoints never claim past an undelivered capture.
- */
+/* MAC simulator: the production MAC, sync, FIFO, registry, host queue and line formats on fake
+ * air (airtime, collisions, loss, half duplex), TIMER1, ppm clocks and an acking USB host; one
+ * process per scenario. Sensor TX stays in its dealt slots, never overlapping (check_slots). */
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -36,12 +26,11 @@
 #define REC_MAX     20000
 #define EDGE_MAX    20000
 #define STEP_US     200u
-/* Conservative oscillator startup allowance, not a measured XTAL delay.
- * XOSC standby avoids most starts; retain the existing worst-case budget. */
+/* Conservative oscillator startup allowance, not a measured XTAL delay. */
 #define OSC_START_BUDGET_US 5000u
 #define CAD_US      2560u   /* 4 symbols at SF7/BW250 */
 static_assert(OSC_START_BUDGET_US + CAD_US < CAD_DONE_MS * 1000u, "a modelled CAD is a healthy one");
-#define TX_SETUP_US (TX_SETUP_MS * 1000u) /* SPI (~1.5 ms at 1 MHz: packet, params) + oscillator + PA ramp */
+#define TX_SETUP_US (TX_SETUP_MS * 1000u) /* SPI (~1.5 ms at 1 MHz) + oscillator + PA ramp */
 #define RX_SETUP_US 5500u   /* SPI + oscillator before the receiver listens */
 #define HEADER_US   10400u  /* preamble + header before HEADER_VALID */
 
@@ -83,7 +72,7 @@ typedef struct {
     unsigned loss_pct;     /* receive loss, percent */
     int disabled, drop_type;
     int deaf;              /* drops every beacon */
-    uint64_t jam_from_us, jam_to_us; /* a strong stranger next to this node: every RSSI listen is loud */
+    uint64_t jam_from_us, jam_to_us; /* a strong stranger nearby: every RSSI listen is loud */
     struct { uint64_t tick; uint32_t seq; int xtal; } ring[64];
     unsigned rh, rt;
     uint32_t cseq;
@@ -119,8 +108,7 @@ static uint32_t airtime_us(int len) { return LORA_TOA_US((unsigned)len); }
 
 static int is_beacon(const tx_t *x) { return SEC_VT_TYPE(x->data[0]) == PKT_TYPE_BEACON; }
 
-/* DIO1 receive latency, independently of TxDone and the receiver's clock.
- * Equal packet lengths share the format-dependent part in both directions. */
+/* DIO1 receive latency, independent of TxDone and receiver clock; its length part is symmetric. */
 static uint64_t receive_done(const tx_t *x)
 {
     return x->end_us + (x->src == 0 ? down_delay_us : up_delay_us) +
@@ -661,8 +649,7 @@ static void check_slots(uint64_t from_us)
     }
 }
 
-/* Every injected capture after `from_us` of `node`: exactly once, in order, as a
- * capture within tol ticks of the truth or inside a loss range. */
+/* Each capture of `node` after `from_us`: once, in order, within tol ticks or in a loss range. */
 static void check_records(int node, uint64_t from_us, int64_t tol, unsigned *interp, unsigned *lost)
 {
     const node_t *n = &nodes[node];
@@ -751,8 +738,7 @@ static unsigned delay_checks;
 static int64_t delay_max_error;
 static void delay_hook(uint64_t us)
 {
-    /* Reopen admission while three admitted sensors keep measuring, so the
-     * estimator crosses both packet lengths after it has already converged. */
+    /* Reopen admission while three sensors measure: the converged estimator sees both lengths. */
     if (n_nodes == 4 && ((us >= 80000000u && us < 100000000u) ||
                          (us >= 180000000u && us < 185000000u))) {
         mm.admission.join_until_ms = (uint32_t)(us / 1000u) + 1000u;
@@ -794,9 +780,7 @@ static void radio_delay(unsigned count, int asymmetric)
            asymmetric ? "asymmetric" : "symmetric", delay_checks, (long long)delay_max_error);
 }
 
-/* Exercise the actual D lines and their expiry between reports, not just the
- * sensor's internal clock. Idle two-way updates used to leave the console on
- * the pre-update anchor for another five seconds and falsely expire it. */
+/* Check the actual D lines and their expiry between reports, not just the sensor's clock. */
 static int reported_sync_ok(int node, uint64_t us)
 {
     assert(timing_report[node].at_us);
@@ -842,8 +826,7 @@ static void sync_reports(unsigned count, int failure)
     check_slots(0);
     assert(timing_checks > 200);
     if (!failure) {
-        /* No echo/report feedback loop: exactly one checkpoint and one status
-         * packet per five seconds per idle node, including a five-node fleet. */
+        /* No echo loop: one checkpoint and one status per idle node per 5 s, five nodes too. */
         for (int n = 1; n < n_nodes; n++) {
             unsigned checkpoints = 0, reports = 0;
             for (unsigned i = 0; i < air_n; i++) {
@@ -937,9 +920,8 @@ static void steady(void)
     printf("PASS steady (%u records, %u transmissions)\n", n_recs, air_n);
 }
 
-/* Two sensors, single captures 1.5..3 s apart: each goes out in the sensor's next dealt slot.
- * Slots 0, 2, 4 and 1, 3 (slot 5 takes join requests) leave at most ~520 and ~760 ms to wait,
- * ~255 ms on average, plus ~90 ms of CAD, TX setup and airtime. */
+/* Two sensors, captures 1.5..3 s apart, each in its next dealt slot (0, 2, 4 / 1, 3; 5 joins):
+ * waits of at most ~520 / ~760 ms, ~255 ms on average, plus ~90 ms of CAD, TX setup, airtime. */
 static void latency(int lbt)
 {
     lbt_on = lbt;
@@ -1056,9 +1038,8 @@ static void long_gap(void)
     printf("PASS long_gap\n");
 }
 
-/* Sensor 1 reboots and rejoins through JOIN/OFFER/CONFIRM into its own entry, even
- * when the table is full. The same/new-tag runs differ only in the low byte of the
- * new boot ID; beacons no longer carry it as a boot tag, so both rejoin the same way. */
+/* Sensor 1 reboots and rejoins via JOIN/OFFER/CONFIRM into its own entry, even with a full
+ * table. Same/new-tag runs differ only in the new boot ID's low byte; both rejoin alike. */
 static int reboot_same_tag;
 
 static void reboot_hook(uint64_t us)
@@ -1121,8 +1102,7 @@ static void hfxo_hook(uint64_t us)
     if (us == 30000000u) { nodes[1].hfxo_stops++; } /* restarted before the MAC looked */
 }
 
-/* A masked HFXO stop drops the sync: captures until fresh anchors and skew are
- * of unknown time, later ones are stamped again. */
+/* A masked HFXO stop drops sync: captures are unknown-time until fresh anchors and skew. */
 static void hfxo_stop(void)
 {
     add_node(1, 0, 0, 0);
@@ -1145,9 +1125,8 @@ static void xtal_lost_hook(uint64_t us)
     if (us == 30000000u) { nodes[1].xtal = 0; } /* the crystal stays down */
 }
 
-/* A sensor without its crystal discards every anchor, so it always reports the
- * oldest one. It must not take every frame's two-way reply: the other sensors
- * keep fresh anchors and every capture of theirs is stamped. */
+/* A crystal-less sensor discards every anchor (always reports the oldest) yet must not take
+ * every frame's two-way reply: the others keep fresh anchors and all their captures stamped. */
 static void xtal_lost(void)
 {
     add_node(1, 0, 0, 0);
@@ -1208,8 +1187,7 @@ static void faults(void)
     printf("PASS faults\n");
 }
 
-/* Authenticated packets from a wrong master session must not consume a registry
- * entry or advance a valid sender's replay window. */
+/* Authenticated wrong-session packets must not take a registry entry or advance a replay window. */
 static void inject_uplink(uplink_pl_t *u)
 {
     uint8_t wire[WIRE_MAX];
@@ -1222,8 +1200,7 @@ static void inject_uplink(uplink_pl_t *u)
     mac_master_step(&mm);
 }
 
-/* Feed recorded ciphertext directly to a receiver: this bypasses RF collision
- * handling deliberately, and exercises the actual MAC plus Monocypher. */
+/* Recorded ciphertext straight to a receiver, skipping RF collisions; real MAC and Monocypher. */
 static void replay_wire(int receiver, const uint8_t *wire, int len)
 {
     cur = &nodes[receiver]; cur->now_us = now_global;
@@ -1403,8 +1380,7 @@ static void late_slot(uint32_t delay_us)
            delay_us > LBT_LISTEN_MS * 1000u ? "lbt" : "cad");
 }
 
-/* A strong stranger next to the master (20-23 s), then next to sensor 1 (40-43 s): the
- * jammed node sends nothing while its listen is loud, and every capture arrives later. */
+/* Jam master 20-23 s, then sensor 1 40-43 s: the jammed node stays silent; all captures arrive. */
 static void lbt_jam(void)
 {
     add_node(1, 0, 0, 0);
@@ -1487,8 +1463,8 @@ static void recovery_step(void)
     else { mac_sensor_step(&cur->s); }
 }
 
-/* Failed configuration and failed RX startup both back off without touching
- * the timebase, session or queued evidence. No ordinary radio work can clear them. */
+/* Failed config and RX startup back off, sparing timebase, session and queued evidence;
+ * no ordinary radio work clears them. */
 static void init_recovery(void)
 {
     add_node(1, 0, 0, 0);
@@ -1548,8 +1524,7 @@ static void status_reports(void)
     reg_entry_t *other = sim_entry(1, 2, 0);
     other->last_state = PU_STATE_OK;
     unsigned previous = d_lines;
-    /* Both sensors stop transmitting at t=0. Report ages keep increasing;
-     * transitions are immediate and LOST continues to be reported indefinitely. */
+    /* Both sensors go silent at t=0: ages keep rising, transitions are immediate, LOST repeats. */
     for (unsigned ms = 0; ms <= 40000; ms += 1000) {
         cur->now_us = (uint64_t)ms * 1000u;
         mac_master_report(&mm, 1);
@@ -1688,7 +1663,7 @@ static void admission(unsigned scenario)
         if (!(b->base.flags & BEACON_ADMISSION)) continue;
         for (unsigned k = 0; k < MAX_NODES; k++) {
             if (!b->base.slot[k].node_id || b->base.slot[k].node_id == 0x20000006u) continue;
-            if (b->pending & (1u << k)) continue; /* same-ID candidate is checked by the full reauth assertion below */
+            if (b->pending & (1u << k)) continue; /* same-ID candidate: reauth assert below */
             unsigned slots = 0;
             for (unsigned j = 0; j < SLOT_COUNT; j++) slots += b->schedule[j] == (SLOT_ROLE_DATA | k);
             assert(slots == 1);

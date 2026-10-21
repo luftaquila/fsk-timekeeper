@@ -1,9 +1,4 @@
-/* nrfx integration glue for bare-metal (no RTOS, no SoftDevice).
- *
- * Required by the nrfx HAL/driver headers that TinyUSB's nRF port pulls in
- * (nrfx_clock.h -> nrfx.h). Implemented against CMSIS (NVIC, PRIMASK) + GCC
- * atomic builtins. Only nrfx_power is actually used (USB power events).
- */
+/* Bare-metal nrfx glue (CMSIS + GCC atomics) for the nrfx headers TinyUSB's nRF port includes. */
 #ifndef NRFX_GLUE_H__
 #define NRFX_GLUE_H__
 
@@ -42,8 +37,7 @@ extern "C" {
 
 static inline void nrfx_glue_delay_us(uint32_t us)
 {
-    /* ~64 cycles/us at the 64 MHz core; ~4 cycles/iteration -> us*16. Coarse,
-     * adequate for the short waits nrfx_power performs. */
+    /* 64 cycles/us, ~4 per iteration -> us*16: coarse, enough for nrfx_power's short waits. */
     volatile uint32_t n = us * 16u;
     while (n--) {
         __NOP();

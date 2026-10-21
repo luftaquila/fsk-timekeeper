@@ -46,7 +46,6 @@ int radio_cfg_write(const radio_cfg_t *c)
     r.crc = crc32_ieee(&r, RADIO_CFG_CRC_LEN);
     int ok = nvmc_page_write(RADIO_CFG_PAGE_ADDR, &r, sizeof(r)) == 0;
 
-    /* verify the readback */
     radio_cfg_t check;
     ok = ok && load_rec(&check) && check.freq_khz == c->freq_khz && check.power_dbm == c->power_dbm &&
          check.lbt == c->lbt;

@@ -1,6 +1,5 @@
 // @vitest-environment jsdom
-// Mounts the real app (router, stores, every view) under jsdom and drives it with the
-// fake master: catches template/runtime errors that the pure-lib tests cannot.
+// Mounts the whole app in jsdom on the fake master to catch template/runtime errors lib tests miss.
 import "fake-indexeddb/auto";
 import { describe, it, beforeAll, afterAll, vi } from "vitest";
 import assert from "node:assert/strict";

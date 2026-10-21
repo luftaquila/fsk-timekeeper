@@ -1,8 +1,7 @@
 // Timing modes and instrument-wide constants. Pure module (no Vue).
 
-// Modes are named by mechanism, not by competition event.
-//  - sprint: first start crossing opens the interval, the first finish crossing after it closes it.
-//  - laps:   start-role crossings only; every crossing after the first ends a lap.
+// Modes (named by mechanism): sprint = first start crossing to the first finish crossing after it;
+// laps = start-role crossings only, every crossing after the first ends a lap.
 export const MODES = ["sprint", "laps"];
 export const RESULT_CLASSIFICATIONS = ["DNS", "DNF", "DSQ"];
 
@@ -20,14 +19,12 @@ export const REQUIRED_ROLES = Object.freeze({
   laps: ["start"],
 });
 
-// Report freshness, independent of the firmware's radio link state.
-// The master refreshes registered sensors every 5 seconds, including LOST entries.
+// D freshness, not link state: the master refreshes registered sensors every 5 s, LOST ones too.
 export const WIRELESS_STATUS_MAX_AGE_MS = 12000;
 export const WIRELESS_MAX_SKEW_PPM = 100;
 export const WIRELESS_SYNC_TTL_MS = 7000;
 
-// START refuses while the master's host queue is this full, or while the same E line keeps
-// arriving for longer than HEAD_STUCK_MS.
+// START refuses at this master queue fill, or while one E line repeats for over HEAD_STUCK_MS.
 export const QUEUE_HEALTH_RATIO = 0.75;
 export const HEAD_STUCK_MS = 5000;
 // Repeats of one unreadable E line before the fatal alarm.

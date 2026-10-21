@@ -1,5 +1,4 @@
-// Minimal promise wrapper over IndexedDB. Every readwrite transaction asks for strict
-// durability: `complete` then means the write reached the disk, not just the OS buffers.
+// Promise IndexedDB wrapper; readwrite uses strict durability, so `complete` means on disk.
 
 export const STRICT = Object.freeze({ durability: "strict" });
 

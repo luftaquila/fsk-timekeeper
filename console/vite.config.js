@@ -4,9 +4,8 @@ import { resolve } from "path";
 import { readFileSync } from "node:fs";
 import { viteSingleFile } from "vite-plugin-singlefile";
 
-// `single` inlines every asset into dist-single/index.html so the page runs
-// from file:// with no server. The default build (GitHub Pages) uses relative
-// asset URLs (base "") and the same hash router, so no rewrite rules are needed.
+// `single` inlines every asset into dist-single/index.html to run from file:// with no server;
+// the default build (GitHub Pages) uses relative asset URLs (base "").
 export default defineConfig(({ mode }) => {
   const single = mode === "single";
   return {

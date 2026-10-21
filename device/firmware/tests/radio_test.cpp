@@ -1,6 +1,4 @@
-/* radio.cpp with the vendor RadioLib against a fake SX1262 behind a fake HAL: the
- * bytes the probe and begin() send, and the chip state they leave. Every
- * scenario runs in a new process, as on MCU boot. */
+/* radio.cpp + vendor RadioLib on a fake SX1262/HAL: probe/begin() bytes and the chip state left. */
 #include <cassert>
 #include <cstdio>
 #include <cstring>
@@ -284,8 +282,7 @@ int main(int argc, char **argv)
             }
         }
     } else if (!strcmp(scenario, "cad_hung_deadline")) {
-        /* CAD-done never comes. However late the slot was entered (here the deadline falls
-         * 9, 7, 5, 2 and 0.1 ms into the scan), the scan counts as failed and resets the radio. */
+        /* No CAD-done: however late the slot was entered, the scan fails and resets the radio. */
         power_on();
         unsigned counted = 0;
         for (unsigned budget : {9000u, 7000u, 5000u, 2000u, 100u}) {

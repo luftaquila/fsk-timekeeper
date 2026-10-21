@@ -1,7 +1,5 @@
-/* Master registration policy. Owns candidates, replay-request history and the
- * admission schedule; the MAC owns radio I/O, deadlines and USB reporting.
- * Time is supplied by the caller. A verified CONFIRM installs a connection;
- * LOST entries can be reused. Requests and scheduling leave active entries intact. */
+/* Admission policy: candidates, replay-request history and schedule (radio I/O, deadlines, USB
+ * stay in the MAC). Only a verified CONFIRM alters entries; LOST entries can be reused. */
 #ifndef MASTER_ADMISSION_H
 #define MASTER_ADMISSION_H
 
@@ -41,15 +39,15 @@ typedef enum {
 } admission_result_t;
 
 void master_admission_session(master_admission_t *a, uint32_t now);
-/* MAC checks the protocol version first. id is set for WAIT/ACCEPTED notifications. */
+/* Caller checks the protocol version first; id is set for WAIT/ACCEPTED. */
 admission_result_t master_admission_receive(master_admission_t *a, registry_t *r,
                                            const uint8_t *buf, int n, uint32_t now, uint32_t *id);
 void master_admission_schedule(master_admission_t *a, const registry_t *r, uint32_t now,
                                admission_beacon_t *b, uint8_t slots[SLOT_COUNT]);
-/* entry comes from a locally generated OFFER slot (always below MAX_NODES). */
+/* entry: from a locally generated OFFER slot, always < MAX_NODES. */
 int master_admission_offer(const master_admission_t *a, unsigned entry, uint32_t beacon_ctr,
                            offer_pl_t *offer);
-/* Called only after TX starts. A paired confirmation uses the same frame. */
+/* Only after TX starts; paired: the confirmation uses the same frame. */
 void master_admission_offer_started(master_admission_t *a, unsigned entry, int paired);
 
 #endif

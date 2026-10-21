@@ -1,11 +1,6 @@
-/* One master and up to MAX_NODES sensors on one channel and one timebase; one
- * binary, role decided at boot from USB (DESIGN §8).
- *
- * MASTER = the board a PC enumerates over USB-CDC: beacons, collects sensor
- * records into the host queue and speaks the FSK-WL line protocol (proto_usb.h).
- * SENSOR = any other board: syncs to beacons, captures SENSOR edges in hardware
- * and uplinks them in its slots (mac_sensor.h).
- */
+/* One master and up to MAX_NODES sensors, one channel/timebase; one binary, role from USB at boot.
+ * MASTER (a PC enumerates it): beacons, queues sensor records, speaks FSK-WL lines (proto_usb.h).
+ * SENSOR: syncs to beacons, hardware-captures SENSOR edges, uplinks in its slots (mac_sensor.h). */
 #include <stdint.h>
 #include <stddef.h>
 #include <string.h>
@@ -32,8 +27,7 @@
 #include "usb.h"
 #include "nrf.h"
 
-/* Pump USB up to ROLE_SETTLE_MS for a PC to enumerate us: master when one does.
- * Decided once; a host that later suspends the bus does not change it. */
+/* Master iff a PC enumerates us in ROLE_SETTLE_MS; decided once (a later bus suspend keeps it). */
 static int role_decide_master(void)
 {
     uint32_t t0 = board_millis();
@@ -64,10 +58,8 @@ static int provision_key(void)
     return 0;
 }
 
-/* `R <freq_khz> <power_dbm> <lbt>` on any board: store the radio settings and use
- * them at once (a radio that is not up takes them at its next bring-up). The I
- * line that follows shows the stored target settings. Only a running receiver
- * earns A R OK; otherwise report failed or deferred application. */
+/* `R <freq_khz> <power_dbm> <lbt>` on any board: store and use now (a down radio takes them at its
+ * next bring-up). The I line shows the stored settings; only a running receiver earns A R OK. */
 static void provision_radio(int master, int radio_up)
 {
     const radio_cfg_t *c = pu_radio_cfg();
@@ -93,9 +85,7 @@ static void service(uint32_t now)
 
 /* ===== bring-up ========================================================== */
 
-/* Radio, TIMER1 and the role's captures; 0 when up. Fail closed: no radio or
- * TIMER1 work on HFINT. Until it is up the board keeps USB provisioning and
- * retries with backoff. */
+/* Radio, TIMER1, role captures; 0 when up. Fail closed: no radio or TIMER1 work on HFINT. */
 static int bring_up(int master)
 {
     if (!board_hfclk_xtal()) { return -1; }
@@ -164,7 +154,7 @@ static void run_sensor(int st)
             default: break;
             }
         }
-        if (st != 0) { /* no radio / no crystal: provisioning, and a retry now and then */
+        if (st != 0) { /* no radio / no crystal: provisioning plus periodic retry */
             if (retry_bring_up(&retry, 0, now)) {
                 st = 0;
                 mac_sensor_init(&g_sensor, node_sender_id(), fault_reset_reason());
@@ -186,9 +176,7 @@ static uint32_t g_hfxo_stops; /* board_hfxo_stops() already handled */
 static uint64_t g_reported_boot;
 static uint32_t g_reported_usb_epoch;
 
-/* A master HFXO fault ends the timebase session: its marker is queued ahead of
- * any record of the new session, which starts once the crystal is back. A stop
- * whose restart already finished counts too. */
+/* HFXO fault (even a restarted stop) ends the timebase session; its marker precedes new records. */
 static int master_clock_check(void)
 {
     static int faulted, reported;
@@ -204,8 +192,7 @@ static int master_clock_check(void)
         reported = 0;
     }
     if (!faulted) { return sec_boot_ready(); }
-    /* A full host queue holds the marker back until there is room: a retry on
-     * every pass is no overflow. */
+    /* A full host queue defers the marker; retrying every pass is not an overflow. */
     if (!reported && !mq_full(&g_queue)) { reported = mq_push_timebase_end(&g_queue, boot, at); }
     if (reported && board_hfclk_xtal()) {
         g_rekey = 0;
@@ -235,8 +222,7 @@ static int emit_self(int timebase_ok)
     d.sync_age_ms = timebase_ok ? 0 : UINT16_MAX;
     d.queue_depth = (uint16_t)mq_depth(&g_queue);
     d.queue_overflow = g_queue.overflow;
-    /* Queue pressure is current state; refused-enqueue totals stay in the
-     * overflow counter and X queue_full history after the host drains it. */
+    /* Queue full is current state; refused-enqueue totals stay in overflow and X queue_full. */
     d.err_flags = (uint16_t)(el_flags() & (uint16_t)~ERR_QUEUE_FULL);
     if (mq_full(&g_queue)) { d.err_flags |= ERR_QUEUE_FULL; }
     d.recovery = el_radio_recovery();
@@ -254,8 +240,7 @@ static void emit_pps(void)
 {
     if (!usb_console_ready() || !gps_report_due()) { return; } /* includes ?STATUS */
     gps_report_t g;
-    /* Periodic output is best effort. Consume once, even if the session line
-     * cannot fit, so a full USB buffer costs at most one attempt per sample. */
+    /* Best effort: consumed even if unsent; a full USB buffer costs at most one try per sample. */
     gps_report(&g);
     /* P has no boot field. Its session must reach this USB connection first. */
     if ((g_reported_boot != sec_boot_id() || g_reported_usb_epoch != usb_console_epoch()) &&
@@ -263,8 +248,7 @@ static void emit_pps(void)
     pu_emit_pps(g.pps_tick, g.utc_s, g.ppb, g.pps_valid, g.fix, g.sats, g.span_s, g.seg, g.n);
 }
 
-/* USB unplugged: stop every radio activity until VBUS returns, then reboot
- * into a new session. A battery-less master simply loses power. */
+/* USB unplugged: no radio activity until VBUS returns, then reboot into a new session. */
 static void master_stopped(mp_state_t *power, int radio_up)
 {
     if (radio_up) { radio_standby(); }
@@ -277,8 +261,7 @@ static void master_stopped(mp_state_t *power, int radio_up)
     }
 }
 
-/* Deliver the boot fault when the console asks for identity, not at enumeration.
- * Taking the report before a console opens would consume it without delivery. */
+/* Send the boot fault on ID, not at enumeration: taking it before a console opens loses it. */
 static void master_hello(void)
 {
     if (!usb_console_ready()) { return; }
@@ -405,8 +388,7 @@ int main(void)
 
     int master = role_decide_master();
 
-    /* USB may have started HFXO while the role was being resolved: check the
-     * clock source only now. */
+    /* USB may have started HFXO during role resolution: check the clock source only now. */
     int st = bring_up(master);
 
     if (master) {

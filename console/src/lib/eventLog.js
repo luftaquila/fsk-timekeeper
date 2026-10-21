@@ -1,10 +1,6 @@
-/* Durable log of evidence rows (IndexedDB) with the in-memory mirror the engine reads.
- *
- * Rows of one E line are committed in one transaction before the line is acked; the master
- * re-sends the line until then. Without IndexedDB, or after a write failure, rows stay in
- * memory: a host that stops acking would stall the master queue, which is worse than losing
- * durability. Write failures are reported to onWriteFailure listeners.
- */
+/* Evidence rows: IndexedDB log + the in-memory mirror the engine reads. An E line's rows commit in
+ * one transaction before its ack (the master re-sends until then). Without IndexedDB, or after a
+ * write failure, rows stay in memory: stalling the master queue is worse than losing durability. */
 import { openDb, transaction, request, done, addAll, getAll, count, removeRange } from "./idb";
 import { rowKey, lineKey } from "./protocol";
 import * as runLog from "./runLog";
@@ -239,9 +235,7 @@ export function ingestLine({ rows: incoming, masterBootId, hseq }, receivedAt = 
   });
 }
 
-// Quarantine an E line whose crc is right but whose content breaks the contract: the raw text
-// goes to the quarantine store and a marker row into the event log (one transaction).
-// -> { duplicate, marker }
+// Quarantine a crc-valid, contract-breaking E line: raw text + event-log marker in one transaction.
 export function ingestQuarantine({ raw, reason, node, hseq, masterBootId }, receivedAt = Date.now()) {
   return serialize(async () => {
     const key = lineKey(masterBootId, hseq);

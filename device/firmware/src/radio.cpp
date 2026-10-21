@@ -12,20 +12,18 @@ extern "C" {
 #include "config.h"
 }
 
-/* Statically allocated; hardware init happens in radio_begin(). */
+/* Hardware init happens in radio_begin(). */
 static NrfHal hal(PIN_LORA_SCK, PIN_LORA_MISO, PIN_LORA_MOSI, PIN_LORA_BUSY);
 static Module mod(&hal, PIN_LORA_NSS, PIN_LORA_DIO1, PIN_LORA_NRST, PIN_LORA_BUSY);
 static SX1262 radio(&mod);
 
-/* RX latches preamble/header detections so an in-progress reception is visible
- * before a CAD; DIO1 stays on RxDone. */
+/* Latch preamble/header detections so a reception in progress shows before a CAD; DIO1 = RxDone. */
 #define RX_IRQ_FLAGS (RADIOLIB_IRQ_RX_DEFAULT_FLAGS | (1UL << RADIOLIB_IRQ_PREAMBLE_DETECTED))
 
 static unsigned s_noresp;
 static unsigned s_cad_fail;
 static radio_cfg_t s_cfg = RADIO_CFG_DEFAULT;
-/* Initialization is complete only after the configured receiver starts. Normal
- * RX re-arms keep their existing SPI failure threshold. */
+/* Init completes only once the configured RX starts; RX re-arms keep the SPI failure threshold. */
 static bool s_init_pending;
 static bool s_configured;
 static bool s_tx_active;
@@ -43,8 +41,7 @@ static void hard_stop(void)
 extern "C" void radio_tx_abort(void) { hard_stop(); hal.unlimit(); }
 extern "C" void radio_limit(uint32_t end_us) { hal.limit(end_us); }
 extern "C" void radio_unlimit(void) { hal.unlimit(); }
-/* The wire has one RX bit, but starting RX and reading a packet recover
- * independently. Neither success is evidence that the other path recovered. */
+/* One RX bit on the wire, cleared only once RX start and packet read have both recovered. */
 static unsigned s_rx_faults;
 enum { RX_START_FAULT = 1u, RX_READ_FAULT = 2u };
 static void rx_result(unsigned source, bool ok)
@@ -58,8 +55,7 @@ static void rx_result(unsigned source, bool ok)
     }
 }
 
-/* Count SPI no-responses (BUSY stuck, SPIM hung, a status byte nobody drove);
- * any answered command clears the streak. */
+/* Count SPI no-responses (BUSY stuck, SPIM hung, undriven status); any answer clears the streak. */
 static int16_t track(int16_t state)
 {
     if (hal.deadlineHit()) { hard_stop(); state = RADIOLIB_ERR_SPI_CMD_TIMEOUT; }
@@ -75,9 +71,7 @@ static int16_t track(int16_t state)
     return state;
 }
 
-/* SX126x ReadRegister frame: opcode, 16-bit address, a status byte, then the data.
- * RadioLib's Module switches to this framing only inside begin(), so the probe
- * sends it itself. */
+/* Raw SX126x ReadRegister: RadioLib's Module switches to this framing only inside begin(). */
 static bool read_version(char version[16])
 {
     uint32_t t0 = board_millis();
@@ -96,8 +90,7 @@ static bool read_version(char version[16])
     return true;
 }
 
-/* Pulse NRST and wait for the version string: a radio that never answers would
- * keep begin() in findChip (10 resets, each retrying standby for 1 s). */
+/* Pulse NRST, await the version: a silent radio keeps begin() in findChip (10 resets x 1 s). */
 static bool radio_answers(void)
 {
     mod.init(); /* SPI and NSS; begin() repeats it */
@@ -112,8 +105,7 @@ static bool radio_answers(void)
     }
 }
 
-/* Read errors even when an initialization command failed, before the next
- * reset loses the oscillator/calibration evidence. A failed read is not zero. */
+/* Called even after a failed init command, before a reset loses oscillator/calibration evidence. */
 static int16_t check_device_errors(void)
 {
     uint8_t bytes[2] = { 0 };
@@ -127,9 +119,8 @@ static int16_t check_device_errors(void)
     return errors ? RADIOLIB_ERR_SPI_CMD_FAILED : RADIOLIB_ERR_NONE;
 }
 
-/* Verify the actual oscillator/mode, not just command acceptance. RadioLib's
- * getStatus() reads zero data bytes, so read the status byte directly. Only
- * bring-up uses this check; normal RX re-arms retain their timing budget. */
+/* Verify the actual oscillator/mode, not just command acceptance; RadioLib's getStatus() reads no
+ * data bytes. Bring-up only, so normal RX re-arms keep their timing budget. */
 static int16_t verify_radio_mode(uint8_t expected)
 {
     uint32_t t0 = board_millis();
@@ -158,8 +149,7 @@ static int16_t verify_radio_mode(uint8_t expected)
     return RADIOLIB_ERR_NONE;
 }
 
-/* Keep the crystal oscillator running in standby and after RX/TX, avoiding
- * another oscillator startup before the next RX or CAD. */
+/* Keep the crystal running in standby and after RX/TX: no oscillator startup before RX or CAD. */
 static int16_t standby_on_xosc(void)
 {
     radio.standbyXOSC = true;
@@ -191,16 +181,14 @@ extern "C" int radio_begin(void)
     s_init_pending = true;
     s_configured = false;
     mod.spiConfig.timeout = RADIO_SPI_TIMEOUT_MS;
-    /* begin() occasionally fails with garbled SPI readback on the hand-built
-     * board; each attempt resets the radio again. */
+    /* begin() sometimes fails on garbled SPI readback (hand-built board); each try resets again. */
     int16_t state = RADIOLIB_ERR_CHIP_NOT_FOUND;
     for (int attempt = 0; attempt < 5; attempt++) {
         hal.restartHangCheck();
         if (!radio_answers()) {
             continue;
         }
-        /* Begin in RC standby, explicitly using the Ra-01SH's passive crystal.
-         * RadioLib also enables the module's internal DIO2 RF switch control. */
+        /* RC standby, Ra-01SH passive crystal; RadioLib also enables DIO2 RF switch control. */
         radio.standbyXOSC = false;
         state = radio.begin(s_cfg.freq_khz / 1000.0f, LORA_BW_KHZ, LORA_SF, LORA_CR,
                             LORA_SYNCWORD, s_cfg.power_dbm, LORA_PREAMBLE,
@@ -297,9 +285,8 @@ extern "C" int radio_receive(uint8_t *buf, int maxlen, float *rssi, float *snr)
         return 0;
     }
     size_t len = radio.getPacketLength();
-    /* A length read that fails before the SPI transfer gives 0 (readData(buf, 0)
-     * would take the whole packet whatever its size); one cut off by a SPI timeout
-     * reads 0xFF and is clipped to maxlen below. */
+    /* A length read failing before the SPI transfer gives 0 (readData(buf, 0) would take the
+     * whole packet); one cut off by an SPI timeout reads 0xFF and is clipped to maxlen. */
     if (len == 0) {
         radio_start_rx();
         rx_result(RX_READ_FAULT, false);
@@ -321,8 +308,7 @@ extern "C" int radio_receive(uint8_t *buf, int maxlen, float *rssi, float *snr)
     return (int)len;
 }
 
-/* The access deadline cancels channel assessment, not a healthy SPI command.
- * Restore it for the caller; each command/re-arm gets a bounded SPI budget. */
+/* The caller's access deadline stops channel assessment, not an SPI command; restored on exit. */
 struct RadioAccess {
     uint32_t end;
     bool limited;
@@ -346,9 +332,8 @@ extern "C" int radio_rx_settle(uint32_t header_wait_ms, uint32_t max_ms)
         if (hal.deadlineHit()) { track(RADIOLIB_ERR_SPI_CMD_TIMEOUT); return RADIO_RX_BUSY; }
         if (access.expired()) { return RADIO_RX_BUSY; }
         uint32_t waited = board_millis() - t0;
-        /* A valid header means a packet is arriving, whatever older header error
-         * is latched beside it. A header error or a preamble that led nowhere
-         * stays latched until the next CAD, TX or RX re-arm clears the IRQ status. */
+        /* A valid header means a packet is arriving, whatever older header error is latched;
+         * a header error or dead preamble stays latched until the next CAD, TX or RX re-arm. */
         if (irq & RADIOLIB_SX126X_IRQ_HEADER_VALID) {
             if (waited >= max_ms) { return RADIO_RX_BUSY; }
         } else if ((irq & RADIOLIB_SX126X_IRQ_HEADER_ERR) || !(irq & RADIOLIB_SX126X_IRQ_PREAMBLE_DETECTED) ||
@@ -374,11 +359,9 @@ static int cad_failure(void)
     return cad_rearm(RADIO_CAD_ERROR);
 }
 
-/* A failed start or a CAD that never completes counts towards a reset. The
- * start fails with WRONG_MODEM once the radio has reset itself: back in GFSK,
- * it still transmits and receives, so only this sees it. An elapsed access
- * deadline cancels the transmission, not the health check: the scan is still
- * awaited for up to CAD_DONE_MS, so no slot deadline can hide a hung CAD. */
+/* A failed start or unfinished CAD counts towards a reset; only the start's WRONG_MODEM shows a
+ * self-reset radio (back in GFSK, it still sends and receives). Past the access deadline the scan
+ * is still awaited for up to CAD_DONE_MS, so no slot deadline hides a hung CAD. */
 static_assert(CAD_DONE_MS < CAD_TIMEOUT_MS &&
               SLOT_LATE_MS + CAD_DONE_MS + TX_SETUP_MS + LBT_LISTEN_MS < SLOT_LEN_MS,
               "a scan awaited past its slot deadline ends before the next slot's listen");

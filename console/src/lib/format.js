@@ -2,8 +2,7 @@
 
 const pad = (v, n) => String(v).padStart(n, "0");
 
-// ns / divisor -> "MM:SS.mmm" (minutes may exceed 59), milliseconds rounded half up once.
-// null -> "-". Negative spans show as zero.
+// ns / divisor -> "MM:SS.mmm" (minutes may exceed 59), ms half up once; null -> "-", negative -> 0.
 export function formatDuration(ns, divisor = 1n) {
   if (ns == null) return "-";
   let n = BigInt(ns);

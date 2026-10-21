@@ -10,8 +10,7 @@ const routes = [
   { path: "/:pathMatch(.*)*", redirect: "/" },
 ];
 
-// Hash history works from file://, from GitHub Pages and from any static host
-// without rewrite rules, so every build mode uses it.
+// Hash history works from file://, GitHub Pages and any static host without rewrite rules.
 const router = createRouter({
   history: createWebHashHistory(),
   routes,

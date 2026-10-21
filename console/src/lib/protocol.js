@@ -274,10 +274,9 @@ export function rowKey(row) {
   return `${row.master_boot_id}:${row.node_id}:${row.sensor_boot_id}:${row.kind}:${row.capture_seq}:${row.master_tick}`;
 }
 
-/* One E line -> { stage, ... }: "unreadable" (hseq or crc unreadable) and "crc" (mismatch, the
- * master re-sends) are never acked; "invalid" (sent, but breaks the contract) is quarantined and
- * acked, except one without a readable master_boot_id (the ack needs it); "valid" gives rows
- * ready to store (without seq / received_at). */
+/* One E line -> { stage, ... }: "unreadable" (hseq/crc unreadable) and "crc" (mismatch, re-sent)
+ * are never acked; "invalid" (breaks the contract) is quarantined and acked unless master_boot_id
+ * is unreadable (the ack needs it); "valid" gives rows to store, without seq / received_at. */
 export function parseEventLine(raw) {
   const line = String(raw ?? "").replace(/\s+$/, "");
   const t = line.split(" ");

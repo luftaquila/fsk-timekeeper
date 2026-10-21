@@ -1,5 +1,4 @@
-/* Design tokens shared with the FSK services (Linear-inspired). No web fonts:
-   the page must render offline from file:// without waiting on any request. */
+/* Tokens shared with the FSK services. No web fonts: the page must render offline from file://. */
 :root {
   color-scheme: light;
   --bg-primary: #f5f6f8;

@@ -119,8 +119,7 @@ static void on_uplink(mac_master_t *m, const uint8_t *buf, int n, float rssi, fl
                        int have_rx, uint64_t rx_tick)
 {
     if (SEC_VT_VER(buf[0]) != PROTO_VER) {
-        /* Another version counts only when the fleet key opens it: a foreign
-         * LoRa device on our channel and sync word is not an outdated board. */
+        /* Count only fleet-authentic packets: a foreign LoRa device is not an outdated board. */
         if (sec_authentic_any_version(buf, n)) { m->ver_drop++; }
         return;
     }
@@ -135,13 +134,8 @@ static void on_uplink(mac_master_t *m, const uint8_t *buf, int n, float rssi, fl
     if (sec_unseal_key(e->data_key, buf, n, &meta, &u, sizeof(u)) ||
         meta.boot_id != e->sensor_boot || u.master_boot_id != sec_boot_id()) { m->auth_drop++; return; }
     if (!sec_accept_counter(&e->rx.max_ctr, meta.ctr)) { e->sec_drop++; return; }
-    /* Refresh the oldest reported anchor first; rotate the entry used to break
-     * ties. A fresh anchor must not displace another sensor's due refresh.
-     * Diagnostics-only follow-ups have fresh anchors and therefore do not
-     * displace ordinary refreshes. A sensor without its crystal discards every
-     * anchor (mac_sensor.c), so it is no candidate: it would keep the oldest age
-     * and take every frame's reply from the others.
-     * The beacon counter prevents an old uplink being paired with a new frame. */
+    /* Reply to the oldest reported anchor (ties rotate); beacon_ctr pins the uplink to this frame.
+     * A sensor without its crystal drops every anchor (mac_sensor.c): its age would always win. */
     unsigned entry = (unsigned)(e - m->reg.e);
     if (have_rx && m->cycle_ready && n == m->cycle_wire_len && u.beacon_ctr == m->beacon_ctr &&
         (u.diag.health & HEALTH_CLOCK_XTAL) &&
@@ -175,9 +169,8 @@ static void on_uplink(mac_master_t *m, const uint8_t *buf, int n, float rssi, fl
         int16_t d = (int16_t)(uint16_t)(u.ev_seq - e->ack_seq);
         if (d > 0 && u.ev_seq < e->ack_seq) { d--; } /* the sensor skips 0 when ev_seq wraps */
         if (d > 0) {
-            /* The sensor only drops a packet the beacon acked, so a jump means a
-             * wrongly applied ACK: take it (the console sees any seq gap) rather
-             * than stall the sensor forever. */
+            /* The sensor drops only acked packets, so a jump means a misapplied ACK:
+             * take it (the console sees any seq gap) rather than stall the sensor forever. */
             if (d > 1) { el_note(EL_ACK_GAP); }
             /* Queue full: leave ack_seq; the sensor re-sends next cycle. */
             if (mq_push_uplink(m->q, e->id, e->sensor_boot, &u, rssi, snr)) { e->ack_seq = u.ev_seq; }
@@ -202,7 +195,7 @@ static void receive_one(mac_master_t *m)
 
 static int beacon_channel_ready(mac_master_t *m, uint64_t deadline)
 {
-    /* Leave enough time to perform both enabled checks; never bypass CAD. */
+    /* Leave time for both enabled checks; never bypass CAD. */
     uint64_t checks = (CAD_TIMEOUT_MS + (radio_lbt_enabled() ? LBT_LISTEN_MS : 0u)) * TPM;
     mac_radio_limit(deadline);
     while (capture_now64() + checks < deadline) {

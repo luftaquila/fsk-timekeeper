@@ -1,5 +1,4 @@
-// Run <-> JSON. A run of another format or protocol version is not restored: its evidence
-// cannot be judged by this console.
+// Run <-> JSON. Runs of another format or protocol version are not restored (not judgeable here).
 import { RUN_SCHEMA } from "./engine";
 import { RADIO_PROTO_VERSION, USB_PROTO_VERSION } from "./protocol";
 

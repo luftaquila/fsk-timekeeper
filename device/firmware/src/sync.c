@@ -39,12 +39,10 @@ static void skew_update(sync_t *s)
     int64_t dl = (int64_t)(s->lrx_hist[newest] - s->lrx_hist[oldest]);
     if (dl < (int64_t)SKEW_MIN_DL_TICKS) { return; }
     int64_t cand = (doff * 1000000) / dl;
-    /* Report the real value (an RC fallback reads ~10000 ppm); trust it for
-     * stamping only when it is a plausible crystal drift. */
+    /* Report the real value (RC reads ~10000 ppm) but stamp with it only if crystal-plausible. */
     s->skew_ppm = (int32_t)(cand > 32767 ? 32767 : (cand < -32768 ? -32768 : cand));
     if (cand > SKEW_CLAMP_PPM || cand < -SKEW_CLAMP_PPM) { s->skew_valid = 0; return; }
-    /* A format transition does not change the crystal. Retain the last valid
-     * rate until enough samples of the new length replace it. Clock loss clears it. */
+    /* Keep the last valid rate across a length change until SKEW_MIN_SAMPLES replace it. */
     if (matching >= SKEW_MIN_SAMPLES) {
         s->skew_num = doff;
         s->skew_den = (uint64_t)dl;
@@ -89,8 +87,7 @@ int sync_roundtrip(sync_t *s, uint64_t m_tx, uint64_t l_rx, uint64_t l_tx, uint6
     uint64_t dl = l_tx - l_rx, dm = m_rx - m_tx;
     uint64_t max_span = (uint64_t)(SLOT_OFFSET_MS + SLOT_COUNT * SLOT_LEN_MS) * TICKS_PER_MS;
     if (dl > max_span || dm > max_span) { return 0; }
-    /* Sanity bound from the allowed crystal rate and slot guard, not a delay
-     * calibration. Both clocks must advance over the same sub-second exchange. */
+    /* Sanity bound from the crystal rate limit and slot guard, not a delay calibration. */
     uint64_t rate_error = dl * SKEW_CLAMP_PPM / 1000000u + ANCHOR_JITTER_TICKS;
     if (dm + rate_error < dl || dm > dl + rate_error + 2u * SLOT_GUARD_MS * TICKS_PER_MS) { return 0; }
     uint64_t local = l_rx + dl / 2u;
@@ -120,8 +117,7 @@ uint64_t sync_to_master(const sync_t *s, uint64_t local)
 {
     if (!s->cur.have) { return 0; }
     uint64_t mt = s->cur.off + local;
-    /* Correct the drift since the anchor only forward of it, within the valid
-     * sync window, and only with a validated skew (|skew| <= SKEW_CLAMP_PPM). */
+    /* Drift-correct only forward of the anchor, within SKEW_MAX_EXTRAP_MS, with a valid skew. */
     if (s->skew_valid && s->skew_den && local >= s->cur.local &&
         (local - s->cur.local) <= (uint64_t)SKEW_MAX_EXTRAP_MS * TICKS_PER_MS) {
         int64_t corr = (int64_t)(local - s->cur.local) * s->skew_num / (int64_t)s->skew_den;
@@ -147,8 +143,7 @@ int sync_stamp(const sync_t *s, uint64_t local, int xtal, uint64_t *master, uint
     uint64_t m1 = s->before.off + s->before.local;
     uint64_t m2 = s->cur.off + s->cur.local;
     uint64_t dm = m2 - m1;
-    /* The two crystals run within SKEW_CLAMP_PPM of each other, as the skew check
-     * demands on the normal path; anchors implying another rate disagree. */
+    /* Anchors implying a rate beyond SKEW_CLAMP_PPM (the skew check's bound) disagree. */
     uint64_t dev = dm > dl ? dm - dl : dl - dm;
     if (dev > dl * (uint64_t)SKEW_CLAMP_PPM / 1000000u + ANCHOR_JITTER_TICKS) { return SYNC_UNKNOWN; }
     uint64_t de = local - s->before.local;

@@ -1,12 +1,8 @@
-/* Authenticated encryption for the LoRa air link (DESIGN §2.11).
- *
- * XChaCha20-Poly1305 uses purpose-separated control keys and connection keys
- * derived from the provisioned fleet PSK plus a mutual fresh challenge. Only
- * a completed handshake establishes the epoch and increasing receive counter.
- *
- * Nonce = (domain | type | node_id | boot_id | ctr): ctr never repeats within a
- * boot and boot_id is fresh per power-up, making accidental reuse negligible (not impossible).
- */
+/* Authenticated encryption for the LoRa link: XChaCha20-Poly1305 with purpose-separated control
+ * keys and connection keys from the fleet PSK plus a mutual fresh challenge; only a completed
+ * handshake sets the epoch and the increasing receive counter.
+ * Nonce = (domain | type | node_id | boot_id | ctr): ctr never repeats within a boot and boot_id
+ * is fresh per power-up, so accidental reuse is negligible. */
 #ifndef SECURE_H
 #define SECURE_H
 
@@ -16,10 +12,8 @@
 extern "C" {
 #endif
 
-/* Draw a new boot_id from the hardware RNG, reset the tx counter and load the
- * key. Call before any sec_seal(); a master calls it again to open a new session.
- * If the RNG fails, sealing is refused until sec_service() draws a boot_id (retried every
- * second; a repeated boot_id could repeat a nonce). */
+/* New RNG boot_id, tx counter reset, key load; before any sec_seal() and per master session. On
+ * RNG failure no sealing until sec_service() draws one (each second); reuse could repeat nonces. */
 void sec_init(void);
 void sec_service(uint32_t now_ms);
 int sec_boot_ready(void);
@@ -36,8 +30,7 @@ uint64_t sec_boot_id(void);
 /* Non-cryptographic 32-bit random value (MAC slot contention). */
 uint32_t sec_random(void);
 
-/* Nonblocking: consume one precollected 128-bit hardware random challenge.
- * Call sec_service() outside slot-critical work to refill the small pool. */
+/* Nonblocking: take one precollected 128-bit RNG challenge; sec_service() refills the pool. */
 int sec_challenge(uint8_t out[16]);
 int sec_counter_exhausted(void);
 
@@ -46,16 +39,13 @@ int sec_link_keys(sec_link_keys_t *out, uint64_t master_boot, uint32_t node_id,
                   uint64_t sensor_boot, const uint8_t ns[16], const uint8_t nm[16], uint32_t link_id);
 int sec_seal_key(const uint8_t key[32], uint8_t *out, int out_cap, uint8_t type,
                  uint32_t node_id, const void *payload, int payload_len);
-/* Uplink only: match the received beacon's total wire length. Padding is inside
- * the ciphertext/tag, and the receiver requires it to be zero. */
+/* Uplink: pad to the received beacon's wire length; the padding is encrypted and must be zero. */
 int sec_seal_uplink(const uint8_t key[32], uint8_t *out, int out_cap, uint32_t node_id,
                      const void *payload, int payload_len, int wire_len);
 
-/* Pack a payload model and seal into out[] as [header | ciphertext | mac];
- * payload_len is the model's sizeof, not its encoded length. node_id is the sender's (ignored for
- * downlink, always the master). Returns the wire length, or -1 out too small, -3 counter
- * exhausted, -4 unprovisioned or no boot id, -5 not a control type (UPLINK and CONFIRM use
- * sec_seal_uplink/sec_seal_key). Advances the tx counter. */
+/* Seal a payload model (payload_len = its sizeof) as [header|ciphertext|mac]; node_id: sender,
+ * ignored downlink. Advances the tx counter. Returns wire length or -1 out too small, -3 counter
+ * exhausted, -4 unprovisioned/no boot id, -5 not a control type (use sec_seal_uplink/_key). */
 int sec_seal(uint8_t *out, int out_cap, uint8_t type, uint32_t node_id,
              const void *payload, int payload_len);
 
@@ -71,18 +61,15 @@ uint32_t sec_wire_counter(const uint8_t *wire);
 /* A pinned connection never learns an epoch from an unsolicited packet. */
 int sec_accept_counter(uint32_t *high, uint32_t ctr);
 
-/* Verify + decrypt. 0 on success; <0: -1 malformed (short or wrong length, not a
- * control type, zero counter, bad padding or payload), -2 MAC failure, -3
- * unprovisioned, -4 protocol-version mismatch. Replay is checked separately. */
+/* Verify + decrypt: 0, or -1 malformed (length, type, zero counter, padding, payload), -2 MAC
+ * failure, -3 unprovisioned, -4 protocol-version mismatch. Replay is checked separately. */
 int sec_unseal(const uint8_t *in, int in_len, sec_meta_t *meta,
                void *out_payload, int payload_len);
 
-/* 1 when a received packet authenticates under the fleet/control key (diagnostics
- * only). DATA/CONFIRM require connection keys and cannot be checked here. */
+/* Diagnostics only: 1 if a control key authenticates it; DATA/CONFIRM need link keys. */
 int sec_authentic_any_version(const uint8_t *in, int in_len);
 
-/* Counter for one explicitly authenticated connection. Changing a packet's
- * boot ID never resets this state; only a completed handshake may replace it. */
+/* Per authenticated connection; a packet's boot ID never resets it, only a completed handshake. */
 typedef struct { uint32_t max_ctr; } sec_rx_counter_t;
 
 #ifdef __cplusplus

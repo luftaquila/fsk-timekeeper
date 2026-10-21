@@ -5,8 +5,7 @@
 #include "gpio.h"
 #include "nrf.h"
 
-/* TIMER1 = capture timebase, TIMER2 = board_micros, TIMER3 = sensor edge count. The SoftDevice is never
- * enabled, so every GPIOTE/PPI channel is free. */
+/* TIMER1 timebase, TIMER2 micros, TIMER3 edge count; SoftDevice never on: all GPIOTE/PPI free. */
 #define CAP_GPIOTE_DIO1 0
 #define CAP_GPIOTE_SENS 1
 #define CAP_GPIOTE_PPS  2
@@ -47,8 +46,7 @@ static uint32_t sensor_count(void)
 #endif
 }
 
-/* Count every hardware edge even while the CPU is stalled. Only pair a tick
- * with a sequence when the count and event stayed stable across the snapshot. */
+/* Every edge is counted even while the CPU stalls; pair tick and seq only on a stable snapshot. */
 void GPIOTE_IRQHandler(void)
 {
     if (!NRF_GPIOTE->EVENTS_IN[CAP_GPIOTE_SENS]) { return; }
@@ -130,8 +128,7 @@ void capture_sensor_enable(void)
 
 void capture_pps_enable(void)
 {
-    /* Rising edge (the ATGM336H aligns it to the UTC second); polled like DIO1.
-     * Pull-down: an unpopulated GPS gives no edges. */
+    /* Rising edge = UTC second (ATGM336H), polled like DIO1; pull-down: no GPS, no edges. */
     gpio_cfg_input_pulldown(PIN_GPS_PPS);
     NRF_GPIOTE->CONFIG[CAP_GPIOTE_PPS] = gpiote_event(PPS_PIN, PPS_PRT, GPIOTE_CONFIG_POLARITY_LoToHi);
     NRF_GPIOTE->EVENTS_IN[CAP_GPIOTE_PPS] = 0;

@@ -52,8 +52,7 @@ describe("missing sensor removal", () => {
 });
 
 describe("role mapping", () => {
-  // Firefox rebuilds an open dropdown on any <select> subtree mutation, even a
-  // same-value attribute write, and resets its highlight to the old option.
+  // Firefox rebuilds an open dropdown on any <select> subtree mutation, even a same-value write.
   it("leaves the role select untouched while the card re-renders", async () => {
     device.telemetry["00000001"] = report("online"); render();
     const select = wrapper.get('[aria-label="Sensor 00000001"] select');

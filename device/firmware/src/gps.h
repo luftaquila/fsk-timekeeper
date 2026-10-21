@@ -1,8 +1,5 @@
-/* GPS (ATGM336H breakout) on the master: NMEA over UARTE0, 1PPS captured on
- * TIMER1 (capture.c). Each PPS edge is reported once on the USB `P` line with
- * its qualification segment; ticks stay raw — the console converts them.
- * Master role only, main-loop context.
- */
+/* Master-only GPS (ATGM336H), main-loop context: NMEA on UARTE0, 1PPS on TIMER1 (capture.c).
+ * Each PPS edge goes once on a USB `P` line with its segment, in raw ticks the console converts. */
 #ifndef GPS_H
 #define GPS_H
 
@@ -24,23 +21,19 @@ typedef struct {
     uint32_t n;         /* index of the edge in its segment (seconds since its first edge) */
 } gps_report_t;
 
-/* UARTE0 on PIN_GPS_RXD/TXD (9600 8N1), ask the module for GGA+RMC only.
- * Call once after capture_pps_enable(). */
+/* UARTE0 9600 8N1 on PIN_GPS_RXD/TXD, GGA+RMC only. Call once after capture_pps_enable(). */
 void gps_init(void);
 
 /* End the old master session's pending samples before starting a new one. */
 void gps_discard_pending(void);
 
-/* Drain NMEA, take PPS edges, keep qualification and the edge<->UTC
- * association current. Call every main-loop pass. */
+/* Drain NMEA, take PPS edges, update qualification and edge<->UTC. Call every main-loop pass. */
 void gps_poll(void);
 
-/* A P line is due only once per new edge, after its RMC arrives or
- * GPS_RMC_LAG_MAX_MS expires. No periodic report without a captured edge. */
+/* A P line is due once per new edge, after its RMC arrives or GPS_RMC_LAG_MAX_MS expires. */
 int gps_report_due(void);
 
-/* Fill the report (the newest settled edge) and clear the due state.
- * USB callers must first check gps_report_due(). */
+/* Fill from the newest settled edge, clear due; USB callers check gps_report_due() first. */
 void gps_report(gps_report_t *out);
 
 #ifdef __cplusplus

@@ -9,7 +9,7 @@ const KEY = "tk.settings.v2";
 function defaults() {
   return {
     mapping: {}, // NODE8HEX -> { role, note }; unused excludes a sensor from timing
-    removedSensors: [], // removed while missing (mapping cleared); hidden until a D line is OK or STALE again
+    removedSensors: [], // removed while missing (mapping cleared); hidden until D is OK/STALE again
     mode: "sprint",
     lapTarget: null,
     lastNote: "",

@@ -1,5 +1,4 @@
-// Store-level integration: fake master (USB v7) -> device.handleLine -> IndexedDB event log ->
-// `C` ack -> engine -> calibration freeze -> history. Runs in node with fake-indexeddb.
+// Store-level integration on fake-indexeddb: fake master -> event log -> ack -> engine -> history.
 import "fake-indexeddb/auto";
 import { describe, it, beforeEach, vi } from "vitest";
 import assert from "node:assert/strict";
@@ -297,7 +296,7 @@ describe("pipeline with the fake master", () => {
       return `${body} ${crc32Hex(body)}`;
     };
     const history = (store = device) => store.logEntries.filter((e) => e.code === "radio_history");
-    // The only live report is already healthy: history must come from the sensor, not D transitions.
+    // The only live report is already healthy: history must come from the sensor, not D changes.
     await device.handleLine(diag(0));
     const first = checkpoint(1, 1);
     await Promise.all([device.handleLine(first), device.handleLine(first)]);

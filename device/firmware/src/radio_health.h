@@ -1,5 +1,4 @@
-/* Recovery history is separate from active radio faults. Counts saturate per
- * board boot; reason/result describe the latest attempt, not every past one. */
+/* Recovery history, apart from active faults: counts saturate per boot; reason/result = latest. */
 #ifndef RADIO_HEALTH_H
 #define RADIO_HEALTH_H
 #include <stdint.h>
@@ -15,8 +14,7 @@ typedef struct __attribute__((packed)) {
     uint16_t failures;
     uint8_t state; /* low nibble: reason; high nibble: result (explicit wire packing) */
 } radio_recovery_diag_t;
-/* Six cumulative failure counters, then the latest recovery summary. This fits
- * the checkpoint's existing 17-byte union; never appended to every uplink. */
+/* Cumulative faults + latest recovery, in the checkpoint's 17-byte union (not on every uplink). */
 #define RADIO_HISTORY_FAULTS 6u
 typedef struct __attribute__((packed)) {
     uint16_t faults[RADIO_HISTORY_FAULTS]; /* CAD, SPI, TX, RX, clock, init */

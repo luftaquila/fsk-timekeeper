@@ -1,8 +1,7 @@
-/* Master <-> PC USB-CDC line protocol v7 (DESIGN §8). Newline-delimited ASCII,
- * first token = line type. Formatting is dependency-free (newlib-nano has no
- * %f / %llu) so 64-bit ticks survive intact. Node token: "0" = master, sensors
- * = 8 uppercase hex digits. crc = 8 uppercase hex digits of CRC-32/IEEE over the
- * line text before the space that precedes it.
+/* Master <-> PC USB-CDC line protocol v7: newline-delimited ASCII, first token = line type.
+ * Node "0" = master, sensors = 8 upper-case hex. crc = CRC-32/IEEE as 8 upper-case hex over the
+ * text before " <crc>". Lines are built without printf (newlib-nano has no %f / %llu), so 64-bit
+ * ticks stay exact.
  *
  *   Master -> PC:
  *     I FSK-WL <usb_proto> <fw> <devid16> <M|S> <radio_proto> <freq_khz> <sf> <bw> <ticks_per_ms> <reset_reason>
@@ -20,13 +19,12 @@
  *       <XTAL|RC> <sync_age_ms> <capture_overflow> <fifo_drop> <queue_depth> <queue_overflow>
  *       <err_flags> <ver_drop> <tx_drop> <reset_reason> <sensor_boot_id> <master_boot_id>
  *       <recovery_count> <recovery_failures> <recovery_reason> <recovery_result> <diag_valid>
- *       D recovery fields describe the master only; sensor D uses four zeroes.
- *       Sensor history is carried by acknowledged E K lines, not periodic D lines.
- *       diag_valid=0 means no diagnostic uplink on this connection; clock/health are unknown.
+ *       D recovery fields are master-only; sensors send four zeroes (history comes in E K).
+ *       diag_valid=0: no diagnostic uplink on this connection yet, clock/health unknown.
  *     T <32-hex token> <tick> <master_boot_id>
  *     P <pps_tick> <utc_s> <ppb> <pps_valid> <fix> <sats> <span_s> <seg> <n>
- *       One report per captured edge; no periodic or ?STATUS replay without a new edge.
- *       ppb/span_s may describe an unqualified display-only estimate; seg gates calibration.
+ *       One line per captured edge, never replayed; seg gates calibration (ppb/span_s may be a
+ *       display-only estimate).
  *     J <node8hex> <WAIT|SYNC|READY> (admission status; ?STATUS refreshes it)
  *     A <cmd> OK
  *     K <64-hex|NONE>                   (reply to ?KEY over USB only)

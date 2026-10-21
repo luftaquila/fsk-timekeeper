@@ -1,12 +1,9 @@
-/* Sealed LoRa packet formats, radio protocol v17 (DESIGN §2.6, §2.8, §2.11).
+/* Sealed LoRa packet formats, radio protocol v17.
  *
- * Wire = [cleartext header | ciphertext payload | 16-byte Poly1305 tag]
- * (secure.h). The first byte carries both version and type, so every
- * packet is version-checked before decryption. The header carries the sender's
- * node_id only on uplinks; the master is the implicit sender of beacons.
- *
- * node_id = low 32 bits of the sender's chip id (never 0); the master is id 0.
- * Every packet has a fixed length.
+ * Wire = [cleartext header | ciphertext payload | 16-byte Poly1305 tag] (secure.h); every packet
+ * has a fixed length. The first byte carries version and type, checked before decryption. Only
+ * uplink headers carry the sender's node_id (low 32 bits of its chip id, never 0); beacons come
+ * from the master (id 0).
  */
 #ifndef PROTOCOL_H
 #define PROTOCOL_H
@@ -22,10 +19,9 @@
 #define PKT_TYPE_OFFER    0x04u
 #define PKT_TYPE_CONFIRM  0x05u
 
-/* v16 compacted fields; v17 adds authenticated equal-length two-way samples.
- * Preserve all v1..v16 byte encodings (high nibble 0 means v16). Previously
- * unused type bit 3 extends the version to v17..v32 without another wire byte.
- * Only packet types 1..5 have ever been assigned. */
+/* v16 compacted the fields; v17 adds authenticated equal-length two-way samples. v1..v16 keep
+ * their byte encodings (high nibble 0 = v16); the unused type bit 3 extends versions to v17..v32
+ * without another byte. Only packet types 1..5 have ever been assigned. */
 #define PROTO_VER 17u
 
 #define SEC_VT(ver, type) ((uint8_t)(((uint8_t)(ver) << 4) | \
@@ -41,8 +37,8 @@
 
 /* ---- Beacon (master -> all) ----------------------------------------------- */
 
-/* Entry k names the complete sender and negotiated connection. node_id 0 = free entry.
- * ack_seq is the last evidence packet accepted from that sensor boot, acknowledged only on its active connection. */
+/* Entry k: the sender and its connection (node_id 0 = free entry). ack_seq = last evidence
+ * packet accepted from that sensor boot, acknowledged only on its active connection. */
 typedef struct __attribute__((packed)) {
     uint32_t node_id;
     uint16_t ack_seq;
@@ -150,10 +146,9 @@ typedef struct __attribute__((packed)) {
 
 /* ---- Wire sizes ---------------------------------------------------------- */
 
-/* Models above retain 64-bit arithmetic for ticks and unpacked fields for MAC
- * users. Only the authenticated radio payload is compacted. At 16 MHz, 48 bits
- * cover 203.6 days; supported uptime is at most one day, with no epoch extension.
- * Random boot ids are NOT ticks and retain all 64 bits. */
+/* Models keep 64-bit ticks and unpacked fields; only the radio payload is compacted. 48-bit ticks
+ * cover 203.6 days at 16 MHz (supported uptime is at most one day, no epoch extension); random
+ * boot ids are not ticks and keep all 64 bits. */
 #define PL_BEACON     66
 #define PL_ADMISSION  71
 #define PL_UPLINK     62

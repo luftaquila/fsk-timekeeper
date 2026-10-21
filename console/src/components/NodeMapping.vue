@@ -2,8 +2,7 @@
 import { useSettingsStore } from "../stores/settings";
 import { ROLES, ROLE_LABEL } from "../lib/constants";
 
-// Separate from MappingCard so its clock and telemetry re-renders never patch the
-// <select>: Firefox rebuilds an open dropdown on any mutation and drops the pick.
+// Own component so MappingCard re-renders never patch the <select> (Firefox drops an open pick).
 const props = defineProps({ nodeId: { type: String, required: true } });
 const settings = useSettingsStore();
 

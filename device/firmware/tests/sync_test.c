@@ -1,5 +1,4 @@
-/* Independent clock models: symmetric delay cancels; asymmetry leaves half
- * the difference. Beacons estimate rate but cannot establish an offset alone. */
+/* Independent models: symmetric delay cancels, asymmetry leaves half; beacons give rate only. */
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>

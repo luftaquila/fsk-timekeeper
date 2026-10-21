@@ -1,5 +1,4 @@
-# Requires Graphviz and WireViz.
-# cd .github/assets && uvx --from wireviz==0.4.1 wireviz wire.yml -f p
+# Render (needs Graphviz): cd .github/assets && uvx --from wireviz==0.4.1 wireviz wire.yml -f p
 # Connector image: fsk-energymeter/.github/assets/lv-mate.png (same 5557-04R housing).
 # J1 pinout: device/hardware/fsk-timekeeper.kicad_pcb
 # BA2M-DDT sensor wiring (page 2): https://autonics.se/wp-content/uploads/2018/02/BA_cat_eng_161109.pdf

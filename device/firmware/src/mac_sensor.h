@@ -1,7 +1,6 @@
-/* Sensor MAC (DESIGN §2.8): sync to beacons, stamp captures, and send at
- * most one packet per beacon, in the first of the sensor's slots it is ready
- * for; the beacon's slot table carries the cumulative ACK. A sensor that heard
- * no beacon this cycle stays silent. Main-loop context. */
+/* Sensor MAC: sync to beacons, stamp captures, send at most one packet per beacon in the first
+ * own slot it is ready for (cumulative ACK in the beacon's slot table); silent in a cycle without
+ * a beacon. Main-loop context. */
 #ifndef MAC_SENSOR_H
 #define MAC_SENSOR_H
 
@@ -14,8 +13,7 @@
 #include "sensor_queue.h"
 #include "sync.h"
 
-/* IDLE -> WAIT_OFFER -> CONFIRM_READY -> WAIT_ASSIGNMENT -> IDLE.
- * The active connection is separate and survives candidate cancellation. */
+/* Join candidate: phases in order, then back to IDLE; cancelling it keeps the active connection. */
 typedef enum {
     SENSOR_JOIN_IDLE = 0,
     SENSOR_JOIN_WAIT_OFFER,      /* fresh Ns, no authenticated response */
@@ -55,7 +53,7 @@ typedef struct {
     } roundtrip; /* at most one DATA TxDone per frame; consumed by the next beacon */
     uint8_t sync_report_pending; /* publish a newly accepted anchor on the next DATA uplink */
     uint64_t sync_refresh_rx; /* beacon RxDone of the latest non-report two-way exchange */
-    uint8_t  tx_slots;       /* bit j: slot j is ours and still ahead; a bit clears when its slot is reached, sent or not */
+    uint8_t  tx_slots;       /* bit j: our slot j is ahead; cleared once reached, sent or not */
     int      entry;          /* own entry in the slot table, -1 = not registered */
     uint8_t  cp_pending, cp_answered;
     uint32_t last_beacon_ms;

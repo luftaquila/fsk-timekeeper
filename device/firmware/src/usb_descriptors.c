@@ -2,9 +2,7 @@
 #include "tusb.h"
 #include "node_id.h"
 
-/* FSK VID with its own PID and product string, so the wired FSK controller
- * (PID 0x0514) and this app never cross-match. The console still confirms the
- * board with the "I FSK-WL ..." reply to "?ID". */
+/* PID/product distinct from the wired FSK controller (PID 0x0514); the console also checks ?ID. */
 #define USB_VID 0x1999
 #define USB_PID 0x0515
 

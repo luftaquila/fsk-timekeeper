@@ -58,8 +58,7 @@ void NrfHal::digitalWrite(uint32_t pin, uint32_t value)
 
 uint32_t NrfHal::digitalRead(uint32_t pin)
 {
-    /* End vendor BUSY loops without issuing another command. spiTransfer then
-     * returns failed status; track() holds the physical radio in reset. */
+    /* End vendor BUSY loops with no new command: spiTransfer fails, track() holds NRST low. */
     if (expired()) { _deadlineHit = true; return 0; }
     if (pin == RADIOLIB_NC) {
         return 0;
@@ -87,8 +86,7 @@ void NrfHal::delayMicroseconds(RadioLibTime_t us)
     }
 }
 
-/* RadioLib compares these by unsigned subtraction: both wrap modulo 2^32
- * (millis every ~49 days, micros every ~71.6 min). */
+/* Both wrap modulo 2^32 (millis ~49 days, micros ~71.6 min); RadioLib compares by subtraction. */
 RadioLibTime_t NrfHal::millis(void)
 {
     return board_millis();
@@ -104,9 +102,8 @@ long NrfHal::pulseIn(uint32_t, uint32_t, RadioLibTime_t)
     return 0; /* unused by SX126x */
 }
 
-/* Called on every turn of RadioLib's BUSY loops. Bounded waits end within
- * RADIO_SPI_TIMEOUT_MS; BUSY high for RADIO_HANG_MS means a loop without a
- * timeout will never end. PC = the waiting RadioLib code. */
+/* Called on every turn of RadioLib's BUSY loops. Bounded waits end within RADIO_SPI_TIMEOUT_MS;
+ * BUSY high for RADIO_HANG_MS means an unbounded loop hung. PC = the waiting RadioLib code. */
 void NrfHal::yield(void)
 {
     if (expired()) { _deadlineHit = true; return; }
@@ -126,9 +123,7 @@ bool NrfHal::expired() const { return _limited && (int32_t)(board_micros() - _de
 
 void NrfHal::spiBegin(void)
 {
-    /* Also runs again on every radio reset: PSEL may only change while SPIM is
-     * disabled. SCK/MOSI outputs (SCK idle low, SPI mode 0), MISO input.
-     * PSEL = port*32+pin. */
+    /* Reruns on every radio reset; PSEL (port*32+pin) may only change while SPIM is disabled. */
     NRF_SPIM0->ENABLE = (SPIM_ENABLE_ENABLE_Disabled << SPIM_ENABLE_ENABLE_Pos);
     gpio_clear(_sck);
     gpio_cfg_output(_sck);
@@ -168,8 +163,7 @@ void NrfHal::spiTransfer(uint8_t* out, size_t len, uint8_t* in)
     uint32_t t0 = board_micros();
     while (NRF_SPIM0->EVENTS_END == 0) {
         if (expired() || (uint32_t)(board_micros() - t0) >= SPI_TRANSFER_MAX_US) {
-            /* RadioLib sees garbage status and fails the command; the radio
-             * layer counts this as a no-response. */
+            /* RadioLib fails the command on garbage status; radio.cpp counts a no-response. */
             NRF_SPIM0->TASKS_STOP = 1;
             /* Revoke EasyDMA before its caller releases the stack buffers. */
             NRF_SPIM0->ENABLE = SPIM_ENABLE_ENABLE_Disabled;

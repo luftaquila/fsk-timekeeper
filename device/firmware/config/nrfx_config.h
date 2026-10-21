@@ -1,6 +1,4 @@
-/* nrfx peripheral configuration. Only nrfx_power is used (USB power events for
- * TinyUSB); everything else stays off. Unspecified options fall back to nrfx's
- * internal defaults. */
+/* nrfx: only nrfx_power (USB power events for TinyUSB); unset options take nrfx defaults. */
 #ifndef NRFX_CONFIG_H__
 #define NRFX_CONFIG_H__
 

@@ -1,5 +1,4 @@
-/* Master link: transport, contract check, line dispatch, evidence ingest + ack, telemetry,
- * PPS edges, clock reads, provisioning, device log, DFU. */
+// Master link: transport, contract, line dispatch, evidence ingest + ack, PPS, provisioning, DFU.
 import { defineStore } from "pinia";
 import { ref, reactive, computed } from "vue";
 import { useNotification } from "../composables/useNotification";
@@ -62,7 +61,7 @@ export const useDeviceStore = defineStore("device", () => {
   const head = ref(null); // { hseq, firstSeenAt, lastSeenAt } of the latest E line
   const radioHistory = new Map(); // cumulative checkpoint snapshots, keyed by sensor boot
   let radioLogChain = Promise.resolve();
-  const radioReports = new Map(); // latest snapshot per board boot (up to 512), restored from the device log
+  const radioReports = new Map(); // latest snapshot per board boot (max 512), restored from the log
   const logEntries = ref([]); // device log, newest first
 
   let transport = null;
@@ -144,8 +143,7 @@ export const useDeviceStore = defineStore("device", () => {
       if (e.radioKey && e.radioSnapshot) radioReports.set(e.radioKey, e.radioSnapshot);
       if (e.historyKey && e.historySnapshot) radioHistory.set(e.historyKey, e.historySnapshot);
     }
-    // Evidence is committed before ACK. Rebuild a missing display log if the
-    // browser stopped between evidence storage and device-log creation.
+    // Rebuild log entries lost when the browser stopped between evidence commit and log write.
     for (const row of eventLog.since(0)) {
       if (row.radio_history && row.seq > clearedThrough && !clearedEvidence.has(row.seq) && row.received_at >= Date.now() - LOG_RETENTION_MS) {
         await logCheckpointHistory(row, row.received_at);
@@ -282,8 +280,7 @@ export const useDeviceStore = defineStore("device", () => {
       const previous = telemetry[t.node_id];
       const sameClockSession = t.sensor_boot_id != null && t.master_boot_id != null &&
         previous?.sensor_boot_id === t.sensor_boot_id && previous?.master_boot_id === t.master_boot_id;
-      // Retain convergence through USB reconnects and radio reauthentication;
-      // either board rebooting starts a new clock synchronization session.
+      // Sync convergence survives USB reconnects and reauthentication, not either board rebooting.
       t.sync_established = (sameClockSession && previous.sync_established === true) || timingHealth(t, { now }).ok;
     }
     telemetry[t.node_id] = t;
@@ -311,7 +308,7 @@ export const useDeviceStore = defineStore("device", () => {
     // Sensor history arrives only in acknowledged checkpoints, never in cached D lines.
     const recovery = t.node_id === NODE_MASTER ? t.recovery : null;
     const snapshot = { boot, ...recovery, faults: (t.err_flags ?? 0) & RADIO_FAULT_MASK };
-    radioReports.set(key, snapshot); // set before the first await: repeated D lines cannot duplicate it
+    radioReports.set(key, snapshot); // set before any await so repeated D lines cannot duplicate it
     if (radioReports.size > 512) radioReports.delete(radioReports.keys().next().value);
     const entry = { kind: "radio", at: now, devid: t.node_id === NODE_MASTER ? identity.value?.devid : t.node_id,
       masterBootId: t.master_boot_id, nodeId: t.node_id, nodeBootId: boot, radioKey: key, radioSnapshot: snapshot };
@@ -330,8 +327,7 @@ export const useDeviceStore = defineStore("device", () => {
     const historySnapshot = { ...row.radio_history, evSeq: row.ev_seq };
     const prior = radioHistory.get(historyKey);
     if (prior) {
-      // Replayed checkpoints (including another master session) cannot roll a
-      // per-boot cumulative total backwards. Equal totals are harmless.
+      // Replays (any master session) never roll a per-boot total back; equal totals are harmless.
       if (historySnapshot.faults.some((v, i) => v < prior.faults[i]) ||
           historySnapshot.recovery.count < prior.recovery.count ||
           historySnapshot.recovery.failures < prior.recovery.failures) return;
@@ -451,8 +447,7 @@ export const useDeviceStore = defineStore("device", () => {
         }
         const { duplicate, rows } = await eventLog.ingestLine({ rows: p.rows, masterBootId: p.masterBootId, hseq: p.hseq }, now);
         syncDurability();
-        // Also on duplicate E lines: a previous attempt may have stopped after
-        // the evidence transaction but before the device log was materialized.
+        // Also for duplicates: an earlier attempt may have stopped between evidence and log write.
         for (const row of p.rows) {
           if (row.radio_history) await logCheckpointHistory(row, now);
         }
@@ -476,7 +471,7 @@ export const useDeviceStore = defineStore("device", () => {
     p.resolve(result);
   }
 
-  // One provisioning command to the connected board (any role); resolves "ok", one of fails, or "timeout".
+  // One provisioning command (any board role); resolves "ok", one of fails, or "timeout".
   function provision(cmd, line, shown, fails) {
     if (updateInProgress.value) return Promise.reject(new Error("Wait for the firmware upgrade to finish."));
     if (!transport?.connected) return Promise.reject(new Error("Master not connected"));
@@ -520,8 +515,7 @@ export const useDeviceStore = defineStore("device", () => {
     });
   }
 
-  // "ok" means stored and applied; cfgapply/cfgpending mean stored but not running.
-  // The fresh I line reports the stored target settings, even on application failure.
+  // ok = stored and applied, cfgapply/cfgpending = stored, not running; I shows the stored target.
   function configureRadio(cfg) {
     if (!isRadioConfig(cfg)) return Promise.reject(new Error("Radio settings out of range."));
     const line = radioCommand(cfg);

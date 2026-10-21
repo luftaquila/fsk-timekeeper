@@ -1,11 +1,6 @@
-/* One sensor's evidence timeline for a run.
- *
- * capture_seq order is capture-time order. Walking the stream from the START checkpoint,
- * `known` is the tick through which every edge of this sensor is identified (delivered or
- * covered by a loss record). A hole {lo, hi} says "unreported edges may exist at ticks t
- * with lo < t <= hi"; hi is null while its bound is not known yet, Infinity when open-ended.
- * Holes never stop the walk; missing records do.
- */
+/* One sensor's evidence for a run, walked in capture_seq (= capture-time) order from the START
+ * checkpoint. Every edge through `known` is delivered or loss-covered; only missing records stop
+ * the walk. A hole may hide edges at lo < t <= hi (hi null until known, Infinity if open-ended). */
 import { FLAG_HEALTHY, FLAG_TIME_UNKNOWN, NODE_MASTER } from "./protocol";
 
 const HALF = 0x80000000;
@@ -140,9 +135,8 @@ export function sensorStream(run, node, rows, { sessionEnd = null } = {}) {
   return { node_id: node, role: src.role, known, edges, holes };
 }
 
-/* Per-sensor debounce (leading edge) and hole significance above `after` (exclusive): a hole
- * wholly inside [c, c + D) of the last accepted crossing c is harmless; the first other hole cuts
- * the list (crossings above cut are uncertain). -> { accepted: bigint[], cut, final, cutHole, certain } */
+// Leading-edge debounce and hole significance above `after` (exclusive): a hole wholly inside
+// [c, c + D) of the last accepted c is harmless; the first other hole cuts (uncertain above).
 export function acceptCrossings(stream, { after, debounceTicks }) {
   const items = [
     ...stream.edges.map((e) => ({ at: e.tick, order: 0, edge: e })),

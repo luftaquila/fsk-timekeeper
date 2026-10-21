@@ -92,8 +92,7 @@ static void rng_recovery(void)
 
 static void other_version_diagnostic(void)
 {
-    /* A board on another protocol version authenticates for the ver_drop count,
-     * but is never accepted. */
+    /* Another protocol version authenticates (counted in ver_drop) but is never accepted. */
     sec_init();
     beacon_pl_t b = {0}, out; sec_meta_t meta;
     uint8_t wire[WIRE_MAX], plain[PL_BEACON], key[32], nonce[24];
@@ -162,8 +161,7 @@ static void compact_payload_validation(void)
     uint32_t counter = g_tx_ctr;
     assert(sec_seal(wire, sizeof(wire), PKT_TYPE_BEACON, 0, &a, sizeof(a)) == -1 && g_tx_ctr == counter);
     a.schedule[0] = SLOT_ROLE_REQUEST;
-    /* A valid authentication tag must not bypass validation of packed fields.
-     * Give the malformed packet a fresh counter, as a faulty fleet peer would. */
+    /* A valid tag must not skip packed-field checks (fresh counter, like a faulty fleet peer). */
     assert(protocol_encode(plain, sizeof(plain), PKT_TYPE_BEACON, &a, sizeof(a)) == PL_ADMISSION);
     plain[PL_BEACON] |= 31u; /* reserved slot code */
     wire[9] = 2;

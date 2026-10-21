@@ -1,5 +1,4 @@
-/* Fault-reboot bookkeeping (fault.c, built with FAULT_HOST_TEST), the radio
- * hang check (hang_guard.h) and the master USB power policy (power.c). */
+/* Fault reboots (fault.c), the radio hang check (hang_guard.h) and USB power policy (power.c). */
 #include <assert.h>
 #include <stdint.h>
 #include <stdio.h>

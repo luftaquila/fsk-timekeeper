@@ -1,6 +1,5 @@
-// The USB v7 contract on both sides: device/firmware/tests/usb_lines.txt holds lines printed
-// by the firmware's own formatters with extreme values (`make test` checks the file against
-// them), and the console parses the same file.
+// USB v7 contract on both sides: device/firmware/tests/usb_lines.txt holds firmware-formatted lines
+// with extreme values (`make test` checks them); the console parses the same file.
 import { describe, it } from "vitest";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";

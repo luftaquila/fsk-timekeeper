@@ -10,14 +10,12 @@
 #include "nrfx_power.h"
 #include "nrf.h"
 
-/* The REMOVED handling below mirrors this exact TinyUSB release's nRF dcd;
- * re-check it against dcd_nrf5x.c before changing the pin. */
+/* The REMOVED handling below mirrors this exact TinyUSB release's dcd_nrf5x.c. */
 #if TUSB_VERSION_MAJOR != 0 || TUSB_VERSION_MINOR != 20 || TUSB_VERSION_REVISION != 0
 #error "usb.c: re-verify power_usb_event_handler against the new TinyUSB dcd_nrf5x.c"
 #endif
 
-/* TinyUSB 0.20.0's nRF dcd calls the nrfx v1/v2 name nrf_clock_hf_is_running(),
- * renamed in nrfx v4; provide it as a register read. */
+/* TinyUSB 0.20.0's dcd calls nrf_clock_hf_is_running(), an nrfx v1/v2 name renamed in v4. */
 bool nrf_clock_hf_is_running(void *p_reg, uint32_t hfclk_src)
 {
     NRF_CLOCK_Type *clk = (NRF_CLOCK_Type *)p_reg;
@@ -39,9 +37,7 @@ void USBD_IRQHandler(void)
     dcd_int_handler(0);
 }
 
-/* Runs in the POWER interrupt. On cable removal TinyUSB would also stop HFCLK
- * (TASKS_HFCLKSTOP), dropping TIMER1 to the RC oscillator. Take REMOVED here
- * instead: the same USBD shutdown sequence and UNPLUGGED event, HFXO untouched. */
+/* POWER IRQ. Handle REMOVED here: TinyUSB's path also stops HFCLK, dropping TIMER1 to RC. */
 static void power_usb_event_handler(nrfx_power_usb_evt_t event)
 {
     if (event != NRFX_POWER_USB_EVT_REMOVED) {
@@ -72,8 +68,7 @@ void usb_init(void)
     nrfx_power_usbevt_init(&usb_cfg);
     nrfx_power_usbevt_enable();
 
-    /* Booting plugged in, DETECTED/READY fired before the IRQ was enabled: seed
-     * the dcd from the regulator status, as the TinyUSB nRF BSP does. */
+    /* Booted plugged in, DETECTED/READY fired before the IRQ: replay them from USBREGSTATUS. */
     uint32_t usbreg = NRF_POWER->USBREGSTATUS;
     if (usbreg & POWER_USBREGSTATUS_VBUSDETECT_Msk) {
         tusb_hal_nrf_power_event((uint32_t)NRFX_POWER_USB_EVT_DETECTED);
@@ -121,8 +116,7 @@ int usb_write(const char *s)
 
 int usb_host_present(void)
 {
-    /* Set by SET_CONFIGURATION, cleared on removal / bus reset. Unlike VBUS it
-     * stays false on a charger; unlike DTR it does not need the port opened. */
+    /* Configured by a host: false on a charger (unlike VBUS), no open port needed (unlike DTR). */
     return tud_mounted() ? 1 : 0;
 }
 
@@ -142,8 +136,7 @@ int usb_read_byte(void)
     return -1;
 }
 
-/* 1200-baud touch -> Adafruit UF2 bootloader: the host opens the port at 1200
- * baud and drops DTR (adafruit-nrfutil --touch 1200). */
+/* 1200-baud touch (open at 1200 baud, drop DTR) reboots into the Adafruit UF2 bootloader. */
 static uint32_t s_last_baud;
 
 void tud_cdc_line_coding_cb(uint8_t itf, cdc_line_coding_t const *coding)

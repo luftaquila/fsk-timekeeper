@@ -5,8 +5,7 @@ on:
     tags:
       - v*
 
-# Called workflows inherit at most these permissions (Pages deploy needs
-# pages/id-token; the release needs contents: write).
+# Called workflows get at most these (Pages: pages/id-token; release: contents: write).
 permissions:
   contents: write
   pages: write

@@ -1,6 +1,5 @@
-// Device log (IndexedDB `log`): X lines (noprov once per episode, not the badcmd answering ?KEY),
-// the reset reason of each new I identity, console and radio entries; kept 30 days and trimmed
-// to LOG_MAX_ENTRIES ("state" watermarks stay until they expire). Entry: { id, at, kind: "X"|"boot"|"console"|"radio"|"state", code, text, devid, masterBootId }.
+// Device log (IndexedDB `log`): { id, at, kind: "X"|"boot"|"console"|"radio"|"state", code, text,
+// devid, masterBootId }; kept 30 days, trimmed to LOG_MAX_ENTRIES ("state" stays until expiry).
 import { add, getAll, clear, removeByIndex, count, transaction, done } from "./idb";
 import * as eventLog from "./eventLog";
 import { LOG_RETENTION_MS, LOG_MAX_ENTRIES } from "./constants";
@@ -63,8 +62,7 @@ export async function pruneEntries(now = Date.now()) {
     req.onsuccess = () => {
       const cursor = req.result;
       if (!cursor || surplus <= 0) return;
-      // Keep the hidden Clear watermark until its 30-day expiry; otherwise
-      // replaying retained checkpoints could resurrect intentionally cleared logs.
+      // Keep the Clear watermark for its 30 days, or replayed checkpoints resurrect cleared logs.
       if (cursor.value.kind !== "state") {
         tx.objectStore(eventLog.STORE_LOG).delete(cursor.primaryKey);
         surplus--;

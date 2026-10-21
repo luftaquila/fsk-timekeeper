@@ -1,11 +1,6 @@
-/* Hardware timestamp capture on TIMER1 (DESIGN §2.4, §8).
- *
- * TIMER1 free-runs at 16 MHz (62.5 ns) and is extended to 64 bits in software.
- * GPIOTE -> PPI latches DIO1 (Tx/RxDone), SENSOR and GPS PPS edges into TIMER1
- * CC registers with no CPU latency; a 32-bit capture is widened against the
- * current time. capture_now64() must run at least once per ~268 s wrap.
- * Main-loop context except where noted.
- */
+/* TIMER1 hardware timestamps: 16 MHz (62.5 ns), extended to 64 bits in software. GPIOTE->PPI
+ * latches DIO1 (Tx/RxDone), SENSOR and GPS PPS into CC with no CPU latency; captures widen against
+ * now. capture_now64() must run at least once per ~268 s wrap. Main loop except where noted. */
 #ifndef CAPTURE_H
 #define CAPTURE_H
 
@@ -25,17 +20,14 @@ uint64_t capture_now64(void);
 /* Latest DIO1 rising edge since the last call (1), or none (0). */
 int capture_dio1_get(uint64_t *tick);
 
-/* Oldest SENSOR edge from the ring: capture seq (counts every edge, lost ones
- * included) and whether HFXO ran when it was taken. */
+/* Oldest ring edge: seq (counts every edge, lost ones too) and whether HFXO ran at capture. */
 int capture_sensor_get(uint64_t *tick, uint32_t *seq, int *clock_xtal);
-/* Edges missed by the ISR or dropped by the full ring, as a seq/tick range; it follows every edge
- * still in the ring. Drain with capture_sensor_get() first, then this, until
- * both return 0. UNKNOWN means the tick range must not be used. */
+/* Edges missed by the ISR or dropped by a full ring, as a seq/tick range after every ring edge.
+ * Drain capture_sensor_get() first, then this, until both return 0; UNKNOWN: ticks unusable. */
 #define CAPTURE_LOSS_KNOWN 1
 #define CAPTURE_LOSS_UNKNOWN 2
 int capture_sensor_loss(uint64_t *first_tick, uint64_t *last_tick, uint32_t *first_seq, uint32_t *last_seq);
-/* Now and the seq of the last edge; returns 1 only when no edge is pending
- * anywhere (ring, loss, latched event), i.e. the pair may be a checkpoint. */
+/* Now + last seq; 1 only with nothing pending (ring, loss, latched event): may be a checkpoint. */
 int capture_sensor_checkpoint(uint64_t *tick, uint32_t *seq);
 /* Missed/dropped hardware edges since boot (saturating diagnostic). */
 uint16_t capture_sensor_overflow(void);

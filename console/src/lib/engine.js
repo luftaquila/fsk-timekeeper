@@ -1,26 +1,23 @@
-/* Run engine: START snapshot, evidence evaluation and run states.
- *
- * A run is a plain JSON-able object:
+/* Run engine: START snapshot, evidence evaluation and run states. A run is plain JSON:
  * {
  *   schema, radioProto, usbProto, runId, mode: "sprint" | "laps", note,
  *   boundaryTick: string, masterBootId: string,
- *   nodes: { [node_id]: { boot, seq, role, cpSeq } },   // START checkpoint per mapped sensor
+ *   nodes: { [node_id]: { boot, seq, role, cpSeq } },  // START checkpoint per mapped sensor
  *   cursor: number,                                    // evidence = event-log rows with seq > cursor
  *   lapTarget: number|null, debounceMs: number,        // frozen at START
  *   armed, closed,
- *   stoppedClockDisplay?: string,                     // live timer snapshot at manual Stop, not the result
+ *   stoppedClockDisplay?: string,                      // timer snapshot at manual Stop, not the result
  *   verification: "pending" | "verified" | "invalid",
- *   classification: "DNS" | "DNF" | "DSQ" | null,    // explicit operator decision
+ *   classification: "DNS" | "DNF" | "DSQ" | null,      // explicit operator decision
  *   startTick, finishTick: string|null,                // sprint result S1, F1
- *   crossingTicks: string[], totalValid: boolean,       // laps: confirmed crossings C0..Ck
+ *   crossingTicks: string[], totalValid: boolean,      // laps: confirmed crossings C0..Ck
  *   calibration: null | frozen descriptor (calibration.js), durationNs: string|null,
  *   fault: null | { fault_id, mode, run_id, kind, occurred_at, reasons: [{ node_id, role, reason, lo, hi }] },
  *   masterSessionEnded: null | { reason },             // master reboot / version change seen while open
  *   gpsAtStart, startedUtc, startedAt, historyId, durable,
  * }
- * A result depends only on its own interval: sprint on start through S1 and finish through
- * F1, laps on the start role through the last lap. Holes elsewhere do not matter; a possible
- * missed crossing inside the interval keeps the result unconfirmed (fail-closed).
+ * A result depends only on its interval (sprint: start through S1, finish through F1; laps: the
+ * start role through the last lap); a possible missed crossing inside keeps it unconfirmed.
  */
 import { sensorStream, masterTimebaseEnd } from "./sensor-stream";
 import { roleStream } from "./role-stream";
@@ -143,14 +140,12 @@ function makeFault(run, reasons, kind, now) {
   };
 }
 
-// STOP closes collection and further verification, preserving the current result.
-// DNS/DNF are operator classifications, never inferred from stopping collection.
+// STOP ends collection and verification, keeping the current result; DNS/DNF are never inferred.
 export function stopRun(run) {
   return { ...run, armed: false, closed: true };
 }
 
-// The master's timebase is gone (reboot, version change): every sensor is uncertain beyond
-// what is already identified.
+// Master timebase gone (reboot, version change): all sensors uncertain beyond what is identified.
 export function endMasterSession(run, reason = MASTER_REBOOTED) {
   return run.masterSessionEnded ? run : { ...run, masterSessionEnded: { reason } };
 }
@@ -169,8 +164,7 @@ function reasonOf(cut) {
   return { node_id: hole.master ? "0" : cut.node_id, role: cut.role, reason, lo: tickText(hole.lo), hi: tickText(hole.hi) };
 }
 
-/* Evaluate a run against every stored row since its cursor. Pure. -> { run, crossings:
- * [{node_id, role, tick, confirmed}], laps: [{startTick, endTick, confirmed}], certain: {start, finish} } */
+// Evaluate a run on every stored row since its cursor (pure) -> { run, crossings, laps, certain }
 export function evaluateRun(run, rows, { now = Date.now() } = {}) {
   const boundary = BigInt(run.boundaryTick);
   const debounceTicks = BigInt(run.debounceMs) * MASTER_TICKS_PER_MS;
@@ -199,8 +193,7 @@ export function evaluateRun(run, rows, { now = Date.now() } = {}) {
     faultCuts = cuts;
   };
   const cutsBelow = (role, bound) => role.finalCuts.filter((c) => bound == null || c.cut < bound);
-  // A hole decides only once its role has settled: a sensor still behind may yet report the
-  // crossing the result needs, before the hole.
+  // Holes decide only once the role settled: a lagging sensor may still report the needed crossing.
   const cutBelow = (role, bound) => role.settled && (bound == null || role.finalCut < bound);
 
   if (run.mode === "laps") {
@@ -248,8 +241,7 @@ export function evaluateRun(run, rows, { now = Date.now() } = {}) {
     if (state === "invalid") startTick = null;
   }
 
-  // A verified sprint result does not close capture collection. Only Stop, a lost
-  // timebase, an invalid result, or an explicit lap target ends the run.
+  // A verified sprint stays open: only Stop, lost timebase, invalid result or lap target end it.
   const decided = state === "invalid" || sessionEnd != null ||
     (state === "verified" && run.mode === "laps" && run.lapTarget && crossingTicks.length === run.lapTarget + 1);
   let next = { ...run, verification: state, startTick, finishTick, crossingTicks, totalValid };

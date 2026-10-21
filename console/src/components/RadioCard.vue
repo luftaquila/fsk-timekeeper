@@ -61,7 +61,7 @@ function load(b) {
   lastResult.value = null;
 }
 
-// Load the settings when the board changes; a repeated I line from the same board (?ID, R) keeps edits.
+// Reload on a board change; a repeated I line from the same board (?ID, R) keeps edits.
 watch(() => device.identity?.devid, () => {
   if (board.value) load(board.value);
   else {

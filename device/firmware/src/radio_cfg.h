@@ -1,11 +1,6 @@
-/* Per-board radio settings: channel, output power and RSSI listen-before-talk.
- *
- * Set over USB (`R`, proto_usb.h) and kept in their own flash page just below
- * the key page (nrf52840_app.ld), so they survive firmware upgrades. A board
- * without stored settings uses the config.h defaults. Every board of a fleet
- * needs the same frequency; nothing on the air tells a board it is on another
- * channel.
- */
+/* Per-board radio settings, set over USB (`R`, proto_usb.h) in their own flash page below the key
+ * page (nrf52840_app.ld) so they survive firmware upgrades. Every board of a fleet needs the same
+ * frequency: nothing on the air tells a board it is on another channel. */
 #ifndef RADIO_CFG_H
 #define RADIO_CFG_H
 
@@ -20,7 +15,7 @@ extern "C" {
 typedef struct {
     uint32_t freq_khz;
     int8_t   power_dbm; /* conducted, at the SX1262 */
-    uint8_t  lbt;       /* 1: RSSI listen-before-talk (radio_lbt_listen) before every transmission */
+    uint8_t  lbt;       /* 1: RSSI listen-before-talk (radio_lbt_listen) before every TX */
 } radio_cfg_t;
 
 #define RADIO_CFG_DEFAULT { RADIO_DEF_FREQ_KHZ, RADIO_DEF_POWER_DBM, RADIO_DEF_LBT }
@@ -35,8 +30,7 @@ static inline int radio_cfg_valid(const radio_cfg_t *c)
 /* The stored settings, or the defaults when none are stored (or the page is corrupt). */
 void radio_cfg_load(radio_cfg_t *out);
 
-/* Erase + write the settings page. 0 on success, <0 on failure (verifies the
- * readback). Blocking (~90 ms page erase): provisioning path only. */
+/* Erase, write and verify the page: 0 or <0. Blocks (~90 ms page erase): provisioning path only. */
 int radio_cfg_write(const radio_cfg_t *c);
 
 #ifdef __cplusplus

@@ -1,7 +1,5 @@
-/* Error counters. Every failure path counts here; the master reports changes as
- * `X <code> <count>` lines (at most once per second per code) and every node
- * reports active radio faults and sticky non-radio ERR_* bits in diagnostics. Main loop
- * only (not ISR safe). */
+/* Every failure path counts here; main loop only. The master sends changes as `X <code> <count>`
+ * (max 1/s per code); each node's diagnostics carry active radio faults, sticky non-radio ERR_*. */
 #ifndef ERRLOG_H
 #define ERRLOG_H
 

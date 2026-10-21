@@ -1,8 +1,6 @@
-/* Fault handling. HardFault, MemManage, BusFault, UsageFault, NMI,
- * every unused interrupt vector and a hung radio save the fault PC/LR/cause in
- * RAM that survives a system reset, then reboot. More than FAULT_REBOOT_MAX consecutive fault
- * reboots halt the board with a fast LED blink (double-tap RST reaches the
- * bootloader). No watchdog: it would survive into the bootloader. */
+/* CPU faults, NMI, unused vectors and a hung radio save PC/LR/cause in reset-surviving RAM, then
+ * reboot; over FAULT_REBOOT_MAX consecutive fault reboots halt with a fast LED blink (double-tap
+ * RST reaches the bootloader). No watchdog: it would survive into the bootloader. */
 #ifndef FAULT_H
 #define FAULT_H
 
@@ -21,12 +19,10 @@ uint8_t fault_reset_reason(void);
 /* The fault that rebooted us, once; returns 0 when there is none to report. */
 int fault_take_report(uint32_t *pc, uint32_t *lr, const char **cause, uint32_t *cfsr);
 
-/* Call every main-loop pass: after FAULT_STABLE_MS of uptime the consecutive
- * fault count clears. */
+/* Call every main-loop pass; the consecutive fault count clears after FAULT_STABLE_MS uptime. */
 void fault_service(uint32_t uptime_ms);
 
-/* A wait that never ends (a hung radio): record it like a fault, with the
- * waiting code's address as PC, and reboot. */
+/* A never-ending wait (hung radio): record as a fault with the waiter's address as PC, reboot. */
 __attribute__((noreturn)) void fault_hang(uint32_t pc, uint32_t cause);
 
 /* ---- pure logic, exposed for host tests ---------------------------------- */
@@ -45,8 +41,7 @@ typedef struct {
 #define FAULT_CAUSE_IRQ   5u
 #define FAULT_CAUSE_RADIO 6u
 
-/* Boot evaluation of a record against RESETREAS; returns the RESET_* byte and
- * sets *report when a fault reboot is to be reported. */
+/* Evaluate the record against RESETREAS; returns RESET_*, sets *report for a fault reboot. */
 uint8_t fault_eval_boot(fault_rec_t *r, uint32_t resetreas, int *report);
 /* Record a fault; returns 1 when the board must halt instead of rebooting. */
 int fault_note(fault_rec_t *r, uint32_t pc, uint32_t lr, uint32_t cfsr, uint32_t cause);

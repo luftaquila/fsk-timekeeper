@@ -29,16 +29,14 @@ jobs:
             python3 \
             git
 
-      # The Makefile pins the dependency refs, so hashing it keys the cache on
-      # every pin at once.
+      # The Makefile pins the dependency refs, so its hash keys the cache on every pin.
       - name: Cache bare-metal deps
         uses: actions/cache@v5
         with:
           path: device/firmware/vendor
           key: nrf-deps-${{ hashFiles('device/firmware/Makefile') }}
 
-      # The USB `I` line reports the release tag as the firmware version
-      # unchanged (v1.2.3); builds without a tag report the Makefile default.
+      # USB `I` line version = the tag as is (v1.2.3); untagged builds use the Makefile default.
       - name: Version from tag
         if: github.ref_type == 'tag'
         run: echo "FW_VERSION=${GITHUB_REF_NAME}" >> "$GITHUB_ENV"
@@ -60,8 +58,7 @@ jobs:
           mkdir -p actions
           cp build/fsk-timekeeper.uf2 build/fsk-timekeeper.hex build/fsk-timekeeper.bin \
              build/fsk-timekeeper.elf build/fsk-timekeeper.map actions/
-          # Serial-DFU package for the Adafruit nRF52 bootloader. The hex is already
-          # linked at 0x26000 (S140 user-app base), so no offset conversion is needed.
+          # Adafruit nRF52 serial-DFU package; the hex is already linked at 0x26000 (S140 app base).
           pip install adafruit-nrfutil==0.5.3.post16
           adafruit-nrfutil dfu genpkg --dev-type 0x0052 \
             --application build/fsk-timekeeper.hex actions/fsk-timekeeper-dfu.zip

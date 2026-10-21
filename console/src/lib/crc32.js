@@ -1,5 +1,4 @@
-// CRC-32/IEEE (reflected 0xEDB88320, init and xorout 0xFFFFFFFF) of an ASCII string,
-// the checksum the master appends to every E line.
+// CRC-32/IEEE (reflected 0xEDB88320, init/xorout 0xFFFFFFFF) of ASCII text: the E line checksum.
 const TABLE = (() => {
   const table = new Uint32Array(256);
   for (let n = 0; n < 256; n++) {

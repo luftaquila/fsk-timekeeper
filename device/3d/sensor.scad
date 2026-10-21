@@ -1,24 +1,22 @@
-// PCB Housing — FSK Timekeeper (wireless LoRa timing node) — SENSOR variant (sensor I/O only, no light)
-// Board: 92 x 57 mm, corner r 3, 4x M2 mounting holes (86 x 51 rectangle),
-// all tall components on the TOP side (18650 holder dominates the cavity height).
+// PCB housing for the FSK Timekeeper, SENSOR variant (sensor I/O only, no light).
+// Board: 92 x 57 mm, corner r 3, 4x M2 holes on an 86 x 51 rectangle; all tall parts on TOP
+// (the 18650 holder sets the cavity height).
 //
-// Two parts:
-//   lid  (본체 하우징)  — fully-rounded outer shell (ALL edges filleted) + ceiling + 4 self-tapping
-//                         posts + connector cutouts + tripod boss. Open at the bottom.
-//   base (바닥판)        — plate that inserts UP into the bottom opening of the lid (tucked under),
-//                         carries the PCB on standoffs, fixed by the 4 screws into the lid posts.
+// Parts:
+//   lid  (본체 하우징) — fully-rounded shell + ceiling + 4 self-tapping posts + cutouts
+//                        + tripod boss; open at the bottom
+//   base (바닥판)      — plate inserted up into the lid's bottom opening; carries the PCB
+//                        on standoffs
+// Assembly: M2 self-tapping screws from outside the base bottom go through base + PCB into the
+// lid posts, pulling both up and seating the base flush in the opening.
 //
-// Assembly: M2 self-tapping screws inserted from OUTSIDE the base bottom pass through the
-// base plate + PCB and self-tap into the posts hanging from the lid ceiling, pulling the
-// base + PCB up against the posts and seating the base flush in the lid's bottom opening.
-//
-// Wall features (SENSOR):
-//   - left (-X): centred SMA antenna
-//   - right (+X): tripod mount at the original position
-//   - front (-Y): USB-C, J1 sensor and power toggle
-//   - back (+Y): blank
-// Coordinate frame: PCB centred at XY origin; Z=0 at assembly bottom.
-// Current KiCad centre: (147.1648, 98.03); model = (boardX-cx, cy-boardY).
+// Walls (SENSOR):
+//   left  (-X): centred SMA antenna
+//   right (+X): tripod mount at its original position
+//   front (-Y): USB-C, J1 sensor and power toggle
+//   back  (+Y): blank
+// Frame: PCB centred at the XY origin, Z=0 at the assembly bottom.
+// KiCad board centre (147.1648, 98.03); model = (boardX-cx, cy-boardY).
 
 /* [Rendering] */
 part = "exploded";   // [base, lid, both, assembled, exploded]
@@ -42,7 +40,7 @@ base_th = 3;       // base plate thickness (>= edge_r so its bottom edge can be 
 pcb_clear = 0.5;   // gap between PCB edge and wall inner face
 standoff_h = 2.5;  // PCB bottom height above base top
 edge_r = 2.5;      // fillet radius for ALL outer edges of the body
-batt_h = 21;       // PCB TOP to installed CELL TOP; retained at user-specified 21 mm
+batt_h = 21;       // PCB TOP to installed CELL TOP (user-specified)
 ra01_h = 6;        // assumed module height above PCB
 gps_h = 6.5;       // installed GPS height above PCB TOP
 
@@ -71,8 +69,7 @@ head_h = 2;            // counterbore depth
 base_fit = 0.3;        // base clearance per side inside the lid bottom opening
 
 /* [J1 cutout — front/-Y wall] */
-// J1 at (132.724,115.63), rotated 180 degrees. Body local X=-2.7..6.9.
-// Use body centre +2.1, not the footprint origin. No J2 on the current PCB.
+// J1 at (132.724,115.63), rotated 180; use body centre +2.1 (local X=-2.7..6.9), not origin.
 molex_x = 132.724 - 2.1 - pcb_cx;
 molex_front_y = pcb_cy - (115.63 + 13.9);
 molex_cut_w = 11;
@@ -81,8 +78,7 @@ molex_latch_w = 4;
 molex_latch_h = 4.5;
 
 /* [USB-C cutout — front/-Y wall] */
-// U1 at (154.74401,124.704948), rotated 180 degrees.
-// USB outline local X=3.12001..12.11999 -> centre 7.62.
+// U1 at (154.74401,124.704948), rotated 180; USB outline local X=3.12001..12.11999 -> centre 7.62.
 usb_x = 154.74401 - 7.62 - pcb_cx;
 usb_front_y = pcb_cy - (124.704948 + 1.95244);
 usb_cut_w = 13;
@@ -93,21 +89,17 @@ usb_above_bot = 6.4;       // measured port centre above PCB BOTTOM
 sw_d = 6;
 sw_post_gap = 0.5;         // body clearance to the adjacent corner mounting post
 sw_z = 19;                // centre of mounting hole
-// MTS-102 manufacturer drawing: https://www.piekarz.pl/pdf/51315/
-// Mounted long side along X, bushing axis along Y, short side along Z.
+// MTS-102 (drawing: https://www.piekarz.pl/pdf/51315/): long side X, bushing axis Y, short Z.
 sw_body_x = 13.2;
 sw_body_y = 9.5;
 sw_body_z = 7.9;
 sw_terminal_l = 4;
 sw_body_setback = 0;       // body flush against inner wall; increase for an inner nut
-// sw_x places the body next to the corner post with sw_post_gap clearance.
 
 /* [SMA antenna — centre of left wall] */
 ant_d = 6.5;
 
 /* [Tripod mount — right/+X wall] */
-// Keep the original position. GPS is 6.5 mm above PCB; the box starts
-// 8 mm above PCB, leaving 1.5 mm vertical clearance over the GPS module.
 tri_box_w = 12;
 tri_y = -1.5;
 tri_box_d = 10;
@@ -132,15 +124,15 @@ base_r = inner_r - base_fit;
 
 pcb_bot_z = base_th + standoff_h;    // PCB underside
 pcb_top_z = pcb_bot_z + pcb_th;      // PCB top surface
-usb_z     = pcb_bot_z + usb_above_bot;   // USB-C port centre Z (measured from the PCB bottom face)
-// height: max of battery, latch-slot reach, and "tripod bore at face centre while its box clears the Ra-01"
+usb_z     = pcb_bot_z + usb_above_bot;   // USB-C port centre Z
+// height: max of battery, latch-slot reach, and a face-centred tripod bore whose box clears Ra-01
 cavity    = max(batt_h + tri_gap, molex_cut_h + molex_latch_h + 2, 2*(pcb_top_z + ra01_h + 4 + tri_pilot_d/2) - pcb_top_z - lid_th);
 ceil_z    = pcb_top_z + cavity;      // lid inner ceiling
 outer_h   = ceil_z + lid_th;         // overall height
 post_len  = ceil_z - pcb_top_z;      // = cavity
 
-tri_hole_z  = outer_h/2;                          // 1/4" bore at the vertical CENTRE of the right face
-tri_box_bot = pcb_top_z + ra01_h + 2;             // original height: 8 mm above PCB, clears GPS by 1.5 mm
+tri_hole_z  = outer_h/2;                          // 1/4" bore, vertical centre of the right face
+tri_box_bot = pcb_top_z + ra01_h + 2;             // 8 mm above PCB, clears GPS by 1.5 mm
 ant_y       = 0;
 ant_z       = outer_h/2;
 // Exclude the corner post from the usable space on J1's side away from USB.
@@ -178,10 +170,10 @@ module rbox_all(l,w,h,vr,er) {
     }
 }
 
-// self-tapping posts (ceiling -> PCB top) at original post_d, integrated into the corners.
-// post_style: "corner" = post embedded in a solid filled corner pad (rounded cavity edge);
-//             "rib"    = post cylinder + two slim ribs to the adjacent walls;
-//             "plain"  = bare cylinder.
+// Self-tapping posts (ceiling -> PCB top) in the corners; post_style:
+//   "corner" = post in a solid corner pad (rounded cavity edge)
+//   "rib"    = cylinder + two slim ribs to the adjacent walls
+//   "plain"  = bare cylinder
 module posts() {
     if (post_style == "rib") {
         for (p=mount_pos) {
@@ -215,9 +207,7 @@ module tripod_box() {
         cube([tri_box_d, tri_box_w, ceil_z - tri_box_bot + eps]);
 }
 
-// One broad central saddle stops upward cell movement, clear of both terminals.
-// Trim both print-top shoulders at one constant Z plane. No bevel or fillet.
-// The centre retains the original battery-contact arc and contact height.
+// Central saddle stops upward cell movement; flat-trimmed shoulders, centre keeps the contact arc.
 module battery_block() {
     flat_z = batt_block_bot + batt_top_trim;
     assert(batt_top_trim > 0 && batt_top_trim < batt_block_wrap,
@@ -230,17 +220,14 @@ module battery_block() {
     }
 }
 
-// ============================================================
-//  LID  (본체 하우징) — fully-rounded shell, open bottom
-// ============================================================
+// ---------- LID (본체 하우징): fully-rounded shell, open bottom ----------
 module lid() {
     difference() {
         union() {
             difference() {
                 rbox_all(outer_l, outer_w, outer_h, outer_r, edge_r);          // fully-rounded body
-                translate([0,0,-eps]) rbox(inner_l, inner_w, ceil_z+eps, inner_r); // cavity (open bottom)
+                translate([0,0,-eps]) rbox(inner_l, inner_w, ceil_z+eps, inner_r); // cavity
             }
-            // self-tapping posts (fused to corners) + ceiling-integrated tripod box
             posts();
             tripod_box();
             battery_block();
@@ -249,28 +236,26 @@ module lid() {
         // post pilot bores
         for (p=mount_pos) translate([p[0],p[1],pcb_top_z-eps]) cylinder(h=post_pilot_depth, d=post_pilot_d);
 
-        // J1 front-wall aperture and latch slot; rotate the old side opening by 90 degrees.
+        // J1 front-wall aperture and latch slot
         translate([molex_x-molex_cut_w/2, -outer_w/2-eps, pcb_top_z-0.5])
             cube([molex_cut_w, wall+pcb_clear+1+eps, molex_cut_h+0.5]);
         translate([molex_x-molex_latch_w/2, -outer_w/2-eps, pcb_top_z-0.5+molex_cut_h])
             cube([molex_latch_w, wall+pcb_clear+1+eps, molex_latch_h]);
-        // USB-C (-Y wall) — opening with r=1 rounded corners, centred at usb_z
+        // USB-C opening (-Y wall)
         translate([usb_x, -inner_w/2+eps, usb_z])
             rotate([90,0,0])
                 linear_extrude(wall+pcb_clear+1+eps) rrect(usb_cut_w, usb_cut_h, 1);
         // toggle switch bushing (-Y wall, left, clear of the Molex)
         translate([sw_x, -inner_w/2+eps, sw_z]) rotate([90,0,0])
             cylinder(h=wall+pcb_clear+1+eps, d=sw_d);
-        // SMA antenna bulkhead at the horizontal and vertical centre of the left wall
+        // SMA antenna bulkhead, centre of the left wall
         xcyl(-outer_l/2-eps, ant_y, ant_z, wall+pcb_clear+1+2*eps, ant_d);
-        // tripod self-tap pilot (+X / right wall, blind, horizontal into the box, centred Y)
+        // tripod self-tap pilot (+X wall, blind, horizontal into the box)
         xcyl(outer_l/2 - tri_depth - eps, tri_y, tri_hole_z, tri_depth + 2*eps, tri_pilot_d);
     }
 }
 
-// ============================================================
-//  BASE  (바닥판) — plugs the bottom opening, rounded bottom edge
-// ============================================================
+// ---------- BASE (바닥판): flat plate plugging the bottom opening ----------
 module base() {
     difference() {
         union() {
@@ -287,10 +272,7 @@ module base() {
     }
 }
 
-// ============================================================
-//  REFERENCE (assembled / exploded views)
-// ============================================================
-// PCB + 18650 cell reference — drawn ONLY in F5 preview ($preview); never in F6 render / STL export
+// ---------- REFERENCE: F5 preview only ($preview), never in F6 render / STL export ----------
 module pcb_ref() {
     if ($preview) {
         color([0,0.45,0.15,0.55]) translate([0,0,pcb_bot_z]) rbox(pcb_l,pcb_w,pcb_th,pcb_r);
@@ -311,7 +293,6 @@ module pcb_ref() {
 }
 
 // The switch belongs to the lid, so it follows the lid in exploded/print views.
-// Preview only: never fuse this reference body or its terminals into exported STL.
 module switch_ref() {
     if ($preview) {
         body_y = -inner_w/2 + sw_body_setback;
@@ -330,12 +311,10 @@ module lid_view() {
     if (show_switch) switch_ref();
 }
 
-// ============================================================
-//  RENDER
-// ============================================================
+// ---------- RENDER ----------
 if (part=="base") base();
 else if (part=="lid")
-    translate([0,0,outer_h]) rotate([180,0,0]) lid_view();          // flipped onto its ceiling for printing
+    translate([0,0,outer_h]) rotate([180,0,0]) lid_view();          // flipped ceiling-down to print
 else if (part=="both") {
     translate([-(outer_l/2+8),0,0]) base();
     translate([ (outer_l/2+8),0,outer_h]) rotate([180,0,0]) lid_view();

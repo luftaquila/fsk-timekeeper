@@ -1,8 +1,6 @@
-/* Hang check for RadioLib's BUSY loops (radio_hal.cpp). RadioLib calls yield()
- * on every turn of a loop that polls the radio's BUSY line, and two of those
- * loops have no timeout (the calibration wait in begin(), the PA ramp wait after
- * SetTx). BUSY staying high for a whole limit with no SPI transfer and within
- * one radio call means the radio hung. Pure logic, host-tested. */
+/* Hang check for RadioLib's BUSY loops, polled from yield() (radio_hal.cpp); two have no timeout
+ * (begin()'s calibration wait, the PA ramp wait after SetTx). BUSY high for a whole limit in one
+ * radio call with no SPI transfer means the radio hung. Pure logic, host-tested. */
 #ifndef HANG_GUARD_H
 #define HANG_GUARD_H
 

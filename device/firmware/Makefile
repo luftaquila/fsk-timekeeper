@@ -1,16 +1,14 @@
-# fsk-timekeeper nRF52840 firmware (SuperMini nRF52840 + Ra-01SH).
+# fsk-timekeeper firmware (SuperMini nRF52840 + Ra-01SH).
 #
-#   make                 build; clones the pinned dependencies into vendor/ on first run
-#   make clean           remove build/
-#   make distclean       remove build/ and vendor/
-#   FW_VERSION=v1.2.3 make   version reported on the USB `I` line (CI passes the release tag)
-#   make test              host tests: GPS, sync, queues, MAC simulator, radio, USB lines, tools
-#                          (C11/C++17 host compilers and python3, no ARM deps)
+#   make                     build; clones the pinned dependencies into vendor/ on first run
+#   make clean               remove build/
+#   make distclean           remove build/ and vendor/
+#   FW_VERSION=v1.2.3 make   version on the USB `I` line (CI passes the release tag)
+#   make test                host tests (C11/C++17 compilers and python3, no ARM toolchain)
 #
-# One binary for every board: the role is chosen at runtime (master when a PC
-# enumerates the USB device, sensor otherwise; src/main.c). The fleet key is not
-# compiled in — it is provisioned per board over the serial `K` command into a
-# reserved flash page (src/keystore.c), so this build is safe to publish from CI.
+# One binary for every board: master when a PC enumerates its USB, sensor otherwise (src/main.c).
+# The fleet key is provisioned over USB (`K`, src/keystore.c), never compiled in, so CI builds are
+# safe to publish.
 
 TARGET     := fsk-timekeeper
 FW_VERSION ?= v1.0.0
@@ -38,7 +36,6 @@ OBJCOPY := $(PREFIX)objcopy
 SIZE    := $(PREFIX)size
 
 # ---- sources -----------------------------------------------------------------
-# Ours: full warnings.
 APP_C := \
 	src/main.c src/board.c src/meas.c src/capture.c src/crc32.c src/errlog.c \
 	src/fault.c src/power.c src/secure.c src/entropy.c src/nvmc.c src/keystore.c \
@@ -47,8 +44,7 @@ APP_C := \
 	src/master_queue.c src/registry.c src/mac_sensor.c src/mac_master.c src/master_admission.c
 APP_CXX := src/radio_hal.cpp src/radio.cpp src/runtime.cpp
 
-# Vendored: warnings off. RadioLib is built whole (non-Arduino mode, our HAL);
-# unused modules are dropped by --gc-sections. TinyUSB: CDC-ACM device on nRF5x.
+# Vendored: warnings off. RadioLib is built whole; --gc-sections drops unused modules.
 VEND_C := \
 	$(MDK)/system_nrf52840.c \
 	$(NRFX)/drivers/src/nrfx_power.c \
@@ -81,13 +77,10 @@ COMMON   := $(MCU) $(OPT) -ffunction-sections -fdata-sections $(INC) $(DEFS) -MM
 CFLAGS   := $(COMMON) -std=gnu11
 # Bare-metal C++ for RadioLib: drop the parts that need a hosted runtime.
 CXXFLAGS := $(COMMON) -std=gnu++17 -fno-exceptions -fno-rtti -fno-threadsafe-statics -fno-use-cxa-atexit
-# 4 KB heap (RadioLib's short-lived SPI buffers) keeps data + heap below the
-# retained fault block at 0x20007E00 (linker/nrf52840_app.ld).
+# 4 KB heap (RadioLib's short-lived SPI buffers) keeps data + heap below .retained (0x20007E00).
 ASFLAGS  := $(MCU) -x assembler-with-cpp -DNRF52840_XXAA -D__HEAP_SIZE=4096
 
-# newlib (nano) + nosys stubs; the linker script places the app at 0x26000
-# (S140 user-app base) and INCLUDEs nrf_common.ld from the MDK. C++ objects
-# need the C++ driver so libstdc++ (nano) is linked.
+# newlib-nano + nosys stubs; the linker script places the app at 0x26000 (S140 app base).
 LDSCRIPT := linker/nrf52840_app.ld
 LDFLAGS  := $(MCU) -T $(LDSCRIPT) -L$(MDK) --specs=nano.specs --specs=nosys.specs \
 	-Wl,--gc-sections -Wl,--undefined=fsk_firmware_metadata -Wl,-Map=$(BUILD)/$(TARGET).map -Wl,--print-memory-usage
@@ -105,15 +98,13 @@ $(BUILD)/$(TINYUSB)/src/portable/nordic/nrf5x/dcd_nrf5x.o: CFLAGS += -include sr
 # ---- targets -----------------------------------------------------------------
 .PHONY: all build deps test clean distclean FORCE
 
-# Dependencies are cloned first, then make re-reads this file so the RadioLib
-# source glob sees them.
+# Clone the pinned deps into vendor/ first, then re-run make so the RadioLib source glob sees them.
 all: deps
 	@$(MAKE) --no-print-directory build
 
 build: $(BUILD)/$(TARGET).uf2 $(BUILD)/$(TARGET).hex $(BUILD)/$(TARGET).bin
 
-# Rewrite only when the build identity changes; incremental version changes must
-# rebuild the USB version string and embedded package metadata together.
+# Rewritten only on an identity change; a new version rebuilds USB string and metadata together.
 $(BUILD)/firmware_info.h: FORCE tools/firmware_metadata.py src/protocol.h src/proto_usb.h
 	python3 tools/firmware_metadata.py header --version '$(FW_VERSION)' --output $@
 
@@ -158,7 +149,7 @@ $(BUILD)/$(TARGET).bin: $(BUILD)/$(TARGET).elf
 $(BUILD)/$(TARGET).hex: $(BUILD)/$(TARGET).elf
 	$(OBJCOPY) -O ihex $< $@
 
-# UF2 for the Adafruit nRF52 bootloader drive (family 0xADA52840, app at 0x26000).
+# UF2 for the Adafruit nRF52 bootloader drive.
 $(BUILD)/$(TARGET).uf2: $(BUILD)/$(TARGET).bin tools/bin2uf2.py
 	python3 tools/bin2uf2.py --base 0x26000 --family 0xADA52840 $< $@
 

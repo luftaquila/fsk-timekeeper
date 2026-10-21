@@ -5,12 +5,10 @@
 #include "gpio.h"
 #include "nrf.h"
 
-/* App is linked at the S140 v6 user-app base (0x26000); point the core at our
- * vector table so interrupts dispatch to us, not the SoftDevice's. */
+/* App linked at the S140 v6 user-app base (0x26000): use our vector table, not the SoftDevice's. */
 #define APP_VECTOR_BASE 0x00026000UL
 
-/* TIMER1 (the capture timebase) inherits the HFCLK source's accuracy: HFINT is
- * only ~1 %, so every role runs on the crystal. */
+/* TIMER1 inherits HFCLK accuracy and HFINT is only ~1 %, so every role runs on the crystal. */
 static int hfclk_is_xtal(void)
 {
     return (NRF_CLOCK->HFCLKSTAT & CLOCK_HFCLKSTAT_STATE_Msk) &&
@@ -20,9 +18,8 @@ static int hfclk_is_xtal(void)
 
 static void hfclk_init(void)
 {
-    /* The bootloader may hand off with HFXO already running; HFCLKSTART then
-     * raises no new HFCLKSTARTED event, so only start it when needed, and bound
-     * the wait so a dead crystal cannot hang USB provisioning. */
+    /* The bootloader may leave HFXO running (then HFCLKSTART raises no HFCLKSTARTED), so start
+     * only when needed; the wait is bounded so a dead crystal cannot hang USB provisioning. */
     if (hfclk_is_xtal()) {
         return;
     }
@@ -92,8 +89,7 @@ uint32_t board_millis(void)
     return (uint32_t)(elapsed / 1000u);
 }
 
-/* The CPU stalls during NVMC operations (a page erase ~85 ms); the bound only
- * catches a controller that never reports ready. */
+/* The CPU stalls during NVMC ops (page erase ~85 ms); the bound only catches a never-ready NVMC. */
 static int nvmc_wait(void)
 {
     for (uint32_t i = 0; i < 20000000u; i++) {
@@ -103,9 +99,8 @@ static int nvmc_wait(void)
     return 0;
 }
 
-/* P0.09/P0.10 (GPS PPS/TXD) are NFC pins until UICR.NFCPINS.PROTECT is cleared: clear it
- * once, verify and reset (a failed write boots without GPS, no loop). App DFU never erases
- * UICR. Must precede every other pin setup. */
+/* P0.09/P0.10 (GPS PPS/TXD) are NFC pins until UICR.NFCPINS.PROTECT clears (app DFU keeps UICR):
+ * clear once, verify, reset (a failed write boots without GPS, no loop). Before any pin setup. */
 static void nfc_pins_as_gpio(void)
 {
     if ((NRF_UICR->NFCPINS & UICR_NFCPINS_PROTECT_Msk) == 0) {

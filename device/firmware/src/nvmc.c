@@ -3,8 +3,7 @@
 #include "errlog.h"
 #include "nrf.h"
 
-/* The CPU stalls during NVMC operations; the bound only catches a controller
- * that never reports ready. */
+/* The CPU stalls during NVMC operations; the bound only catches a never-ready controller. */
 static int nvmc_wait(void)
 {
     for (uint32_t i = 0; i < 20000000u; i++) {

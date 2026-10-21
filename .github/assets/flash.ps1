@@ -1,13 +1,11 @@
-# Flash the fsk-timekeeper firmware over the Adafruit nRF52 bootloader's serial DFU.
+# Flash the firmware over the Adafruit nRF52 bootloader's serial DFU.
 #
 #   .\flash.ps1 [-Serial <devid>] [COMx]
 #
-# Finds the board by itself. A board running the FSK-WL app is rebooted into the
-# bootloader first (1200-baud touch); a board that is already in the bootloader
-# (new board, or after a double-tap on RST) is flashed directly. With several
-# boards plugged in, -Serial picks the board whose USB serial number is the given
-# chip id (the 16 hex digits of its `I` line); the bootloader reports it too. An
-# app from before chip-id serials reports 0001 instead.
+# An app board is rebooted into the bootloader first (1200-baud touch); a board already in the
+# bootloader (new, or after a double-tap on RST) is flashed directly. -Serial picks one of several
+# boards by chip id (the 16 hex digits of its `I` line), which the app and the bootloader both
+# report as USB serial number; apps from before chip-id serials report 0001.
 param(
     [string]$Port = "",
     [string]$Serial = ""
@@ -15,8 +13,7 @@ param(
 $ErrorActionPreference = "Stop"
 Set-Location -Path $PSScriptRoot
 
-# The app is a composite USB device: its COM port is an interface child whose
-# parent instance id is USB\VID_1999&PID_0515\<serial>.
+# Composite device: the COM port's parent instance id is USB\VID_1999&PID_0515\<serial>.
 function Get-UsbSerial($pnpId) {
     try {
         $parent = (Get-PnpDeviceProperty -InstanceId $pnpId -KeyName 'DEVPKEY_Device_Parent').Data
@@ -28,7 +25,7 @@ function Get-UsbSerial($pnpId) {
 
 $ports = @(Get-CimInstance Win32_SerialPort)
 $apps = @($ports | Where-Object { $_.PNPDeviceID -like "*VID_1999&PID_0515*" })
-$boots = @($ports | Where-Object { $_.PNPDeviceID -like "*VID_239A*" })   # Adafruit nRF52 bootloader
+$boots = @($ports | Where-Object { $_.PNPDeviceID -like "*VID_239A*" })  # Adafruit nRF52 bootloader
 if ($Serial) {
     $apps = @($apps | Where-Object { (Get-UsbSerial $_.PNPDeviceID) -eq $Serial.ToUpper() })
     $boots = @($boots | Where-Object { (Get-UsbSerial $_.PNPDeviceID) -eq $Serial.ToUpper() })
