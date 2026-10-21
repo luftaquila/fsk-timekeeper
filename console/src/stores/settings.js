@@ -8,7 +8,7 @@ const KEY = "tk.settings.v2";
 
 function defaults() {
   return {
-    mapping: {}, // NODE8HEX -> { role, note }; unused excludes a sensor from timing
+    mapping: {}, // NODE8HEX -> { role, note }; one sensor per role, unused excludes a sensor from timing
     removedSensors: [], // removed while missing (mapping cleared); hidden until D is OK/STALE again
     mode: "sprint",
     lapTarget: null,
@@ -34,7 +34,8 @@ function load() {
       if (saved.mapping && typeof saved.mapping === "object") {
         for (const [node, m] of Object.entries(saved.mapping)) {
           if (!validateNodeId(node) || !m || !ROLES.includes(m.role)) continue;
-          base.mapping[node.toUpperCase()] = { role: m.role, note: typeof m.note === "string" ? m.note : "" };
+          const taken = m.role !== "unused" && Object.values(base.mapping).some((other) => other.role === m.role);
+          base.mapping[node.toUpperCase()] = { role: taken ? "unused" : m.role, note: typeof m.note === "string" ? m.note : "" };
         }
       }
       if (MODES.includes(saved.mode)) base.mode = saved.mode;
@@ -86,6 +87,8 @@ export const useSettingsStore = defineStore("settings", () => {
     if (!validateNodeId(id) || id === "0") throw new Error("Invalid node id.");
     if (!ROLES.includes(role)) throw new Error("Invalid role.");
     restoreSensor(id);
+    // One sensor per role: the role moves here from any other sensor.
+    if (role !== "unused") for (const other of Object.values(state.mapping)) if (other.role === role) other.role = "unused";
     state.mapping[id] = { role, note: String(note ?? "") };
   }
 

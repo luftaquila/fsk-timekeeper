@@ -19,7 +19,7 @@ export function spanNs(run, a, b, source = null) {
   return durationNs(pointsFor(run, [a, b], source), a, b);
 }
 
-// The result: sprint F1 − S1; laps last − first confirmed crossing, void once a loss made it invalid.
+// The result: sprint F1 − S1; laps last − first crossing, void once a loss made it invalid.
 export function resultNs(run, source = null) {
   if (!run) return null;
   if (run.durationNs != null) return BigInt(run.durationNs);
@@ -37,7 +37,7 @@ export function frozenDurationNs(run) {
   return ns == null ? null : String(ns);
 }
 
-// Confirmed laps (ns, bigint) of a laps run; the confirmed ones only, also for an invalid run.
+// Laps (ns, bigint) of a laps run; for an invalid run, the laps before the loss.
 export function lapsNs(run, source = null) {
   if (!run) return [];
   const c = run.crossingTicks || [];

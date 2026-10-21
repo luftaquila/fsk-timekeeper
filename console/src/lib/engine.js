@@ -3,7 +3,7 @@
  * {
  *   schema, radioProto, usbProto, runId, mode: "sprint" | "laps", note,
  *   boundaryTick: string, masterBootId: string,
- *   nodes: { [node_id]: { boot, seq, role, cpSeq } },  // START checkpoint per mapped sensor
+ *   nodes: { [node_id]: { boot, seq, role, cpSeq } },  // START checkpoint per mapped sensor, one per role
  *   cursor: number,                                    // evidence = event-log rows with seq > cursor
  *   lapTarget: number|null, debounceMs: number,        // frozen at START
  *   armed, closed,
@@ -11,7 +11,7 @@
  *   verification: "pending" | "verified" | "invalid",   // the latest evaluation, also once recorded
  *   classification: "DNS" | "DNF" | "DSQ" | null,      // explicit operator decision
  *   startTick, finishTick: string|null,                // sprint result S1, F1
- *   crossingTicks: string[],                           // laps: confirmed crossings C0..Ck
+ *   crossingTicks: string[],                           // laps: crossings C0..Ck
  *   calibration: null | frozen descriptor (calibration.js), durationNs: string|null,
  *   fault: null | { fault_id, mode, run_id, kind, occurred_at, reasons: [{ node_id, role, reason, lo, hi }] },
  *   masterSessionEnded: null | { reason },             // master reboot / version change seen while open
@@ -19,14 +19,14 @@
  *   recordedAt: number|null,                           // wall ms the result was first decided
  *   masterDevId: string|null,                          // master chip id at START
  *   throughSeq: number,                                // last event-log seq evaluated
- *   finalizeAt?, calibrationEdges?,                    // PPS freeze deadline/edges until frozen
  *   imported?, evidenceSeqs?,                          // backup import: flag, remapped evidence seqs
  * }
- * A result depends only on its interval (sprint: start through S1, finish through F1; laps: the
- * start role through the last lap); a possible missed crossing inside keeps it unconfirmed.
+ * A crossing counts as soon as it is received; nothing waits for another report, since its
+ * sensor's earlier records are all in by then. A hole that may hide a crossing the result needs
+ * makes the run invalid once its end is known. A capture out of order opens such a hole below the
+ * crossings already taken and withdraws them.
  */
-import { sensorStream, masterTimebaseEnd } from "./sensor-stream";
-import { roleStream } from "./role-stream";
+import { sensorStream, acceptCrossings, masterTimebaseEnd } from "./sensor-stream";
 import { FLAG_HEALTHY, FLAG_TIME_UNKNOWN, RADIO_PROTO_VERSION, USB_PROTO_VERSION } from "./protocol";
 import { MASTER_TICKS_PER_MS } from "./event-timing";
 import { WIRELESS_STATUS_MAX_AGE_MS, DEFAULT_DEBOUNCE_MS, RESULT_CLASSIFICATIONS, MODES } from "./constants";
@@ -130,7 +130,7 @@ export function createClassifiedRun({ mode, note = "", classification, cursor = 
   };
 }
 
-// A decided result: sprint S1 and F1 confirmed; laps at least one confirmed lap once not pending.
+// A decided result: sprint S1 and F1; laps at least one lap once not pending.
 function hasResult(run) {
   return run.mode === "laps" ? run.verification !== "pending" && run.crossingTicks.length >= 2 : run.verification === "verified";
 }
@@ -175,84 +175,70 @@ function tickText(v) {
 }
 
 function reasonOf(cut) {
-  const hole = cut.hole || {};
+  const hole = cut.cutHole || {};
   const reason = hole.master ? hole.reason : `Sensor ${cut.node_id}: ${hole.reason}`;
   return { node_id: hole.master ? "0" : cut.node_id, role: cut.role, reason, lo: tickText(hole.lo), hi: tickText(hole.hi) };
 }
 
-// Evaluate a run on every stored row since its cursor (pure) -> { run, crossings, laps, certain }
+// Evaluate a run on every stored row since its cursor (pure) -> { run, crossings, laps }
 export function evaluateRun(run, rows, { now = Date.now() } = {}) {
   const boundary = BigInt(run.boundaryTick);
   const debounceTicks = BigInt(run.debounceMs) * MASTER_TICKS_PER_MS;
   const timebaseEnd = masterTimebaseEnd(run, rows);
   const sessionEnd = run.masterSessionEnded?.reason || (timebaseEnd != null ? MASTER_TIMEBASE_ENDED : null);
   const streams = Object.keys(run.nodes).map((node) => sensorStream(run, node, rows, { sessionEnd }));
-  const members = (role) => streams.filter((stream) => stream.role === role);
-
-  const startRole = roleStream(members("start"), { after: boundary - 1n, debounceTicks });
-  const starts = startRole.accepted;
-  const display = [];
-  const push = (list, role, certain) => {
-    for (const c of list) display.push({ node_id: c.node_id, role, tick: String(c.tick), confirmed: c.tick <= certain });
+  // The role's sensor: its crossings above `after` and the first hole that may hide one.
+  const role = (name, after) => {
+    const stream = streams.find((s) => s.role === name);
+    return { node_id: stream.node_id, role: name, ...acceptCrossings(stream, { after, debounceTicks }) };
   };
-  push(starts, "start", startRole.certain);
+  const crossings = [];
+  const show = (r) => {
+    for (const tick of r.accepted) crossings.push({ node_id: r.node_id, role: r.role, tick: String(tick) });
+  };
 
   let state = "pending";
-  let faultCuts = null;
+  let faultCut = null;
   let startTick = null;
   let finishTick = null;
   let crossingTicks = [];
-  let finishCertain = null;
-  const invalid = (cuts) => {
+  const invalid = (r) => {
     state = "invalid";
-    faultCuts = cuts;
+    faultCut = r;
   };
-  const cutsBelow = (role, bound) => role.finalCuts.filter((c) => bound == null || c.cut < bound);
-  // Holes decide only once the role settled: a lagging sensor may still report the needed crossing.
-  const cutBelow = (role, bound) => role.settled && (bound == null || role.finalCut < bound);
 
+  const start = role("start", boundary - 1n);
+  show(start);
   if (run.mode === "laps") {
-    const confirmed = starts.filter((c) => c.tick <= startRole.certain).map((c) => String(c.tick));
+    const ticks = start.accepted.map(String);
     const target = run.lapTarget;
-    crossingTicks = confirmed;
-    if (target && confirmed.length >= target + 1) {
+    crossingTicks = ticks;
+    if (target && ticks.length >= target + 1) {
       state = "verified";
-      crossingTicks = confirmed.slice(0, target + 1);
-    } else if (cutBelow(startRole, null)) {
-      invalid(cutsBelow(startRole, null));
-    } else if (confirmed.length >= 2 && !startRole.cuts.length) {
+      crossingTicks = ticks.slice(0, target + 1); // crossings past the target are no laps
+    } else if (start.final) {
+      invalid(start);
+    } else if (ticks.length >= 2 && start.cut == null) {
       state = "verified"; // so far: the run stays open until its target or Stop
     }
   } else {
-    const s1 = starts[0]?.tick ?? null;
-    let s1Final = false;
-    if (s1 != null) {
-      if (s1 <= startRole.certain) s1Final = true;
-      else if (cutBelow(startRole, s1)) invalid(cutsBelow(startRole, s1));
-    } else if (cutBelow(startRole, null)) {
-      invalid(cutsBelow(startRole, null));
-    }
-    // Finish edges at or before the first start are dropped before debouncing (no warning).
-    if (s1 != null) {
-      const finishRole = roleStream(members("finish"), { after: s1, debounceTicks });
-      const finishes = finishRole.accepted;
-      push(finishes, "finish", finishRole.certain);
-      finishCertain = finishRole.certain;
-      if (s1Final) {
-        startTick = String(s1);
-        const f1 = finishes[0]?.tick ?? null;
-        if (f1 != null) {
-          if (f1 <= finishRole.certain) {
-            state = "verified";
-            finishTick = String(f1);
-          } else if (cutBelow(finishRole, f1)) invalid(cutsBelow(finishRole, f1));
-        } else if (cutBelow(finishRole, null)) {
-          invalid(cutsBelow(finishRole, null));
-        }
-        if (state !== "verified") finishTick = null;
+    const s1 = start.accepted[0] ?? null;
+    if (s1 == null) {
+      if (start.final) invalid(start);
+    } else {
+      // Finish edges at or before the first start are dropped before debouncing (no warning).
+      const finish = role("finish", s1);
+      show(finish);
+      startTick = String(s1);
+      const f1 = finish.accepted[0] ?? null;
+      if (f1 != null) {
+        state = "verified";
+        finishTick = String(f1);
+      } else if (finish.final) {
+        invalid(finish);
+        startTick = null;
       }
     }
-    if (state === "invalid") startTick = null;
   }
 
   // A verified sprint stays open: only Stop, lost timebase, invalid result or lap target end it.
@@ -261,15 +247,9 @@ export function evaluateRun(run, rows, { now = Date.now() } = {}) {
   let next = { ...run, verification: state, startTick, finishTick, crossingTicks };
   if (decided) next = { ...next, armed: false, closed: true };
   if (next.recordedAt == null && hasResult(next)) next.recordedAt = now;
-  if (state === "invalid") next.fault = run.fault || makeFault(run, (faultCuts || []).map(reasonOf), "measurement", now);
+  if (state === "invalid") next.fault = run.fault || makeFault(run, [reasonOf(faultCut)], "measurement", now);
   else if (state === "verified") next.fault = null;
 
-  const laps = [];
-  if (run.mode === "laps") {
-    const end = run.lapTarget ? Math.min(starts.length, run.lapTarget + 1) : starts.length; // crossings past the target are no laps
-    for (let i = 1; i < end; i++) {
-      laps.push({ startTick: String(starts[i - 1].tick), endTick: String(starts[i].tick), confirmed: starts[i].tick <= startRole.certain });
-    }
-  }
-  return { run: next, crossings: display, laps, certain: { start: startRole.certain, finish: finishCertain } };
+  const laps = crossingTicks.slice(1).map((tick, i) => ({ startTick: crossingTicks[i], endTick: tick }));
+  return { run: next, crossings, laps };
 }

@@ -36,6 +36,7 @@ const backup = await import("../src/lib/backup.js");
 const { getAll, put } = await import("../src/lib/idb.js");
 const { RADIO_PROTO_VERSION, USB_PROTO_VERSION } = await import("../src/lib/protocol.js");
 const { RUN_SCHEMA, isRecord } = await import("../src/lib/engine.js");
+const { freezeCalibration } = await import("../src/lib/calibration.js");
 
 fakeDefaults.slotDelayMin = 10;
 fakeDefaults.slotDelayMax = 30;
@@ -89,7 +90,7 @@ async function mapSprint(device, settings) {
 
 
 describe("durable run recovery", () => {
-  it("keeps pending GPS finalization through Clear, reload and a new run", { timeout: 15000 }, async () => {
+  it("keeps a result frozen on arrival through reset, reload and a new run", { timeout: 15000 }, async () => {
     let { device, settings, timing, history } = await boot();
     const { fake, a, b } = await mapSprint(device, settings);
     fake.setGps({ ppb: 100000 });
@@ -98,34 +99,21 @@ describe("durable run recovery", () => {
     await timing.start("sprint", "stable");
     const t = BigInt(fake.crossing(a)); fake.crossing(b, { at: t + 1600000000n });
     await waitFor(() => timing.run.verification === "verified");
+    assert.equal(timing.run.calibration.method, "gps-extrapolated");
     await timing.stop();
-    const id = timing.run.runId, deadline = timing.run.finalizeAt;
+    const id = timing.run.runId;
     const before = history.exportData().History[0].Result;
     await timing.reset();
     await device.disconnect();
     ({ device, settings, timing, history } = await boot({ keepStorage: true }));
     assert.equal(timing.run, null);
-    assert.equal(runLog.get(id).finalizeAt, deadline);
     await mapSprint(device, settings);
     await timing.start("sprint", "next");
-    await timing.settleResults();
     assert.equal(history.rows.find(r => r.runId === id).calibration.method, "gps-extrapolated");
     assert.equal(history.exportData().History[0].Result, before);
     await device.disconnect(); await timing.reset();
     const again = await boot({ keepStorage: true });
     assert.equal(again.history.exportData().History[0].Result, before);
-  });
-
-  it("recovers a deadline that expired while closed using nominal timing without PPS", async () => {
-    await boot();
-    const run = { schema: RUN_SCHEMA, usbProto: USB_PROTO_VERSION, radioProto: RADIO_PROTO_VERSION, runId: "expired", mode: "sprint", verification: "verified",
-      classification: null, armed: false, closed: true, nodes: {}, cursor: 0, crossingTicks: [],
-      startTick: "16000000", finishTick: "32000000", calibration: null, durationNs: null,
-      finalizeAt: Date.now() - 5000, calibrationEdges: [], startedAt: 1, recordedAt: 1, durable: true };
-    await runLog.save(run);
-    const again = await boot({ keepStorage: true });
-    assert.equal(again.history.rows[0].durationNs, "1000000000");
-    assert.equal(again.history.rows[0].calibration.method, "nominal");
   });
 
   it("recovers active state without writing localStorage and exposes IndexedDB failure", async () => {
@@ -223,10 +211,11 @@ it("exports all records and imports atomically with exact values, deduplication 
 it("round-trips frozen GPS ticks, evidence and unfinished snapshots into a populated database", async () => {
   let { device, settings, timing, history } = await boot();
   const { fake, a, b } = await mapSprint(device, settings);
+  await waitFor(() => device.ppsEdges.length >= 2, 4000); // S1 inside PPS coverage
   await timing.start("sprint", "exact");
   const tick = BigInt(fake.crossing(a)); fake.crossing(b, { at: tick + 16008000n });
   await waitFor(() => timing.run.verification === "verified");
-  await timing.stop(); await timing.settleResults();
+  await timing.stop();
   const id = timing.run.runId;
   const expected = runLog.clone(history.rows[0]);
   await timing.reset(); await timing.start("laps", "unfinished");
@@ -314,17 +303,17 @@ const membersOf = async record => {
   return record.evidenceSeqs.map(seq => bySeq.get(seq));
 };
 
-it("preserves operator classifications and explicit Clear while detached results finalize", async () => {
+it("preserves operator classifications and explicit Clear on another run", async () => {
   for (const [before, after] of [[null,"DSQ"],["DSQ",null],["DNF","DNS"]]) {
     let { timing, history } = await boot();
-    const run = reviewedRun("late-freeze", {classification:before,finalizeAt:Date.now()+80,calibrationEdges:[]});
+    const calibration = freezeCalibration([], ["16000000", "32000000"]);
+    const run = reviewedRun("other-run", {classification:before,calibration,durationNs:"1000000000"});
     await runLog.save(run,{select:true});await timing.reset();
     await timing.classify("DNS",{mode:"sprint",note:"next attempt"});
     await timing.classify(after,{runId:run.runId});
-    await timing.settleResults();
     const row = history.rows.find(r=>r.runId===run.runId);
     assert.equal(row.classification,after);
-    assert.equal(row.calibration.method,"nominal");
+    assert.deepEqual(row.calibration,calibration);
     assert.equal(row.durationNs,"1000000000");
     ({history}=await boot({keepStorage:true}));
     assert.equal(history.rows.find(r=>r.runId===run.runId).classification,after);
@@ -450,13 +439,12 @@ it("clears all records and caches, survives reload, and records again", async ()
   for (const name of eventLog.getDb().objectStoreNames) assert.deepEqual(await getAll(eventLog.getDb(), name), [], name);
   const exported = await backup.unpack(await history.recoveryJson());
   for (const key of ["runs","events","pps","quarantine","log"]) assert.deepEqual(exported[key], [], key);
-  // New measurements work without a page reload, including calibration finalization.
+  // New measurements work without a page reload, including the calibration freeze.
   const next = await mapSprint(device, settings);
   await timing.start("sprint", "new measurement");
   const nextTick = BigInt(next.fake.crossing(next.a)); next.fake.crossing(next.b, {at:nextTick+16000000n});
   await waitFor(() => timing.run.verification === "verified");
   await timing.stop();
-  await timing.settleResults();
   assert.equal(history.rows.length, 1);
   assert.ok(history.rows[0].calibration);
   await history.clearAll();

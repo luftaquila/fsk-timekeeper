@@ -32,9 +32,6 @@ export const HEAD_STUCK_MS = 5000;
 // Repeats of one unreadable E line before the fatal alarm.
 export const UNREADABLE_ALARM_REPEATS = 10;
 
-// A decided result waits at most this long for the next qualified PPS edge before freezing.
-export const CALIBRATION_WAIT_MS = 2000;
-
 export const LOG_RETENTION_MS = 30 * 24 * 3600 * 1000;
 export const LOG_MAX_ENTRIES = 5000;
 export const PPS_RETENTION_MS = 7 * 24 * 3600 * 1000;

@@ -35,7 +35,7 @@ async function boot(clear = true) {
   return { pinia, history, timing: useTimingStore() };
 }
 
-it("shows only confirmed laps after Stop and preserves them through reload", async () => {
+it("shows every lap after Stop and preserves them through reload", async () => {
   const { pinia, timing, history } = await boot();
   const tick = ms => String(160000000n + BigInt(ms) * 16000n), now = Date.now();
   let seq = 0;
@@ -44,18 +44,16 @@ it("shows only confirmed laps after Stop and preserves them through reload", asy
     master_tick: tick(ms), end_tick: tick(ms), master_boot_id: "500", sensor_boot_id: "100",
     flags: 7, received_at: now,
   });
-  const cps = [row("00000001", "checkpoint", 0, -1), row("00000002", "checkpoint", 0, -1)];
+  const cps = [row("00000001", "checkpoint", 0, -1)];
   const r = createRun({
     mode: "laps", clock: { master_tick: tick(0), master_boot_id: "500" },
-    mappings: cps.map(c => ({ node_id: c.node_id, role: "start" })),
+    mappings: [{ node_id: "00000001", role: "start" }],
     findCheckpoint: node => cps.find(c => c.node_id === node), currentSensorBoot: () => "100",
-    lastSeq: 2, now,
+    lastSeq: 1, now,
   });
-  // Sensor B's watermark confirms the first lap, but not A's last crossing.
-  const rows = [...cps, ...[1000, 3000, 4000].map((ms, i) => row("00000001", "capture", i + 1, ms)),
-    row("00000002", "checkpoint", 0, 3000)];
+  const rows = [...cps, ...[1000, 3000, 4000].map((ms, i) => row("00000001", "capture", i + 1, ms))];
   const evaluated = evaluateRun(r, rows, { now });
-  expect(evaluated.laps.map(l => l.confirmed)).toEqual([true, false]);
+  expect(evaluated.laps).toHaveLength(2);
   timing.run = evaluated.run;
   timing.live.crossings = evaluated.crossings;
   timing.live.laps = evaluated.laps;
@@ -64,16 +62,16 @@ it("shows only confirmed laps after Stop and preserves them through reload", asy
     plugins: [pinia], stubs: { RunSetupCard: true, RunControlCard: true, TimerCard: true, FaultReasons: true },
   } });
   const stats = Object.fromEntries(wrapper.findAll(".stats .stat").map(w => [w.find(".k").text(), w.find(".v").text()]));
-  expect(stats.Laps).toBe("1");
-  expect(timing.resultNs).toBe(2000000000n);
-  expect(timing.lapRows.map(l => l.ns)).toEqual([2000000000n]);
-  expect(history.rows[0].crossingTicks).toHaveLength(2);
+  expect(stats.Laps).toBe("2");
+  expect(timing.resultNs).toBe(3000000000n);
+  expect(timing.lapRows.map(l => l.ns)).toEqual([2000000000n, 1000000000n]);
+  expect(history.rows[0].crossingTicks).toHaveLength(3);
   wrapper.unmount();
   await runLog.flush();
   timing.discardRecords();
   const again = await boot(false);
   await again.timing.reevaluate();
-  expect(again.timing.lapRows).toHaveLength(1);
+  expect(again.timing.lapRows).toHaveLength(2);
   again.timing.discardRecords();
   await runLog.flush();
   eventLog._reset();
@@ -153,11 +151,10 @@ it("a result voided after it was recorded reads the same in History and still fr
       ? [row("00000001", "capture", 1, 1000), row("00000002", "capture", 1, 3000)]
       : [1000, 3000, 5000].map((ms, i) => row("00000001", "capture", i + 1, ms)));
     expect(history.rows.map(r => r.verification)).toEqual(["verified"]);
-    // A start capture out of order below a decided crossing: the crossings above it are uncertain again.
+    // A start capture out of order below a decided crossing: the crossings above it are withdrawn.
     await ingest([mode === "sprint" ? row("00000001", "capture", 2, 500) : row("00000001", "capture", 4, 2000)]);
     expect(timing.run.verification).toBe("invalid");
     expect(history.rows.map(r => [r.verification, r.crossingTicks.length])).toEqual([["invalid", mode === "sprint" ? 0 : 1]]);
-    await timing.settleResults();
     const [record] = history.rows;
     expect(record.calibration).not.toBeNull();
     expect(record.durationNs).toBeNull();

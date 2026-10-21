@@ -23,7 +23,7 @@
   - 배터리 마스터 모드·두 번째 마스터 감지 없음
 - 펌웨어 단일. 마스터·센서 구분은 부팅 시 USB 호스트 enumerate 여부로 1회 결정
 - 한 번에 한 경기. 센서 기준 2대(start/finish), 상한 5대
-  - start·finish 각각에 여러 센서 매핑 가능. laps는 start만 필요
+  - start·finish 각각 센서 1대만 매핑. laps는 start만 필요
 - 연속 가동 최대 하루 가정. 시각·link_id overflow 미처리
 - 책임 분담
   - 센서: 캡처 유효성(`HEALTH_*` 비트)
@@ -81,21 +81,23 @@
 - IndexedDB 저장 실패 후에도 메모리에 두고 E 메시지 확인(C) 계속, 해당 기록은 `Not Saved` 표시
 
 ## 콘솔 판정·기록
-- 판정은 콘솔에서만, fail-closed. 놓친 통과 가능성이 남으면 미확정
+- 판정은 콘솔에서만, fail-closed
+- 받은 통과를 다른 센서나 이후 보고를 기다리며 보류하는 표시·판정 금지
 - USB E 메시지는 IndexedDB 기록을 마친 뒤 C 메시지로 확인
-- 디바운스는 센서별 독립. sprint에서 첫 start보다 앞선 finish는 경고 없이 무시
-- laps에서 회복 불가 유실(`engine.js`의 `invalid` 판정) 시 화면·History·Excel 모두 확정 랩만 표시, 상태 Invalid, Total 빈칸
+- sprint에서 첫 start보다 앞선 finish는 경고 없이 무시
+- laps에서 회복 불가 유실(`engine.js`의 `invalid` 판정) 시 화면·History·Excel 모두 유실 이전 랩만 표시, 상태 Invalid, Total 빈칸
 - 기록은 FSK 서비스(`luftaquila/formula-student-korea`의 `competition/modules/traffic`) 방식
   - Stop은 수집 종료만. DNS/DNF 자동 판정 없음, 통과 없이 Start→Stop만 있으면 기록 미생성
-  - 저장 시점: sprint는 첫 도착 확정 시, laps는 첫 확정 랩부터
+  - 저장 시점: sprint는 첫 도착 수신 시, laps는 첫 랩부터
   - DNS/DNF/DSQ는 운영자가 지정·해제, 측정값 보존. 경기별 시간 제한 없음
-- 기록은 run 하나(`runs` 스토어). 별도 결과 사본 없음. History는 `isRecord()`인 run 목록(첫 결과 확정 시 찍는 `recordedAt` 또는 분류)
-- History는 엔진의 최신 판정을 그대로 표시. 확정 뒤 철회(예: 캡처 순서 오류)되면 기록은 남고 Invalid로 바뀜
+- 기록은 run 하나(`runs` 스토어). 별도 결과 사본 없음. History는 `isRecord()`인 run 목록
+- History는 엔진의 최신 판정을 그대로 표시. `recordedAt` 이후 철회(예: 캡처 순서 오류)되면 기록은 남고 `verification`이 `invalid`로 바뀜
 - 보정 소스는 GPS PPS뿐
   - 온도 모델 없음, 이전 부팅 보정값 재사용 금지
   - PPS 없으면 nominal 16 MHz로 환산
   - fix 없이 잰 드리프트는 표시만, 보정 미사용
-- 보정값은 런마다 한 번 동결: 결과 확정(sprint 도착 확정, 런 종료) 후 다음 PPS를 최대 `CALIBRATION_WAIT_MS` 기다린 뒤. 이후 변경 금지
+- 보정값은 결과가 정해지는 평가(sprint `verified`, run 종료)에서 그때까지 받은 PPS로 런마다 한 번 동결. 이후 변경 금지
+  - 다음 PPS 대기 금지
 - 원시값(tick, 보정 정보(`freezeCalibration()` 결과), 정확한 ns) 저장. 반올림은 표시 시에만(half-up, 3자리), 반올림 안내문 없음
 - 링크 상태(OK/STALE/LOST) 임계값은 펌웨어 `LINK_OK_MS`·`LINK_STALE_MS`에만. 콘솔 `WIRELESS_STATUS_MAX_AGE_MS` 등은 별개
 - Timing 화면의 상태 표시와 콘솔 Start는 같은 판정(`qualityFor`) 사용

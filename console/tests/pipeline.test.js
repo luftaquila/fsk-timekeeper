@@ -464,9 +464,9 @@ describe("pipeline with the fake master", () => {
     await waitFor(() => timing.run.verification === "verified");
     assert.equal(timing.run.closed, false);
     assert.equal(timing.lightColor, "green");
-    assert.ok(timing.live.crossings.every((c) => c.confirmed));
-    await waitFor(() => timing.run.durationNs != null, 4000);
-    assert.equal(timing.run.calibration.method, "gps");
+    // Frozen on arrival from the edges at hand: F1 interpolated or, before the next edge, extrapolated.
+    assert.notEqual(timing.run.durationNs, null);
+    assert.match(timing.run.calibration.method, /^gps(-extrapolated)?$/);
     const result = ms(timing.run.durationNs);
     assert.ok(result >= 1000 && result <= 1002, `result ${result}`);
     await waitFor(() => history.rows[0].durationNs != null);
@@ -498,7 +498,7 @@ describe("pipeline with the fake master", () => {
     assert.equal(again.settings.state.lastNote, "car 7");
   });
 
-  it("keeps the manual Stop clock through delayed result calibration and reload", { timeout: 10000 }, async () => {
+  it("keeps the manual Stop clock through the result calibration and reload", { timeout: 10000 }, async () => {
     const { device, settings, timing, history } = await boot();
     const { fake, a, b } = await mapSprint(device, settings);
     fake.setGps({ valid: false, fix: 0 });
@@ -506,15 +506,14 @@ describe("pipeline with the fake master", () => {
     const startTick = BigInt(fake.crossing(a));
     fake.crossing(b, { at: startTick + 400n * 16000n });
     await waitFor(() => timing.run.verification === "verified");
-    assert.equal(timing.run.calibration, null);
+    assert.equal(timing.run.calibration.method, "nominal");
 
     const now = Date.now();
     timing.live.startedAt = now - 12345;
     const nowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
     try { await timing.stop(); } finally { nowSpy.mockRestore(); }
     assert.equal(timing.live.clockDisplay, "00:12.345");
-    await waitFor(() => timing.run.durationNs != null, 4000);
-    await waitFor(() => history.rows[0]?.durationNs != null);
+    assert.equal(history.rows[0].durationNs, timing.run.durationNs);
     assert.equal(ms(timing.run.durationNs), 400);
     assert.equal(timing.live.clockDisplay, "00:12.345");
     assert.equal(history.exportData().History[0].Result, "00:00.400");
@@ -757,7 +756,7 @@ describe("pipeline with the fake master", () => {
     await device.disconnect();
   });
 
-  it("a master reboot ends an open laps run: laps before stay confirmed, no total", { timeout: 20000 }, async () => {
+  it("a master reboot ends an open laps run: laps before stay, no total", { timeout: 20000 }, async () => {
     const { device, settings, timing } = await boot();
     const fake = await connectFake(device);
     const [a] = [...fake.sensors.keys()];

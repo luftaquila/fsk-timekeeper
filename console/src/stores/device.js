@@ -386,7 +386,7 @@ export const useDeviceStore = defineStore("device", () => {
     const edge = { master_boot_id: bootId, tick: p.tick, seg: p.seg, n: p.n, utc: p.utc, received_at: now };
     const list = ppsEdges.value;
     ppsEdges.value = list.length && BigInt(list[list.length - 1].tick) < BigInt(edge.tick) ? [...list, edge] : [...list, edge].sort((a, b) => (BigInt(a.tick) < BigInt(b.tick) ? -1 : 1));
-    return Promise.all([ppsLog.saveEdge(edge), useTimingStore().onPpsEdge(edge)]);
+    return ppsLog.saveEdge(edge);
   }
 
   function onErrorLine(msg) {

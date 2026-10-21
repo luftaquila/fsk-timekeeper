@@ -284,6 +284,7 @@ describe("app under jsdom", () => {
     assert.equal(history.rows[0].closed, false, "first finish saves before Stop");
     const elapsed = timing.live.clockDisplay;
     await waitFor(() => timing.live.clockDisplay !== elapsed);
+    await sleep(400); // past the 300 ms debounce window of both first crossings
     fake.crossing(a);
     fake.crossing(b, { offsetMs: 800 });
     await waitFor(() => timing.live.crossings.length === 4);
@@ -354,7 +355,7 @@ describe("app under jsdom", () => {
     for (const offset of [2000n, 3500n, 6000n, 8500n]) {
       fake.crossing(a, { at: t0 + offset * 16000n });
     }
-    await waitFor(() => timing.lapRows.length === 4 && timing.lapRows.every((lap) => lap.confirmed));
+    await waitFor(() => timing.lapRows.length === 4);
     await flushPromises();
     const lapRows = wrapper.findAll(".lap-table tbody tr");
     assert.deepEqual(lapRows.map((row) => row.findAll("td")[2].text()), ["0.000", "+1.000", "−0.500", "-"]);

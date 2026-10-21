@@ -7,12 +7,11 @@ import { useDeviceStore } from "./device";
 import { useSettingsStore } from "./settings";
 import { useHistoryStore } from "./history";
 import * as eventLog from "../lib/eventLog";
-import * as ppsLog from "../lib/ppsLog";
 import { createRun, createClassifiedRun, evaluateRun, stopRun, endMasterSession, shouldInvalidateOnMasterBoot, runTouchedBy, EngineError, MASTER_REBOOTED } from "../lib/engine";
 import { wirelessQuality, missingRoles as missingRolesOf } from "../lib/quality";
 import { encodeRun, decodeRun } from "../lib/run-codec";
 import * as runLog from "../lib/runLog";
-import { MODES, CALIBRATION_WAIT_MS, RESULT_CLASSIFICATIONS } from "../lib/constants";
+import { MODES, RESULT_CLASSIFICATIONS } from "../lib/constants";
 import { buildTimeline, freezeCalibration, utcMsAt } from "../lib/calibration";
 import { resultTicks, resultNs as resultNsOf, lapsNs as lapsNsOf, spanNs, frozenDurationNs } from "../lib/results";
 import { formatDuration } from "../lib/format";
@@ -24,8 +23,8 @@ function makeLive() {
     clockDisplay: "00:00.000",
     raf: null,
     startedAt: null, // wall ms of the first start crossing (elapsed-clock display only)
-    crossings: [], // engine crossings: { node_id, role, tick, confirmed }
-    laps: [], // engine laps: { startTick, endTick, confirmed }
+    crossings: [], // engine crossings: { node_id, role, tick }
+    laps: [], // engine laps: { startTick, endTick }
   };
 }
 
@@ -35,8 +34,6 @@ export const useTimingStore = defineStore("timing", () => {
   const live = reactive(makeLive());
   const starting = ref(false);
   const classifying = ref(false);
-  const freezes = new Map(); // runId -> timer; independent of the selected run
-  let generation = runLog.epoch();
   let restored = false;
 
   const armed = computed(() => !!run.value?.armed);
@@ -55,8 +52,8 @@ export const useTimingStore = defineStore("timing", () => {
   const lapRows = computed(() => {
     const r = run.value;
     if (!r) return [];
-    if (r.closed) return lapsNsOf(r, timeline.value).map((ns) => ({ ns, confirmed: true }));
-    return live.laps.map((lap) => ({ ns: spanNs(r, lap.startTick, lap.endTick, timeline.value), confirmed: lap.confirmed }));
+    if (r.closed) return lapsNsOf(r, timeline.value).map((ns) => ({ ns }));
+    return live.laps.map((lap) => ({ ns: spanNs(r, lap.startTick, lap.endTick, timeline.value) }));
   });
 
   // Crossing list of a role with the time since the first start crossing.
@@ -230,82 +227,28 @@ export const useTimingStore = defineStore("timing", () => {
   }
 
   function discardRecords() {
-    for (const timer of freezes.values()) clearTimeout(timer);
-    freezes.clear();
-    generation = runLog.epoch();
     run.value = null;
     restored = true;
     resetLive();
   }
 
-  // A decided result (sprint arrival, closed run) waits for its calibration freeze; once frozen,
-  // durationNs follows the current result.
-  function withFreezeState(current) {
+  // A decided result (sprint arrival, closed run) freezes its calibration at once from the PPS
+  // edges at hand; once frozen, durationNs follows the current result.
+  function withCalibration(current) {
     if (current?.calibration) {
       const ns = frozenDurationNs(current);
       return ns === current.durationNs ? current : { ...current, durationNs: ns };
     }
     if (!current || !(current.closed || (current.mode === "sprint" && current.verification === "verified"))) return current;
-    if (!resultTicks(current).length || current.finalizeAt != null) return current;
+    if (!resultTicks(current).length) return current;
     const device = useDeviceStore();
-    return { ...current, finalizeAt: Date.now() + CALIBRATION_WAIT_MS,
-      calibrationEdges: runLog.clone(device.ppsBootId === current.masterBootId ? device.ppsEdges : []) };
-  }
-
-  async function freezeNow(runId) {
-    if (generation !== runLog.epoch()) return;
-    clearTimeout(freezes.get(runId));
-    freezes.delete(runId);
-    const current = runLog.get(runId);
-    if (!current || current.deleted || current.calibration || current.finalizeAt == null) return;
-    const next = { ...current, calibration: freezeCalibration(current.calibrationEdges || [], resultTicks(current)) };
-    next.durationNs = frozenDurationNs(next);
-    delete next.calibrationEdges;
-    delete next.finalizeAt;
-    if (run.value?.runId === runId) {
-      await setRun(next);
-      if (run.value?.runId === runId && !next.armed) showStoppedClock();
-    } else await runLog.save(next);
-  }
-
-  function scheduleFreeze(current = run.value) {
-    if (!current || current.calibration || current.finalizeAt == null || runLog.isDeleted(current.runId)) return;
-    const ticks = resultTicks(current);
-    const lastTick = ticks.reduce((m, t) => BigInt(t) > m ? BigInt(t) : m, 0n);
-    if (Date.now() >= current.finalizeAt || current.calibrationEdges?.some(e => BigInt(e.tick) > lastTick)) {
-      return freezeNow(current.runId);
-    }
-    if (!freezes.has(current.runId)) {
-      freezes.set(current.runId, setTimeout(() => freezeNow(current.runId), current.finalizeAt - Date.now()));
-    }
-  }
-
-  async function onPpsEdge(edge) {
-    for (const current of runLog.all()) {
-      if (current.calibration || current.finalizeAt == null || edge.master_boot_id !== current.masterBootId) continue;
-      if (Date.now() > current.finalizeAt) { await freezeNow(current.runId); continue; }
-      const edges = current.calibrationEdges || [];
-      if (!edges.some(e => e.tick === edge.tick)) edges.push(runLog.clone(edge));
-      const next = { ...current, calibrationEdges: edges };
-      if (run.value?.runId === next.runId) await setRun(next);
-      else await runLog.save(next);
-      await scheduleFreeze(next);
-    }
-  }
-
-  // Export waits only for already pending finalizations, never for a running race.
-  async function settleResults() {
-    const pending = runLog.all().filter(r => r.finalizeAt != null && !r.calibration);
-    await Promise.all(pending.map(async r => {
-      await new Promise(resolve => setTimeout(resolve, Math.max(0, r.finalizeAt - Date.now())));
-      await freezeNow(r.runId);
-    }));
-    await runLog.flush();
+    const edges = device.ppsBootId === current.masterBootId ? device.ppsEdges : [];
+    const next = { ...current, calibration: freezeCalibration(edges, resultTicks(current)) };
+    return { ...next, durationNs: frozenDurationNs(next) };
   }
 
   function applyEvaluation(result) {
-    const next = withFreezeState({ ...result.run, throughSeq: eventLog.getLastSeq() });
-    const before = run.value;
+    const next = withCalibration({ ...result.run, throughSeq: eventLog.getLastSeq() });
     live.crossings = result.crossings;
     live.laps = result.laps;
     const firstStart = result.crossings.find((c) => c.role === "start");
@@ -318,8 +261,6 @@ export const useTimingStore = defineStore("timing", () => {
       stopClock();
       showStoppedClock();
     }
-    if ((next.closed && !(before?.closed && before.runId === next.runId)) ||
-        (next.mode === "sprint" && next.verification === "verified" && before?.verification !== "verified")) scheduleFreeze();
     return persisted;
   }
 
@@ -336,7 +277,7 @@ export const useTimingStore = defineStore("timing", () => {
     evaluateOpen(current);
   }
 
-  // The master's timebase is gone: an open run keeps what is already certain and nothing more.
+  // The master's timebase is gone: an open run keeps the crossings already received and nothing more.
   function onMasterBoot(masterBootId) {
     const current = run.value;
     if (!shouldInvalidateOnMasterBoot(current, masterBootId)) return;
@@ -373,19 +314,8 @@ export const useTimingStore = defineStore("timing", () => {
         run.value = stored && !stored.deleted ? decodeRun(encodeRun(stored)) : null;
       }
       await persist();
-      for (const stored of runLog.all()) {
-        if (stored.finalizeAt == null || stored.calibration) continue;
-        const diskEdges = await ppsLog.loadEdges(stored.masterBootId);
-        const edges = new Map((stored.calibrationEdges || []).map(e => [e.tick, e]));
-        for (const e of diskEdges) if (e.received_at <= stored.finalizeAt) edges.set(e.tick, e);
-        const next = { ...stored, calibrationEdges: [...edges.values()] };
-        if (run.value?.runId === next.runId) await setRun(next);
-        else await runLog.save(next);
-        await scheduleFreeze(next);
-      }
     }
-    let current = withFreezeState(run.value);
-    if (current !== run.value) await setRun(current);
+    const current = run.value;
     resetLive();
     if (!current) return;
     const device = useDeviceStore();
@@ -393,21 +323,19 @@ export const useTimingStore = defineStore("timing", () => {
     if (current.closed) {
       if (current.mode === "sprint") {
         live.crossings = [
-          ...(current.startTick ? [{ node_id: "", role: "start", tick: current.startTick, confirmed: true }] : []),
-          ...(current.finishTick ? [{ node_id: "", role: "finish", tick: current.finishTick, confirmed: true }] : []),
+          ...(current.startTick ? [{ node_id: "", role: "start", tick: current.startTick }] : []),
+          ...(current.finishTick ? [{ node_id: "", role: "finish", tick: current.finishTick }] : []),
         ];
       } else {
         const c = current.crossingTicks || [];
-        live.crossings = c.map((tick) => ({ node_id: "", role: "start", tick, confirmed: true }));
-        live.laps = c.slice(1).map((tick, i) => ({ startTick: c[i], endTick: tick, confirmed: true }));
+        live.crossings = c.map((tick) => ({ node_id: "", role: "start", tick }));
+        live.laps = c.slice(1).map((tick, i) => ({ startTick: c[i], endTick: tick }));
       }
       showStoppedClock();
-      scheduleFreeze();
       return;
     }
     // A restored run cannot show a live wall clock (the wall/tick anchor is gone).
     evaluateOpen(current);
-    scheduleFreeze();
     stopClock();
     live.startedAt = null;
     showStoppedClock();
@@ -433,11 +361,9 @@ export const useTimingStore = defineStore("timing", () => {
     onEventRows,
     onMasterBoot,
     onMasterVersion,
-    onPpsEdge,
     markNonDurable,
     markRestored,
     qualityFor,
     missingRoles,
-    settleResults,
   };
 });

@@ -44,4 +44,18 @@ describe("sensor participation by role", () => {
     restored.setMapping("00000001", { role: "start", note: "gate" });
     assert.deepEqual(missingRoles("sprint", restored.mappingsFor("sprint")), []);
   });
+  it("keeps one sensor per role: a role moves from the sensor that had it", async () => {
+    const settings = useSettingsStore();
+    settings.setMapping("00000001", { role: "start", note: "gate" });
+    settings.setMapping("00000002", { role: "finish" });
+    settings.setMapping("00000003", { role: "start" });
+    assert.deepEqual(settings.mappingOf("00000001"), { node_id: "00000001", role: "unused", note: "gate" });
+    assert.deepEqual(settings.mappingsFor("sprint").map((m) => [m.node_id, m.role]), [["00000002", "finish"], ["00000003", "start"]]);
+    localStorage.setItem("tk.settings.v2", JSON.stringify({ mapping: { "00000001": { role: "start" }, "00000002": { role: "start" } } }));
+    settings.$dispose();
+    setActivePinia(createPinia());
+    const restored = useSettingsStore();
+    assert.deepEqual(restored.mappingsFor("laps").map((m) => m.node_id), ["00000001"]);
+    assert.equal(restored.mappingOf("00000002").role, "unused");
+  });
 });

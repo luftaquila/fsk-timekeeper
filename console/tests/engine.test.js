@@ -339,43 +339,6 @@ describe("dependency intervals and holes", () => {
     assert.equal(r.run.fault.reasons[0].hi, tick(2000));
   });
 
-  it("a hole decides the run only once every sensor of its role has reported through it", () => {
-    // laps: A loses edges after C2; C, the other start sensor, is still behind
-    const laps = makeLog();
-    laps.checkpoint("A", -100);
-    laps.checkpoint("C", -100);
-    const run = start(laps, "laps", [{ node_id: "A", role: "start" }, { node_id: "C", role: "start" }], { lapTarget: 2 });
-    laps.capture("A", 1000);
-    laps.capture("A", 5000);
-    laps.capture("A", 9000);
-    laps.loss("A", 9500, { endMs: 9600 });
-    let r = ev(run, laps);
-    assert.equal(r.run.verification, "pending");
-    assert.equal(r.run.closed, false);
-    laps.checkpoint("C", 10000);
-    r = ev(r.run, laps);
-    assert.equal(r.run.verification, "verified");
-    assert.deepEqual(r.run.crossingTicks, [tick(1000), tick(5000), tick(9000)]);
-
-    // sprint: A's hole comes before any start crossing; C reports one before it later
-    const sprint = makeLog();
-    sprint.checkpoint("A", -100);
-    sprint.checkpoint("C", -100);
-    sprint.checkpoint("B", -100);
-    const run2 = start(sprint, "sprint", [{ node_id: "A", role: "start" }, { node_id: "C", role: "start" }, { node_id: "B", role: "finish" }]);
-    sprint.loss("A", 200, { endMs: 700 });
-    sprint.capture("B", 3000);
-    r = ev(run2, sprint);
-    assert.equal(r.run.verification, "pending");
-    assert.equal(r.run.closed, false);
-    sprint.capture("C", 100);
-    sprint.checkpoint("C", 3000);
-    r = ev(r.run, sprint);
-    assert.equal(r.run.verification, "verified");
-    assert.equal(r.run.startTick, tick(100));
-    assert.equal(r.run.finishTick, tick(3000));
-  });
-
   it("laps stop at the target, whatever crossings follow in the same evidence", () => {
     const log = lapsLog();
     const run = start(log, "laps", LAPS, { lapTarget: 2 });
@@ -384,23 +347,6 @@ describe("dependency intervals and holes", () => {
     assert.equal(r.run.verification, "verified");
     assert.equal(r.run.crossingTicks.length, 3);
     assert.equal(r.laps.length, 2);
-  });
-
-  it("one silent sensor keeps its role unconfirmed", () => {
-    const log = makeLog();
-    log.checkpoint("A", -100);
-    log.checkpoint("C", -100);
-    log.checkpoint("B", -100);
-    const mappings = [...SPRINT, { node_id: "C", role: "start" }];
-    const run = start(log, "sprint", mappings);
-    log.capture("A", 1000);
-    log.capture("B", 4000);
-    let r = ev(run, log);
-    assert.equal(r.run.verification, "pending");
-    assert.equal(r.crossings.find((c) => c.role === "start").confirmed, false);
-    log.checkpoint("C", 1500);
-    r = ev(run, log);
-    assert.equal(r.run.verification, "verified");
   });
 
   it("a start-sensor reboot after S1 does not matter; before S1 it does", () => {
@@ -544,7 +490,7 @@ describe("laps", () => {
     assert.equal(r.run.armed, false);
   });
 
-  it("Stop preserves confirmed laps without waiting for another checkpoint", () => {
+  it("Stop preserves the laps without waiting for another checkpoint", () => {
     const log = lapsLog();
     const run = start(log, "laps", LAPS);
     for (const ms of [1000, 11000, 21000]) log.capture("A", ms);
@@ -555,7 +501,7 @@ describe("laps", () => {
     assert.deepEqual(stopped.crossingTicks, [1000, 11000, 21000].map(tick));
   });
 
-  it("Stop preserves an existing loss and the laps confirmed before it", () => {
+  it("Stop preserves an existing loss and the laps before it", () => {
     const log = lapsLog();
     const run = start(log, "laps", LAPS);
     for (const ms of [1000, 11000, 21000]) log.capture("A", ms);
@@ -606,7 +552,7 @@ describe("records", () => {
     run = ev(run, log).run;
     assert.equal(run.verification, "verified");
     assert.equal(run.recordedAt, NOW);
-    // An out-of-order capture below S1 makes S1 uncertain again: the record follows the evaluation.
+    // An out-of-order capture below S1 withdraws it: the record follows the evaluation.
     log.capture("A", 500);
     run = evaluateRun(run, log.since(run.cursor), { now: NOW + 1 }).run;
     assert.equal(run.verification, "invalid");
@@ -615,7 +561,7 @@ describe("records", () => {
     assert.equal(isRecord(run), true);
   });
 
-  it("laps record at the first confirmed lap; Stop alone records nothing, a classification lists the run", () => {
+  it("laps record at the first lap; Stop alone records nothing, a classification lists the run", () => {
     const log = lapsLog();
     let run = start(log, "laps", LAPS);
     log.capture("A", 1000);

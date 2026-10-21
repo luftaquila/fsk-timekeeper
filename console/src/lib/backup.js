@@ -79,7 +79,6 @@ function validateRun(r) {
   if (r.durationNs != null && (!decimal(r.durationNs) || BigInt(r.durationNs) < 0n)) fail("Invalid result duration.");
   if (r.masterBootId != null && !tick(r.masterBootId)) fail("Invalid master session.");
   if (r.crossingTicks != null && (!Array.isArray(r.crossingTicks) || r.crossingTicks.some(t => !tick(t)))) fail("Invalid lap timestamps.");
-  if (r.finalizeAt != null && !uint(r.finalizeAt)) fail("Invalid finalization deadline.");
   if (r.recordedAt != null && !uint(r.recordedAt)) fail("Invalid record time.");
   if (r.throughSeq != null && !uint(r.throughSeq)) fail("Invalid evidence cursor.");
   if (!object(r.nodes) || typeof r.armed !== "boolean" || typeof r.closed !== "boolean" || !uint(r.cursor)) fail("Invalid run snapshot.");
@@ -108,8 +107,6 @@ function finalizeImported(row, edges, old, now) {
   const calibration = reuse ? old.calibration : freezeCalibration(edges.filter(e => e.master_boot_id === row.masterBootId), resultTicks(row), now);
   const next = { ...row, calibration };
   next.durationNs = frozenDurationNs(next);
-  delete next.finalizeAt;
-  delete next.calibrationEdges;
   return next;
 }
 

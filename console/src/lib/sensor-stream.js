@@ -136,7 +136,8 @@ export function sensorStream(run, node, rows, { sessionEnd = null } = {}) {
 }
 
 // Leading-edge debounce and hole significance above `after` (exclusive): a hole wholly inside
-// [c, c + D) of the last accepted c is harmless; the first other hole cuts (uncertain above).
+// [c, c + D) of the last accepted c is harmless; the first other hole cuts (no crossing accepted
+// above). final: the hole's end is known (hi not null).
 export function acceptCrossings(stream, { after, debounceTicks }) {
   const items = [
     ...stream.edges.map((e) => ({ at: e.tick, order: 0, edge: e })),
@@ -166,6 +167,5 @@ export function acceptCrossings(stream, { after, debounceTicks }) {
     cutHole = item.hole;
     break;
   }
-  const certain = cut != null && cut < stream.known ? cut : stream.known;
-  return { accepted, cut, final, cutHole, certain };
+  return { accepted, cut, final, cutHole };
 }

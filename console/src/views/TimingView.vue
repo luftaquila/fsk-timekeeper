@@ -23,9 +23,7 @@ const verification = computed(() => timing.run?.verification ?? null);
 const startList = computed(() => timing.crossingRows("start"));
 const finishList = computed(() => timing.crossingRows("finish"));
 
-// An invalid laps run shows only the laps confirmed before the loss, and no total.
-const laps = computed(() => (verification.value === "invalid" ? timing.lapRows.filter((l) => l.confirmed) : timing.lapRows));
-const lapNs = computed(() => laps.value.map((l) => l.ns).filter((ns) => ns != null));
+const lapNs = computed(() => timing.lapRows.map((l) => l.ns).filter((ns) => ns != null));
 const best = computed(() => (lapNs.value.length ? lapNs.value.reduce((a, b) => (b < a ? b : a)) : null));
 const last = computed(() => (lapNs.value.length ? lapNs.value[lapNs.value.length - 1] : null));
 const avgText = computed(() => (lapNs.value.length ? formatDuration(lapNs.value.reduce((a, b) => a + b, 0n), BigInt(lapNs.value.length)) : "-"));
@@ -50,8 +48,8 @@ function delta(ns) {
   return d === 0n ? "BEST" : formatDelta(d);
 }
 function beforeDifference(index) {
-  const current = laps.value[index]?.ns;
-  const previous = laps.value[index - 1]?.ns;
+  const current = timing.lapRows[index]?.ns;
+  const previous = timing.lapRows[index - 1]?.ns;
   return current == null || previous == null ? null : current - previous;
 }
 function deltaBefore(index) {
@@ -75,7 +73,7 @@ function deltaBefore(index) {
           <div class="card-body">
             <div v-if="!startList.length" class="empty-state">No crossing yet</div>
             <ul v-else class="rec-list">
-              <li v-for="c in startList" :key="c.key" :class="{ confirmed: c.confirmed }">
+              <li v-for="c in startList" :key="c.key">
                 <span class="crossing-time mono">{{ formatDuration(c.ns) }}</span>
                 <span class="who mono">{{ c.node_id }}</span>
               </li>
@@ -87,7 +85,7 @@ function deltaBefore(index) {
           <div class="card-body">
             <div v-if="!finishList.length" class="empty-state">No crossing yet</div>
             <ul v-else class="rec-list">
-              <li v-for="c in finishList" :key="c.key" :class="{ confirmed: c.confirmed }">
+              <li v-for="c in finishList" :key="c.key">
                 <span class="crossing-time mono">{{ formatDuration(c.ns) }}</span>
                 <span class="who mono">{{ c.node_id }}</span>
               </li>
@@ -100,7 +98,7 @@ function deltaBefore(index) {
         <div class="stats">
           <div class="stat card">
             <div class="k">Laps</div>
-            <div class="v mono">{{ laps.length }}<span v-if="target" class="of">/ {{ target }}</span></div>
+            <div class="v mono">{{ timing.lapRows.length }}<span v-if="target" class="of">/ {{ target }}</span></div>
           </div>
           <div class="stat card">
             <div class="k">Best</div>
@@ -123,8 +121,8 @@ function deltaBefore(index) {
         <div class="card">
           <div class="card-header"><h3>🔄 Lap Times</h3></div>
           <div class="card-body">
-            <p v-if="verification === 'invalid' && laps.length" class="sub">Confirmed laps before data loss</p>
-            <div v-if="!laps.length" class="empty-state">{{ startList.length ? "Waiting for First Lap" : "No crossing yet" }}</div>
+            <p v-if="verification === 'invalid' && timing.lapRows.length" class="sub">Laps before data loss</p>
+            <div v-if="!timing.lapRows.length" class="empty-state">{{ startList.length ? "Waiting for First Lap" : "No crossing yet" }}</div>
             <div v-else class="table-scroll">
               <table class="lap-table">
                 <colgroup>
@@ -142,10 +140,10 @@ function deltaBefore(index) {
                   </tr>
                 </thead>
                 <tbody>
-                  <tr v-for="(lap, i) in [...laps].reverse()" :key="laps.length - i" :class="{ confirmed: lap.confirmed, best: lap.ns != null && lap.ns === best }">
-                    <td class="idx">{{ laps.length - i }}</td>
+                  <tr v-for="(lap, i) in [...timing.lapRows].reverse()" :key="timing.lapRows.length - i" :class="{ best: lap.ns != null && lap.ns === best }">
+                    <td class="idx">{{ timing.lapRows.length - i }}</td>
                     <td class="mono">{{ formatDuration(lap.ns) }}</td>
-                    <td class="mono d" :class="{ slower: beforeDifference(laps.length - i - 1) > 0n }">{{ deltaBefore(laps.length - i - 1) }}</td>
+                    <td class="mono d" :class="{ slower: beforeDifference(timing.lapRows.length - i - 1) > 0n }">{{ deltaBefore(timing.lapRows.length - i - 1) }}</td>
                     <td class="mono d">{{ delta(lap.ns) }}</td>
                   </tr>
                 </tbody>
@@ -193,9 +191,6 @@ function deltaBefore(index) {
   background: var(--bg-secondary);
   font-size: 1.5rem;
   line-height: 1.4;
-  color: var(--text-secondary);
-}
-.rec-list li.confirmed {
   color: var(--text-primary);
 }
 .crossing-time {
@@ -259,13 +254,10 @@ function deltaBefore(index) {
 .lap-table td {
   padding: 0.6rem 0.75rem;
   border-bottom: 1px solid var(--border-color);
-  color: var(--text-secondary);
+  color: var(--text-primary);
 }
 .lap-table tr:last-child td {
   border-bottom: none;
-}
-.lap-table tr.confirmed td {
-  color: var(--text-primary);
 }
 .lap-table tr.best td.mono {
   color: var(--accent-success);
@@ -275,17 +267,11 @@ function deltaBefore(index) {
   color: var(--accent-danger);
   font-weight: 600;
 }
-.idx {
-  color: var(--text-secondary);
-}
 .lap-table th:first-child {
   text-align: left;
 }
 .lap-table td.idx {
   text-align: left;
-}
-.d {
-  color: var(--text-secondary);
 }
 .result-body {
   display: flex;

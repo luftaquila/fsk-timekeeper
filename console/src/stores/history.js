@@ -39,7 +39,6 @@ export const useHistoryStore = defineStore("history", () => {
     clearing.value = true;
     try {
       await device.pauseData();
-      await timing.settleResults();
       await eventLog.flush();
       await flush();
       await enqueue(() => eventLog.clearAllData());
@@ -55,7 +54,7 @@ export const useHistoryStore = defineStore("history", () => {
     return mode ? rows.value.filter((r) => r.mode === mode) : rows.value.slice();
   }
 
-  // Provisional calibration source for a row still waiting for its freeze (same master boot).
+  // Provisional calibration source for a row not frozen yet, an open run (same master boot).
   function edgesFor(row) {
     const device = useDeviceStore();
     return device.ppsBootId === row.masterBootId ? device.ppsEdges : [];
@@ -88,7 +87,6 @@ export const useHistoryStore = defineStore("history", () => {
   }
 
   async function exportExcel(mode = null) {
-    await useTimingStore().settleResults();
     const headers = ["Date", "Mode", "Note", "Result", "Status"];
     const widths = [28, 26, 40, 20, 24];
     const data = [];
@@ -122,7 +120,7 @@ export const useHistoryStore = defineStore("history", () => {
 
   async function recoveryJson() {
     if (clearing.value) throw new Error("Wait for data deletion to finish before backing up.");
-    await useTimingStore().settleResults();
+    await flush();
     await eventLog.flush();
     const recovery = await backup.snapshot(useDeviceStore().ppsEdges);
     return backup.pack(exportData(null, recordsOf(recovery.runs)).History, recovery);
@@ -142,7 +140,7 @@ export const useHistoryStore = defineStore("history", () => {
     try {
       if (file.size > backup.MAX_BACKUP_BYTES) throw new Error("JSON exceeds the 64 MB limit.");
       const data = await backup.unpack(await file.text());
-      await timing.settleResults();
+      await flush();
       const result = await backup.merge(data);
       timing.markRestored();
       await device.loadLog();

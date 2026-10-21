@@ -11,7 +11,6 @@ let initialized = false;
 let generation = 0;
 const changeListeners = new Set();
 export const clone = value => JSON.parse(JSON.stringify(value, (_k, v) => typeof v === "bigint" ? String(v) : v));
-export const epoch = () => generation;
 export const hasActiveState = () => initialized;
 export const active = () => records.get(activeId) || null;
 export const all = () => [...records.values()].filter(r => !r.deleted).map(clone);

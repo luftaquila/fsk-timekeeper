@@ -235,7 +235,7 @@ describe("history rows and exports", () => {
     assert.deepEqual(Object.values(record["Lap Summary"]), [2, "00:05.000 (#1)", "00:05.250", "00:10.500"]);
   });
 
-  it("a later loss keeps the confirmed laps but voids the total, also after the freeze", async () => {
+  it("a later loss keeps the laps before it but voids the total, also after the freeze", async () => {
     const history = useHistoryStore();
     const crossings = [tick(1000), tick(6000), tick(11500)];
     const r = recorded({ runId: "laps-1", mode: "laps", verification: "verified", crossingTicks: crossings.slice(0, 2), closed: false });
