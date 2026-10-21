@@ -7,6 +7,7 @@ on:
     paths:
       - 'device/3d/**'
       - 'device/hardware/**'
+      - '.github/actions/kicad-cli/**'
       - '.github/workflows/3d.yml'
   workflow_call:
   workflow_dispatch:
@@ -16,16 +17,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
-
-      - name: Add KiCad repository
-        run: |
-          sudo add-apt-repository -y ppa:kicad/kicad-10.0-releases
-          sudo apt-get update
-
-      - uses: awalsh128/cache-apt-pkgs-action@latest
-        with:
-          packages: kicad
-          version: 1.0
+      - uses: ./.github/actions/kicad-cli
 
       # Nightly image: its Manifold backend renders the minkowski() housings in seconds, where
       # apt's 2021.01 release (CGAL only) takes minutes. Bump the dated tag occasionally.

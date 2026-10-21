@@ -1,0 +1,21 @@
+name: kicad-cli
+description: Put kicad-cli from the official KiCad image on PATH.
+
+runs:
+  using: composite
+  steps:
+    # -full carries the 3D model library that STEP export resolves ${KICAD10_3DMODEL_DIR} in.
+    # The image runs as `kicad`; the runner's uid keeps outputs writable for later steps.
+    - shell: bash
+      run: |
+        image=kicad/kicad:10.0.7-full
+        docker pull "$image"
+        bin="$RUNNER_TEMP/kicad-cli"
+        mkdir -p "$bin"
+        cat > "$bin/kicad-cli" <<EOF
+        #!/bin/sh
+        exec docker run --rm --user "\$(id -u):\$(id -g)" -e HOME=/tmp \
+          -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" -w "\$PWD" $image kicad-cli "\$@"
+        EOF
+        chmod +x "$bin/kicad-cli"
+        echo "$bin" >> "$GITHUB_PATH"
