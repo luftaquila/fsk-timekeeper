@@ -95,8 +95,10 @@ export const useHistoryStore = defineStore("history", () => {
   }
 
   // Runs and capture evidence are stored separately. Results begin only once a measured
-  // interval is verified or the operator assigns a classification; later updates use that same row.
+  // interval is decided or the operator assigns a classification; later updates use that same row.
+  // A laps run keeps its confirmed laps when a loss voids the total, as on the timing screen.
   function hasResult(run) {
+    if (run.mode === "laps") return run.verification !== "pending" && (run.crossingTicks?.length ?? 0) >= 2;
     return run.verification === "verified" && resultNs(run) != null;
   }
 
@@ -121,7 +123,7 @@ export const useHistoryStore = defineStore("history", () => {
       row.note = run.note || row.note;
       if (throughSeq != null) row.throughSeq = throughSeq;
     } else {
-      // Stopping or a later fault cannot overwrite an already recorded result.
+      // Stopping or a later fault cannot overwrite an already recorded sprint result.
       row.closed = run.closed || row.closed;
       if (run.durable === false) row.durable = false;
       const ticks = resultTicks(row);
@@ -245,7 +247,7 @@ export const useHistoryStore = defineStore("history", () => {
       if (stats) {
         record["Lap Summary"] = { Laps: stats.laps.length,
           Best: `${formatDuration(stats.best)} (#${stats.bestIndex + 1})`,
-          Average: formatDuration(stats.total, BigInt(stats.laps.length)), Total: formatDuration(stats.total) };
+          Average: formatDuration(stats.sum, BigInt(stats.laps.length)), Total: formatDuration(stats.total) };
         record["Lap Times"] = stats.laps.map((ns, i) => ({ Lap: i + 1,
           Time: formatDuration(ns), "Δ Before": lapDelta(i > 0 ? ns - stats.laps[i - 1] : null),
           "Δ Best": ns === stats.best ? "BEST" : lapDelta(ns - stats.best) }));

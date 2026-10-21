@@ -27,7 +27,8 @@ export function lapSummary(row, edges) {
   const laps = lapsNs(row, edges);
   if (!laps.length) return null;
   const best = laps.reduce((a, b) => b < a ? b : a);
-  return { laps, best, bestIndex: laps.indexOf(best), total: laps.reduce((sum, ns) => sum + ns, 0n) };
+  // total is the run's result, blank once a loss voids it; sum only feeds the average.
+  return { laps, best, bestIndex: laps.indexOf(best), sum: laps.reduce((sum, ns) => sum + ns, 0n), total: resultNs(row, edges) };
 }
 
 export { formatDelta as lapDelta } from "./format";

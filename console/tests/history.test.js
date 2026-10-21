@@ -208,23 +208,44 @@ describe("history rows and exports", () => {
     assertWorkbookRecords(await readSheet(Buffer.from(await filteredExcel.arrayBuffer()), "History"), history.exportData("sprint").History);
   });
 
-  it("later Stop or fault preserves the last recorded laps and total", async () => {
+  it("Stop keeps the recorded laps and total", async () => {
     const history = useHistoryStore();
     const crossings = [tick(1000), tick(6000), tick(11500)];
     const r = run({ runId: "laps-1", mode: "laps", verification: "verified", crossingTicks: crossings });
     await history.upsert(r);
     const id = history.rows[0].id;
-    await history.upsert({ ...r, closed: true, verification: "invalid", totalValid: false,
-      calibration: freezeCalibration([], crossings, 1) });
+    await history.upsert({ ...r, closed: true, calibration: freezeCalibration([], crossings, 1) });
     const row = history.rows[0];
     assert.equal(history.rows.length, 1);
     assert.equal(row.id, id);
-    assert.equal(row.verification, "verified");
     assert.equal(resultNs(row), 10_500_000_000n);
+    const record = history.exportData().History[0];
+    assert.equal(record.Status, "Verified\nNot Saved");
+    assert.equal(record.Result, "00:10.500");
+    assert.deepEqual(Object.values(record["Lap Summary"]), [2, "00:05.000 (#1)", "00:05.250", "00:10.500"]);
+  });
+
+  it("a later loss keeps the confirmed laps but voids the total, also after the freeze", async () => {
+    const history = useHistoryStore();
+    const crossings = [tick(1000), tick(6000), tick(11500)];
+    const r = run({ runId: "laps-1", mode: "laps", verification: "verified", crossingTicks: crossings.slice(0, 2) });
+    await history.upsert(r);
+    const id = history.rows[0].id;
+    const fault = { kind: "measurement", reasons: [{ role: "start", reason: "Sensor ABC: Capture Loss", lo: tick(12000), hi: null }] };
+    const lost = { ...r, closed: true, verification: "invalid", totalValid: false, crossingTicks: crossings, fault };
+    await history.upsert(lost);
+    await history.updateCalibration({ ...lost, calibration: freezeCalibration([], crossings, 1) });
+    const row = history.rows[0];
+    assert.equal(history.rows.length, 1);
+    assert.equal(row.id, id);
+    assert.equal(row.durationNs, null);
+    assert.equal(resultNs(row), null);
     assert.deepEqual(lapsNs(row), [5_000_000_000n, 5_500_000_000n]);
-    assert.equal(history.exportData().History[0].Status, "Verified\nNot Saved");
-    assert.equal(history.exportData().History[0].Result, "00:10.500");
-    assert.deepEqual(history.exportData().History[0]["Lap Times"].map((r) => r.Time), ["00:05.000", "00:05.500"]);
+    const record = history.exportData().History[0];
+    assert.equal(record.Status, "Invalid\nNot Saved");
+    assert.equal(record.Result, "-");
+    assert.deepEqual(Object.values(record["Lap Summary"]), [2, "00:05.000 (#1)", "00:05.250", "-"]);
+    assert.match(record.Errors[0], /^Start\nSensor ABC: Capture Loss\n/);
   });
 
   it("concurrent first-lap and later-lap writes create one result row", async () => {

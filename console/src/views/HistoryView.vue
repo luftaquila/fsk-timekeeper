@@ -186,7 +186,7 @@ async function clearAll() {
         <dl class="lap-stats">
           <div><dt>Laps</dt><dd class="mono">{{ lapPopup.laps.length }}</dd></div>
           <div><dt>Best</dt><dd class="mono">{{ formatDuration(lapPopup.best) }} <span class="best-index">(#{{ lapPopup.bestIndex + 1 }})</span></dd></div>
-          <div><dt>Average</dt><dd class="mono">{{ formatDuration(lapPopup.total, BigInt(lapPopup.laps.length)) }}</dd></div>
+          <div><dt>Average</dt><dd class="mono">{{ formatDuration(lapPopup.sum, BigInt(lapPopup.laps.length)) }}</dd></div>
           <div><dt>Total</dt><dd class="mono">{{ formatDuration(lapPopup.total) }}</dd></div>
         </dl>
         <div class="lap-table-scroll">
