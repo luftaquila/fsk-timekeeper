@@ -1,5 +1,5 @@
 // Result durations from raw ticks: frozen calibration, else provisional from PPS edges at hand.
-import { calibrationPoints, durationNs } from "./calibration";
+import { calibrationPoints, durationNs, pointsMethod } from "./calibration";
 
 // Ticks the result depends on.
 export function resultTicks(run) {
@@ -46,4 +46,11 @@ export function lapsNs(run, source = null) {
   const out = [];
   for (let i = 1; i < c.length; i++) out.push(durationNs(points, c[i - 1], c[i]));
   return out;
+}
+
+// Whether the result's ticks are converted with GPS PPS rather than nominal 16 MHz (frozen
+// calibration, else the edges at hand); null without result ticks.
+export function resultUsesPps(run, source = null) {
+  const ticks = resultTicks(run);
+  return ticks.length ? pointsMethod(pointsFor(run, ticks, source), ticks) !== "nominal" : null;
 }

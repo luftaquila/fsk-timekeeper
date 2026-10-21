@@ -6,7 +6,7 @@ import { useHistoryStore } from "../stores/history";
 import { useNotification } from "../composables/useNotification";
 import { MODES, MODE_LABEL, RESULT_CLASSIFICATIONS } from "../lib/constants";
 import { formatDuration, fmtDateTime } from "../lib/format";
-import { historyRecord, lapSummary, lapDelta, statusLabel } from "../lib/historyPresentation";
+import { historyRecord, lapSummary, lapDelta, statusLabel, calibrationLabel } from "../lib/historyPresentation";
 
 import FaultReasons from "../components/FaultReasons.vue";
 
@@ -33,6 +33,7 @@ function lapStats(r) {
   return lapSummary(r, history.edgesFor(r));
 }
 const lapSummaries = computed(() => new Map(rows.value.map((r) => [r.runId, lapStats(r)])));
+const calibrations = computed(() => new Map(rows.value.map((r) => [r.runId, calibrationLabel(r, history.edgesFor(r))])));
 
 async function openLaps(r) {
   const stats = lapSummaries.value.get(r.runId);
@@ -140,6 +141,7 @@ async function clearAll() {
               <th>Note</th>
               <th class="centered">Result</th>
               <th class="centered">Status</th>
+              <th class="centered">Calibration</th>
               <th></th>
             </tr>
           </thead>
@@ -162,9 +164,13 @@ async function clearAll() {
                   </select>
                   <span v-if="r.durable === false" class="badge badge-danger">Not Saved</span>
                 </td>
+                <td class="centered">
+                  <span v-if="calibrations.get(r.runId) !== '-'" class="badge" :class="calibrations.get(r.runId) === 'GPS' ? 'badge-success' : 'badge-warning'">{{ calibrations.get(r.runId) }}</span>
+                  <span v-else>-</span>
+                </td>
                 <td class="actions"><button class="btn btn-ghost btn-sm" :disabled="history.importing || history.clearing" @click="remove(r)">Delete</button></td>
               </tr>
-              <tr v-if="r.fault?.reasons?.length" class="fault-row"><td colspan="6"><FaultReasons :reasons="r.fault.reasons" :boundary-tick="r.boundaryTick" /></td></tr>
+              <tr v-if="r.fault?.reasons?.length" class="fault-row"><td colspan="7"><FaultReasons :reasons="r.fault.reasons" :boundary-tick="r.boundaryTick" /></td></tr>
             </template>
           </tbody>
         </table>

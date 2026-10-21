@@ -87,8 +87,8 @@ export const useHistoryStore = defineStore("history", () => {
   }
 
   async function exportExcel(mode = null) {
-    const headers = ["Date", "Mode", "Note", "Result", "Status"];
-    const widths = [28, 26, 40, 20, 24];
+    const headers = ["Date", "Mode", "Note", "Result", "Status", "Calibration"];
+    const widths = [28, 26, 40, 20, 24, 14];
     const data = [];
     const addTable = (columns, records, primary = false) => {
       data.push(columns.map((value) => ({ value, fontWeight: "bold", height: 24,
@@ -106,9 +106,9 @@ export const useHistoryStore = defineStore("history", () => {
       if (record["Lap Summary"]) addTable(Object.keys(record["Lap Summary"]), [record["Lap Summary"]]);
       if (record["Lap Times"]) addTable(["Lap", "Time", "Δ Before", "Δ Best"], record["Lap Times"]);
       if (record.Errors) {
-        data.push([{ value: "Errors", fontWeight: "bold", backgroundColor: "#E9EDF2", columnSpan: 5 }, null, null, null, null]);
-        for (const error of record.Errors) data.push([{ value: error, columnSpan: 5, wrap: true,
-          height: Math.max(24, error.split("\n").reduce((sum, line) => sum + Math.max(1, Math.ceil(line.length / 130)), 0) * 16 + 8) }, null, null, null, null]);
+        data.push([{ value: "Errors", fontWeight: "bold", backgroundColor: "#E9EDF2", columnSpan: 6 }, null, null, null, null, null]);
+        for (const error of record.Errors) data.push([{ value: error, columnSpan: 6, wrap: true,
+          height: Math.max(24, error.split("\n").reduce((sum, line) => sum + Math.max(1, Math.ceil(line.length / 130)), 0) * 16 + 8) }, null, null, null, null, null]);
       }
     }
     if (!data.length) addTable(headers, [], true);

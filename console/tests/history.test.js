@@ -35,7 +35,7 @@ function assertWorkbookRecords(sheetRows, records) {
     assert.ok(row.slice(expected.length).every((v) => v == null));
   };
   for (const record of records) {
-    const headers = ["Date", "Mode", "Note", "Result", "Status"];
+    const headers = ["Date", "Mode", "Note", "Result", "Status", "Calibration"];
     check(headers);
     check(headers.map((header) => record[header]));
     if (record["Lap Summary"]) {
@@ -185,7 +185,7 @@ describe("history rows and exports", () => {
       [["00:02.000", "00:01.500", "00:02.500", "00:02.500"], ["00:01.000", "00:02.000"]]);
     assert.deepEqual(Object.keys(snapshot), ["History"]);
     const lapRecord = snapshot.History.find((r) => r.Mode === "Laps");
-    assert.deepEqual(Object.keys(snapshot.History[0]), ["Date", "Mode", "Note", "Result", "Status"]);
+    assert.deepEqual(Object.keys(snapshot.History[0]), ["Date", "Mode", "Note", "Result", "Status", "Calibration"]);
     assert.deepEqual(lapRecord["Lap Times"].map((r) => [r.Lap, r.Time, r["Δ Before"], r["Δ Best"]]), [
       [1, "00:02.000", "-", "+0.500"], [2, "00:01.500", "−0.500", "BEST"],
       [3, "00:02.500", "+1.000", "+1.000"], [4, "00:02.500", "0.000", "+1.000"],
@@ -230,7 +230,8 @@ describe("history rows and exports", () => {
     assert.equal(row.durationNs, "10500000000");
     assert.equal(resultNs(row), 10_500_000_000n);
     const record = history.exportData().History[0];
-    assert.equal(record.Status, "Verified\nNot Saved");
+    assert.equal(record.Status, "OK\nNot Saved");
+    assert.equal(record.Calibration, "None");
     assert.equal(record.Result, "00:10.500");
     assert.deepEqual(Object.values(record["Lap Summary"]), [2, "00:05.000 (#1)", "00:05.250", "00:10.500"]);
   });

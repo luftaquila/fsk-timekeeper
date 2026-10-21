@@ -1,6 +1,6 @@
 import { MODE_LABEL, RESULT_CLASSIFICATIONS } from "./constants";
 import { formatDuration, fmtDateTime } from "./format";
-import { resultNs, lapsNs } from "./results";
+import { resultNs, lapsNs, resultUsesPps } from "./results";
 
 export function statusValue(row) {
   if (RESULT_CLASSIFICATIONS.includes(row.classification)) return row.classification;
@@ -9,7 +9,13 @@ export function statusValue(row) {
 
 export function statusLabel(row) {
   const value = statusValue(row);
-  return ({ verified: "Verified", invalid: "Invalid", pending: "Pending" })[value] || value;
+  return ({ verified: "OK", invalid: "Invalid", pending: "Pending" })[value] || value;
+}
+
+// What converted the result's ticks: GPS PPS, or nothing (nominal 16 MHz).
+export function calibrationLabel(row, edges) {
+  const pps = resultUsesPps(row, edges);
+  return pps == null ? "-" : pps ? "GPS" : "None";
 }
 
 export function historyRecord(row, edges) {
@@ -19,6 +25,7 @@ export function historyRecord(row, edges) {
     Note: row.note || "-",
     Result: formatDuration(resultNs(row, edges)),
     Status: [statusLabel(row), ...(row.durable === false ? ["Not Saved"] : [])].join("\n"),
+    Calibration: calibrationLabel(row, edges),
   };
 }
 

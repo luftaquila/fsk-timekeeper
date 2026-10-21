@@ -313,7 +313,7 @@ describe("app under jsdom", () => {
 
     await router.push("/history");
     await flushPromises();
-    await waitFor(() => wrapper.text().includes("Verified"));
+    await waitFor(() => wrapper.find(".status-select").element?.selectedOptions[0]?.textContent === "OK");
     assert.match(wrapper.text(), /Start → Finish/);
 
     // A saved fault must remain readable without hovering over a status chip.
@@ -383,12 +383,12 @@ describe("app under jsdom", () => {
     const displayExport = history.exportData();
     assert.deepEqual(displayExport.History.find((r) => r.Mode === "Laps")["Lap Times"].map((r) => [String(r.Lap), r.Time, r["Δ Before"], r["Δ Best"]]),
       popupRows.map((row) => row.findAll("td").map((td) => td.text())));
-    assert.deepEqual(displayExport.History.map(({ Date, Mode, Note, Result, Status }) => ({ Date, Mode, Note, Result, Status })), wrapper.findAll(".data-table tbody > tr:not(.fault-row)").map((row) => {
+    assert.deepEqual(displayExport.History.map(({ Date, Mode, Note, Result, Status, Calibration }) => ({ Date, Mode, Note, Result, Status, Calibration })), wrapper.findAll(".data-table tbody > tr:not(.fault-row)").map((row) => {
       const cells = row.findAll("td");
       const select = row.find(".status-select").element;
       const status = [select.selectedOptions[0].textContent,
         ...(cells[4].findAll("span.badge").map((badge) => badge.text()))].join("\n");
-      return { Date: cells[0].text(), Mode: cells[1].text(), Note: cells[2].text(), Result: cells[3].text(), Status: status };
+      return { Date: cells[0].text(), Mode: cells[1].text(), Note: cells[2].text(), Result: cells[3].text(), Status: status, Calibration: cells[5].text() };
     }));
     assert.equal(wrapper.findAll(".lap-list .best").length, 1);
     await wrapper.find('[aria-label="Close lap details"]').trigger("click");

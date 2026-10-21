@@ -479,8 +479,9 @@ describe("pipeline with the fake master", () => {
     assert.equal(timing.lightColor, "red");
     const exported = history.exportData().History[0];
     assert.equal(exported.Result, formatDuration(timing.resultNs));
-    assert.equal(exported.Status, "Verified");
-    assert.deepEqual(Object.keys(exported), ["Date", "Mode", "Note", "Result", "Status"]);
+    assert.equal(exported.Status, "OK");
+    assert.equal(exported.Calibration, "GPS");
+    assert.deepEqual(Object.keys(exported), ["Date", "Mode", "Note", "Result", "Status", "Calibration"]);
 
     await waitFor(() => fake.queueLength === 0);
     assert.equal(device.stats.acks + device.stats.duplicates >= device.stats.events - device.dropped.count, true);
