@@ -18,7 +18,8 @@ extern "C" {
 
 /* Draw a new boot_id from the hardware RNG, reset the tx counter and load the
  * key. Call before any sec_seal(); a master calls it again to open a new session.
- * If the RNG fails, sealing stays refused (a repeated boot_id could repeat a nonce). */
+ * If the RNG fails, sealing is refused until sec_service() draws a boot_id (retried every
+ * second; a repeated boot_id could repeat a nonce). */
 void sec_init(void);
 void sec_service(uint32_t now_ms);
 int sec_boot_ready(void);
@@ -53,7 +54,8 @@ int sec_seal_uplink(const uint8_t key[32], uint8_t *out, int out_cap, uint32_t n
 /* Pack a payload model and seal into out[] as [header | ciphertext | mac];
  * payload_len is the model's sizeof, not its encoded length. node_id is the sender's (ignored for
  * downlink, always the master). Returns the wire length, or -1 out too small, -3 counter
- * exhausted, -4 unprovisioned or no boot id. Advances the tx counter. */
+ * exhausted, -4 unprovisioned or no boot id, -5 not a control type (UPLINK and CONFIRM use
+ * sec_seal_uplink/sec_seal_key). Advances the tx counter. */
 int sec_seal(uint8_t *out, int out_cap, uint8_t type, uint32_t node_id,
              const void *payload, int payload_len);
 
@@ -69,7 +71,8 @@ uint32_t sec_wire_counter(const uint8_t *wire);
 /* A pinned connection never learns an epoch from an unsolicited packet. */
 int sec_accept_counter(uint32_t *high, uint32_t ctr);
 
-/* Verify + decrypt. 0 on success; <0: -1 short buffer, -2 MAC failure, -3
+/* Verify + decrypt. 0 on success; <0: -1 malformed (short or wrong length, not a
+ * control type, zero counter, bad padding or payload), -2 MAC failure, -3
  * unprovisioned, -4 protocol-version mismatch. Replay is checked separately. */
 int sec_unseal(const uint8_t *in, int in_len, sec_meta_t *meta,
                void *out_payload, int payload_len);

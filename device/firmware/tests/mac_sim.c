@@ -728,8 +728,8 @@ static void check_checkpoints(int node)
     assert(cps > 0);
 }
 
-/* Stamps: the skew estimate has 1 ppm resolution and is applied up to
- * SYNC_TTL_MS past its anchor (<= 112 ticks), interpolation is exact to a tick. */
+/* Stamps: skew is applied as a fraction of the measured spans (sync.c), not a rounded
+ * ppm, up to SYNC_TTL_MS past its anchor; interpolation is exact to a tick. */
 #define TOL_TICKS 128
 
 /* ---- scenarios ------------------------------------------------------------ */
@@ -938,8 +938,8 @@ static void steady(void)
 }
 
 /* Two sensors, single captures 1.5..3 s apart: each goes out in the sensor's next dealt slot.
- * Slots 0, 2, 4 and 1, 3, 5 leave at most ~600 ms to wait, ~220 ms on average, plus ~90 ms
- * of CAD, TX setup and airtime. */
+ * Slots 0, 2, 4 and 1, 3 (slot 5 takes join requests) leave at most ~520 and ~760 ms to wait,
+ * ~255 ms on average, plus ~90 ms of CAD, TX setup and airtime. */
 static void latency(int lbt)
 {
     lbt_on = lbt;
@@ -1056,9 +1056,9 @@ static void long_gap(void)
     printf("PASS long_gap\n");
 }
 
-/* Sensor 1 reboots. With the same low byte (the beacon's boot tag) it takes its
- * slots back at once and only the ACK check protects it; with a new tag it
- * announces itself in the free slot, even when the table is full. */
+/* Sensor 1 reboots and rejoins through JOIN/OFFER/CONFIRM into its own entry, even
+ * when the table is full. The same/new-tag runs differ only in the low byte of the
+ * new boot ID; beacons no longer carry it as a boot tag, so both rejoin the same way. */
 static int reboot_same_tag;
 
 static void reboot_hook(uint64_t us)

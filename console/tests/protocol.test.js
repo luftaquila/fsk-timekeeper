@@ -47,7 +47,7 @@ describe("parseLine", () => {
     assert.equal(contractOf(null).ok, false);
   });
 
-  it("parses H / T / A / X / P v3", () => {
+  it("parses H / T / A / X / P", () => {
     assert.deepEqual(parseLine("H 18446744073709551615 12345 200 3"), { type: "H", nowTick: "18446744073709551615", uptimeMs: 12345, beaconSeq: 200, nseen: 3 });
     assert.deepEqual(parseLine("T 0123456789abcdef0123456789abcdef 99 7"), { type: "T", requestId: "0123456789abcdef0123456789abcdef", masterTick: "99", masterBootId: "7" });
     assert.deepEqual(parseLine("A K OK\r"), { type: "A", cmd: "K" });

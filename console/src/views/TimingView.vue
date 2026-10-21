@@ -16,7 +16,7 @@ const note = computed({
   set: (value) => settings.rememberNote(value),
 });
 
-// The page follows the open run's mode; with no run, the selected mode.
+// The page follows the current run's mode, open or closed; with no run, the selected mode.
 const mode = computed(() => timing.run?.mode ?? settings.state.mode);
 const verification = computed(() => timing.run?.verification ?? null);
 

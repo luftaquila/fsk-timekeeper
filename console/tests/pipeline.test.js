@@ -1,4 +1,4 @@
-// Store-level integration: fake master (USB v3) -> device.handleLine -> IndexedDB event log ->
+// Store-level integration: fake master (USB v7) -> device.handleLine -> IndexedDB event log ->
 // `C` ack -> engine -> calibration freeze -> history. Runs in node with fake-indexeddb.
 import "fake-indexeddb/auto";
 import { describe, it, beforeEach, vi } from "vitest";
@@ -834,7 +834,7 @@ describe("pipeline with the fake master", () => {
     await device.disconnect();
   });
 
-  it("gates E/D/T/P on the contract: a sensor-role board is never acked and cannot START", { timeout: 20000 }, async () => {
+  it("gates the contract: a sensor-role board is never acked and cannot START; a protocol mismatch shows why", { timeout: 20000 }, async () => {
     const { device, settings, timing } = await boot();
     const fake = await connectFake(device);
     const [a] = [...fake.sensors.keys()];

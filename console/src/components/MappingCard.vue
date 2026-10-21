@@ -26,7 +26,8 @@ function onDebounce(e) {
   e.target.value = settings.state.debounceMs;
 }
 
-// Discovered nodes = telemetry ∪ saved mapping, master excluded.
+// Discovered nodes = telemetry ∪ admission (J lines) ∪ saved mapping, minus removed sensors;
+// master excluded.
 const nodes = computed(() => {
   const s = new Set([...Object.keys(device.telemetry), ...Object.keys(device.admission), ...settings.mappingList.map((m) => m.node_id)]);
   s.delete("0");

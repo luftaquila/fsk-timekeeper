@@ -23,7 +23,7 @@ typedef struct {
     uint64_t m_tx_last;    /* TxDone of the last beacon */
     uint8_t  cp_id;
     unsigned cp_left;
-    uint32_t auth_drop;    /* AEAD failures (not attributable to a sensor) */
+    uint32_t auth_drop;    /* uplinks from an unknown/unlinked sender, or failing AEAD or boot ID checks */
     uint32_t ver_drop;     /* packets of another radio protocol version */
     uint32_t last_report_ms; /* full registry status refresh over USB */
     retry_t retry;

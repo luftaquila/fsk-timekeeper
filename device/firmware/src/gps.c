@@ -16,8 +16,9 @@
 #define NMEA_FIELDS       16u
 
 /* ---- UARTE0 receive: one-byte EasyDMA transfers (ENDRX->STARTRX short) moved to a ring by the
- * ENDRX interrupt, as the main loop can block for tens of ms at 1.04 ms per byte. Overflow drops
- * the newest byte (the checksum rejects the torn sentence). EasyDMA buffers must be in RAM. */
+ * ENDRX interrupt, as the main loop can block for tens of ms at 1.04 ms per byte. Overflow discards
+ * every byte up to the next '$' that fits; the parser drops the torn sentence there. EasyDMA
+ * buffers must be in RAM. */
 static uint8_t s_dma_byte;
 static volatile uint8_t s_rx_ring[RX_RING];
 static volatile uint16_t s_rx_head;

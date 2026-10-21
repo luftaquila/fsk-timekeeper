@@ -33,7 +33,7 @@ describe("firmware <-> console constants", () => {
     assert.equal(p.UL_EDGES_MAX, protocol.EDGES_PER_LINE_MAX);
   });
 
-  it("proto_usb.h", () => {
+  it("proto_usb.h and SYNC_TTL_MS", () => {
     assert.equal(u.PU_USB_PROTO, protocol.USB_PROTO_VERSION);
     assert.equal(c.SYNC_TTL_MS, WIRELESS_SYNC_TTL_MS);
     for (const [name, bit] of Object.entries(protocol.RESET_BITS)) assert.equal(u[`RESET_${name}`], bit, `RESET_${name}`);

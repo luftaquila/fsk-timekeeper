@@ -22,8 +22,10 @@ const radio_cfg_t *radio_config(void);
  * error code. Initialization remains pending until radio_start_rx() succeeds. */
 int radio_begin(void);
 
-/* Absolute TIMER2 microsecond limit, less than 2^31 us ahead. Every HAL wait
- * inherits it; a timed-out command holds NRST low until recovery. */
+/* Absolute TIMER2 microsecond limit, less than 2^31 us ahead, for HAL waits.
+ * radio_rx_settle(), radio_cad() and radio_lbt_listen() take it as an access deadline
+ * between steps and give each SPI command its own TX_SETUP_MS budget; radio_tx_start()
+ * sets its own. A timed-out command holds NRST low until recovery. */
 void radio_limit(uint32_t end_us);
 void radio_unlimit(void);
 /* Nonblocking TX. Start/setup <= TX_SETUP_MS; completion + RX rearm <= end_us.
@@ -45,7 +47,7 @@ int radio_standby(void);
 int radio_receive(uint8_t *buf, int maxlen, float *rssi, float *snr);
 
 /* Wait out a reception in progress: a preamble with no header after header_wait_ms is noise
- * (maybe stale: the flags stay latched until the next CAD or TX); a packet still arriving
+ * (maybe stale: the flags stay latched until the next CAD, TX or RX re-arm); a packet still arriving
  * after max_ms or an elapsed access deadline returns RADIO_RX_BUSY. */
 #define RADIO_RX_IDLE   0 /* nothing on air for us */
 #define RADIO_RX_PACKET 1 /* a packet is ready for radio_receive() */

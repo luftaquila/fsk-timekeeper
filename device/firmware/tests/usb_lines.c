@@ -1,4 +1,5 @@
-/* Every USB line type, printed by the firmware's own formatters with extreme values.
+/* Every USB line type except J and the K key reply, printed by the firmware's own
+ * formatters with extreme values.
  * `make test` compares the output with usb_lines.txt, which the console's
  * firmware-lines test parses: both sides read the same lines. */
 #include <stdio.h>

@@ -1,4 +1,5 @@
-/* Host-only register surface used by gps.c and gpio.h; no hardware emulation. */
+/* Host-only register surface for the firmware under test (GPIO, UARTE for gps.c,
+ * TIMER/GPIOTE/PPI for capture.c, SPIM for radio_hal.cpp); no hardware emulation. */
 #ifndef TEST_NRF_H
 #define TEST_NRF_H
 #include <stdint.h>

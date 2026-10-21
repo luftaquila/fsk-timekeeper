@@ -417,7 +417,7 @@ it("remaps imported log-clear membership without clearing unrelated or later evi
   await history.importJson(recoveryFile(await backup.pack([],data)));
   const [mark]=await getAll(eventLog.getDb(),eventLog.STORE_LOG);
   assert.deepEqual((await membersOf(mark)).map(e=>e.capture_seq),[1,2]);
-  assert.equal(mark.evidenceSeqs.includes(2),false); // unrelated capture 99
+  assert.equal(mark.evidenceSeqs.includes(2),false); // unrelated checkpoint 99
   const loggedNodes=async()=>(await getAll(eventLog.getDb(),eventLog.STORE_LOG))
     .filter(e=>e.code==="radio_history").map(e=>e.nodeId).sort();
   assert.deepEqual(await loggedNodes(),["00000003","00000099"]);

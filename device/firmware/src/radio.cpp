@@ -297,8 +297,9 @@ extern "C" int radio_receive(uint8_t *buf, int maxlen, float *rssi, float *snr)
         return 0;
     }
     size_t len = radio.getPacketLength();
-    /* A failed length read gives 0, and readData(buf, 0) takes the whole packet
-     * whatever its size. */
+    /* A length read that fails before the SPI transfer gives 0 (readData(buf, 0)
+     * would take the whole packet whatever its size); one cut off by a SPI timeout
+     * reads 0xFF and is clipped to maxlen below. */
     if (len == 0) {
         radio_start_rx();
         rx_result(RX_READ_FAULT, false);
@@ -347,7 +348,7 @@ extern "C" int radio_rx_settle(uint32_t header_wait_ms, uint32_t max_ms)
         uint32_t waited = board_millis() - t0;
         /* A valid header means a packet is arriving, whatever older header error
          * is latched beside it. A header error or a preamble that led nowhere
-         * stays latched: the caller's next CAD or TX clears the IRQ status. */
+         * stays latched until the next CAD, TX or RX re-arm clears the IRQ status. */
         if (irq & RADIOLIB_SX126X_IRQ_HEADER_VALID) {
             if (waited >= max_ms) { return RADIO_RX_BUSY; }
         } else if ((irq & RADIOLIB_SX126X_IRQ_HEADER_ERR) || !(irq & RADIOLIB_SX126X_IRQ_PREAMBLE_DETECTED) ||

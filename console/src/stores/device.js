@@ -62,7 +62,7 @@ export const useDeviceStore = defineStore("device", () => {
   const head = ref(null); // { hseq, firstSeenAt, lastSeenAt } of the latest E line
   const radioHistory = new Map(); // cumulative checkpoint snapshots, keyed by sensor boot
   let radioLogChain = Promise.resolve();
-  const radioReports = new Map(); // latest snapshot per board, restored from the device log
+  const radioReports = new Map(); // latest snapshot per board boot (up to 512), restored from the device log
   const logEntries = ref([]); // device log, newest first
 
   let transport = null;

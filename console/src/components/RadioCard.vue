@@ -61,7 +61,7 @@ function load(b) {
   lastResult.value = null;
 }
 
-// Load each connection's settings without overwriting edits on periodic identity reports.
+// Load the settings when the board changes; a repeated I line from the same board (?ID, R) keeps edits.
 watch(() => device.identity?.devid, () => {
   if (board.value) load(board.value);
   else {

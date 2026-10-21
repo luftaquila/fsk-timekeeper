@@ -4,8 +4,8 @@
 #   make clean           remove build/
 #   make distclean       remove build/ and vendor/
 #   FW_VERSION=v1.2.3 make   version reported on the USB `I` line (CI passes the release tag)
-#   NODE_DEBUG=1 make       print chip id / role over USB once per second (testing only)
-#   make test              host tests: GPS, sync, queues, MAC simulator (C11 compiler, no ARM deps)
+#   make test              host tests: GPS, sync, queues, MAC simulator, radio, USB lines, tools
+#                          (C11/C++17 host compilers and python3, no ARM deps)
 #
 # One binary for every board: the role is chosen at runtime (master when a PC
 # enumerates the USB device, sensor otherwise; src/main.c). The fleet key is not

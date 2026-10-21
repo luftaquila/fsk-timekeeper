@@ -39,7 +39,7 @@ wall = 2.5;        // side wall thickness
 lid_th = 2;        // lid ceiling thickness
 base_th = 3;       // base plate thickness (>= edge_r so its bottom edge can be filleted)
 pcb_clear = 0.5;   // gap between PCB edge and wall inner face
-standoff_h = 2.5;  // PCB bottom height above base top (clears bottom-side 0603 caps ~0.5)
+standoff_h = 2.5;  // PCB bottom height above base top
 edge_r = 2.5;      // fillet radius for ALL outer edges of the body
 batt_h = 21;       // PCB TOP to installed CELL TOP; retained at user-specified 21 mm
 ra01_h = 6;        // assumed module height above PCB

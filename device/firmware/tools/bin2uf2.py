@@ -5,7 +5,7 @@ Minimal, dependency-free implementation of the UF2 block format
 (https://github.com/microsoft/uf2). 512-byte blocks, 256-byte payloads, with
 the family-ID flag set so the bootloader rejects images for the wrong chip.
 
-  bin2uf2.py --base 0x1000 --family 0xADA52840 in.bin out.uf2
+  bin2uf2.py --base 0x26000 --family 0xADA52840 in.bin out.uf2
 """
 import argparse
 import struct
@@ -19,7 +19,7 @@ PAYLOAD = 256
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--base", required=True, help="flash load address, e.g. 0x1000")
+    ap.add_argument("--base", required=True, help="flash load address, e.g. 0x26000")
     ap.add_argument("--family", required=True, help="UF2 family id, e.g. 0xADA52840")
     ap.add_argument("input")
     ap.add_argument("output")

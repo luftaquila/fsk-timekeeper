@@ -10,7 +10,7 @@ const NOW = 1_700_000_000_000;
 const tick = (ms) => String(T0 + BigInt(ms) * MS);
 const secs = (a, b) => Number(nominalNs(BigInt(b) - BigInt(a))) / 1e9;
 
-// Synthetic event log in the shape eventLog stores v2 rows (seq = insertion order).
+// Synthetic event log in the shape eventLog stores rows (seq = insertion order).
 function makeLog() {
   const rows = [];
   const seqs = {};

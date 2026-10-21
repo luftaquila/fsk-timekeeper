@@ -14,6 +14,7 @@
  *     D recovery fields are master-only; sensor D uses four zeroes (history is in E K).
  *   T <request_id> <tick> <master_boot_id>
  *   P <pps_tick> <utc_s|0> <ppb> <pps_valid> <fix> <sats> <span_s> <seg> <n>
+ *   J <node8hex> <WAIT|SYNC|READY> (admission status)
  *   K <64hex|NONE> (USB key readback)
  *   A <cmd> OK
  *   X <code> [args...]
@@ -54,7 +55,8 @@ export const MASTER_QUEUE_CAPACITY = 16;
 export const RESET_BITS = Object.freeze({ PIN: 0x01, DOG: 0x02, SREQ: 0x04, LOCKUP: 0x08, OFF: 0x10, VBUS: 0x20, FAULT: 0x40, OTHER: 0x80 });
 const RESET_LABEL = { PIN: "reset pin", DOG: "watchdog", SREQ: "soft reset", LOCKUP: "CPU lockup", OFF: "wake from off", VBUS: "USB wake", FAULT: "fault reboot", OTHER: "other" };
 
-// Active radio faults and sticky non-radio error flags (D line err_flags).
+// Active radio faults and sticky non-radio error flags (D line err_flags); the master's
+// QUEUE_FULL is its current queue state.
 export const ERROR_BITS = Object.freeze({
   CAD_TIMEOUT: 0x0002,
   SPI_TIMEOUT: 0x0004,
@@ -158,7 +160,8 @@ function stateMap(s) {
   return s === "OK" ? "online" : s === "STALE" ? "degraded" : s === "LOST" ? "lost" : null;
 }
 
-// One line -> typed message, or null for blank input. Unknown prefixes yield { type: "?" }.
+// One line -> typed message, or null for blank input or a malformed J line. Unknown prefixes
+// yield { type: "?" }.
 export function parseLine(line) {
   const text = String(line ?? "").trim();
   const t = text.split(/\s+/);
@@ -273,7 +276,8 @@ export function rowKey(row) {
 
 /* One E line -> { stage, ... }: "unreadable" (hseq or crc unreadable) and "crc" (mismatch, the
  * master re-sends) are never acked; "invalid" (sent, but breaks the contract) is quarantined and
- * acked; "valid" gives rows ready to store (without seq / received_at). */
+ * acked, except one without a readable master_boot_id (the ack needs it); "valid" gives rows
+ * ready to store (without seq / received_at). */
 export function parseEventLine(raw) {
   const line = String(raw ?? "").replace(/\s+$/, "");
   const t = line.split(" ");

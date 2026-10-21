@@ -1,7 +1,7 @@
 /* RadioLib hardware abstraction for the nRF52840, bare metal: gpio.h pins, raw
- * SPIM0, and board_micros()/board_millis() for time. RadioLib polls DIO1
- * itself, so attachInterrupt/pulseIn are stubs; yield() is the hang check of
- * its BUSY loops. Main-loop context only. */
+ * SPIM0, and board_micros()/board_millis() for time. The firmware reads DIO1
+ * itself (radio.cpp; GPIOTE/PPI timestamps it), so attachInterrupt/pulseIn are
+ * stubs; yield() is the hang check of RadioLib's BUSY loops. Main-loop context only. */
 #ifndef RADIO_HAL_H
 #define RADIO_HAL_H
 

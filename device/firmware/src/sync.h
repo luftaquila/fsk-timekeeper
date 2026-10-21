@@ -15,7 +15,7 @@
 
 #include <stdint.h>
 
-#define SYNC_HIST 8u /* anchors kept for the skew estimate */
+#define SYNC_HIST 8u /* one-way beacon samples kept for the skew estimate */
 
 typedef struct {
     int      have;   /* anchor valid */

@@ -25,7 +25,8 @@ void board_hfxo_service(void);
  * timing code compares this count as well. */
 uint32_t board_hfxo_stops(void);
 
-/* EXT_POWER gate (P0.13) — enables the 12 V boost / sensor rails. */
+/* EXT_POWER gate (P0.13): switches on the module's VCC (3V3) output, which feeds
+ * the radio, the GPS and the sensor pull-up. The 12 V boost runs from the battery. */
 void board_ext_power_on(void);
 
 void board_led_off(void);

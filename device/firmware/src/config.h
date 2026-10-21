@@ -29,7 +29,7 @@
 #define PIN_GPS_RXD    PIN(1, 11) /* UARTE0 RXD <- GPS TXD (NMEA, 9600 8N1) */
 #define PIN_GPS_TXD    PIN(0, 10) /* UARTE0 TXD -> GPS RXD (CASIC config commands) */
 
-/* VCC enable gate — driven HIGH at boot (DESIGN §8) */
+/* VCC (3V3 out: radio, GPS, sensor pull-up) enable gate — driven HIGH at boot (DESIGN §8) */
 #define PIN_EXT_POWER  PIN(0, 13)
 
 /* LoRa radio parameters (DESIGN §2.1/§2.2): one channel shared by the master and
@@ -70,8 +70,9 @@
 #define TICKS_PER_MS 16000u /* TIMER1 runs at 16 MHz */
 
 /* Frame timing (DESIGN §2.8): a beacon every BEACON_PERIOD_MS on a TIMER1 grid; slot j starts
- * SLOT_OFFSET_MS + j * SLOT_LEN_MS after its RxDone. Slots 0..SLOT_COUNT-2 are dealt in turn to
- * the sensors in the slot table, the last one is free for unregistered sensors (mac_sensor.c). */
+ * SLOT_OFFSET_MS + j * SLOT_LEN_MS after its RxDone. A normal beacon deals slots 0..SLOT_COUNT-2
+ * in turn to the live slot-table entries and leaves the last one for join requests
+ * (mac_normal_schedule, mac_schedule.h); an admission beacon carries its schedule explicitly. */
 #define BEACON_PERIOD_MS   1000u
 #define SLOT_OFFSET_MS     50u
 #define SLOT_LEN_MS        120u
@@ -112,7 +113,7 @@
  * enough span, at most SKEW_MAX_EXTRAP_MS past the anchor. The raw estimate is still reported
  * so an RC fallback (~10000 ppm) stays visible. */
 #define SKEW_CLAMP_PPM      100      /* max plausible XO drift; a real XO is < +-40 ppm */
-#define SKEW_MIN_SAMPLES    4u       /* offset samples required before trusting the slope */
+#define SKEW_MIN_SAMPLES    4u       /* one-way beacon samples required before trusting the slope */
 #define SKEW_MIN_DL_TICKS   8000000u /* min local-tick span of a skew sample (~0.5 s) */
 #define SKEW_MAX_EXTRAP_MS  SYNC_TTL_MS
 
@@ -124,8 +125,10 @@
 #define MASTER_USB_RETRY_MS    100u
 
 /* Radio recovery: reset after this many consecutive SPI no-responses or failed CADs (a radio
- * that reset itself is back in GFSK and fails the CAD start), or when a sensor hears no beacon
- * for BEACON_LOSS_RESET_MS; resets back off up to RADIO_RESET_BACKOFF_MAX_MS. */
+ * that reset itself is back in GFSK and fails the CAD start), or when a sensor has had no beacon
+ * of its active session for BEACON_LOSS_RESET_MS: beacons of a master it has not joined do not
+ * count, and an OFFER defers the reset. Resets back off up to RADIO_RESET_BACKOFF_MAX_MS; each
+ * beacon a sensor accepts restarts its backoff at BEACON_LOSS_RESET_MS. */
 #define RADIO_NORESP_RESET         3u
 #define BEACON_LOSS_RESET_MS       10000u
 #define RADIO_RESET_BACKOFF_MAX_MS 60000u

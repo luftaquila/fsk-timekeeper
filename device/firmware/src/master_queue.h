@@ -23,7 +23,7 @@ typedef struct {
 typedef struct {
     mq_item_t item[MASTER_EVENT_QUEUE_LEN];
     unsigned head, count;
-    uint32_t next_hseq;      /* 1.. per power-on */
+    uint32_t next_hseq;      /* 1.. per boot */
     uint16_t overflow;       /* records refused while full (backpressure) */
     uint32_t ack_mismatch;
 } mq_t;
@@ -37,7 +37,8 @@ int mq_push_uplink(mq_t *q, uint32_t node_id, uint64_t sensor_boot_id, const upl
                    float rssi, float snr);
 int mq_push_timebase_end(mq_t *q, uint64_t master_boot_id, uint64_t tick);
 
-/* Host ack. Pops the head on an exact match (1), else counts a mismatch (0). */
+/* Host ack. Pops the head on an exact match (1). An empty queue or an hseq older than
+ * the head is ignored (0); anything else counts a mismatch (0). */
 int mq_ack(mq_t *q, uint32_t hseq, uint64_t master_boot_id, uint32_t crc);
 
 /* Send or re-send the head line when due. */

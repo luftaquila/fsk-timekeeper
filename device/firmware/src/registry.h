@@ -1,5 +1,5 @@
 /* Master's sensor registry (DESIGN §2.3), pure logic: entry k = slot-table entry k
- * (the sensors deal the uplink slots among the live entries, mac_sensor.c). A sensor
+ * (uplink slots are dealt among the live entries by mac_normal_schedule, mac_schedule.h). A sensor
  * is registered after mutual challenge confirmation; a LOST entry may be reclaimed. */
 #ifndef REGISTRY_H
 #define REGISTRY_H

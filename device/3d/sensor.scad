@@ -40,7 +40,7 @@ wall = 2.5;        // side wall thickness
 lid_th = 2;        // lid ceiling thickness
 base_th = 3;       // base plate thickness (>= edge_r so its bottom edge can be filleted)
 pcb_clear = 0.5;   // gap between PCB edge and wall inner face
-standoff_h = 2.5;  // PCB bottom height above base top (clears bottom-side 0603 caps ~0.5)
+standoff_h = 2.5;  // PCB bottom height above base top
 edge_r = 2.5;      // fillet radius for ALL outer edges of the body
 batt_h = 21;       // PCB TOP to installed CELL TOP; retained at user-specified 21 mm
 ra01_h = 6;        // assumed module height above PCB
@@ -71,10 +71,10 @@ head_h = 2;            // counterbore depth
 base_fit = 0.3;        // base clearance per side inside the lid bottom opening
 
 /* [J1 cutout — front/-Y wall] */
-// J1 at (132.724,113.0808), rotated 180 degrees. Body local X=-2.7..6.9.
+// J1 at (132.724,115.63), rotated 180 degrees. Body local X=-2.7..6.9.
 // Use body centre +2.1, not the footprint origin. No J2 on the current PCB.
 molex_x = 132.724 - 2.1 - pcb_cx;
-molex_front_y = pcb_cy - (113.0808 + 13.9);
+molex_front_y = pcb_cy - (115.63 + 13.9);
 molex_cut_w = 11;
 molex_cut_h = 11;
 molex_latch_w = 4;

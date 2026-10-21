@@ -152,7 +152,7 @@ export async function unpack(text) {
 
 const evidenceKey = r => r.kind === "quarantine" ? `q:${r.master_boot_id}:${r.hseq}` : rowKey(r);
 
-// All validation precedes mutations; all stores commit together or roll back together.
+// Records are checked while they are merged in one transaction: any conflict rolls every store back.
 export function merge(data) {
   return enqueue(async () => {
     const db = eventLog.getDb();

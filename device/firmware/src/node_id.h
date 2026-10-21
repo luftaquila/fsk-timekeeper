@@ -1,6 +1,6 @@
 /* This board's identity: the factory-unique chip id (FICR.DEVICEID). Every board
  * runs the same binary; the role is decided from USB at boot (DESIGN §8), and a
- * sensor is registered by the master on its first authenticated uplink (§2.3). */
+ * sensor is registered by the master once its JOIN/OFFER/CONFIRM handshake completes (§2.3). */
 #ifndef NODE_ID_H
 #define NODE_ID_H
 

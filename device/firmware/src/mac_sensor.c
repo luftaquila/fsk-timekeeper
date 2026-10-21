@@ -329,8 +329,8 @@ static uplink_pl_t *make_checkpoint(mac_sensor_t *s)
     return p;
 }
 
-/* Diagnostics ride every transmission (the evidence part of an in-flight
- * packet never changes). */
+/* Diagnostics ride every DATA uplink and are refilled on each send (the evidence
+ * part of an in-flight packet never changes); JOIN and CONFIRM carry none. */
 static void fill_diag(mac_sensor_t *s, uplink_pl_t *p)
 {
     uint64_t now = capture_now64();
