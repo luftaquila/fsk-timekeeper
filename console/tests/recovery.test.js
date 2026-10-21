@@ -35,6 +35,7 @@ const runLog = await import("../src/lib/runLog.js");
 const backup = await import("../src/lib/backup.js");
 const { getAll, put } = await import("../src/lib/idb.js");
 const { RADIO_PROTO_VERSION, USB_PROTO_VERSION } = await import("../src/lib/protocol.js");
+const { RUN_SCHEMA, isRecord } = await import("../src/lib/engine.js");
 
 fakeDefaults.slotDelayMin = 10;
 fakeDefaults.slotDelayMax = 30;
@@ -63,7 +64,6 @@ async function boot({ keepStorage = false } = {}) {
   const timing = useTimingStore();
   await eventLog.init();
   const history = useHistoryStore();
-  await history.init();
   const device = useDeviceStore();
   await timing.reevaluate();
   return { device, settings: useSettingsStore(), timing, history };
@@ -117,12 +117,12 @@ describe("durable run recovery", () => {
   });
 
   it("recovers a deadline that expired while closed using nominal timing without PPS", async () => {
-    const { history } = await boot();
-    const run = { schema: 3, usbProto: USB_PROTO_VERSION, radioProto: RADIO_PROTO_VERSION, runId: "expired", mode: "sprint", verification: "verified",
+    await boot();
+    const run = { schema: RUN_SCHEMA, usbProto: USB_PROTO_VERSION, radioProto: RADIO_PROTO_VERSION, runId: "expired", mode: "sprint", verification: "verified",
       classification: null, armed: false, closed: true, nodes: {}, cursor: 0, crossingTicks: [],
       startTick: "16000000", finishTick: "32000000", calibration: null, durationNs: null,
-      finalizeAt: Date.now() - 5000, calibrationEdges: [], startedAt: 1, durable: true };
-    await runLog.save(run); await history.upsert(run);
+      finalizeAt: Date.now() - 5000, calibrationEdges: [], startedAt: 1, recordedAt: 1, durable: true };
+    await runLog.save(run);
     const again = await boot({ keepStorage: true });
     assert.equal(again.history.rows[0].durationNs, "1000000000");
     assert.equal(again.history.rows[0].calibration.method, "nominal");
@@ -154,25 +154,25 @@ describe("durable run recovery", () => {
 
   it("serializes delete after queued writes and prevents later saves from reviving it", async () => {
     const { history } = await boot();
-    const r = { schema:3, runId:"delete", mode:"sprint", verification:"verified", classification:null,
+    const r = { schema:RUN_SCHEMA, runId:"delete", mode:"sprint", verification:"verified", classification:null,
       closed:true, startTick:"16000000", finishTick:"32000000", crossingTicks:[], calibration:null,
-      durationNs:"1000000000", cursor:0, startedAt:1, durable:true };
-    await history.upsert(r);
-    await Promise.all([history.upsert(r), history.removeRow(history.rows[0].id)]);
-    await history.upsert(r);
+      durationNs:"1000000000", cursor:0, startedAt:1, recordedAt:1, durable:true };
+    await runLog.save(r);
+    await Promise.all([runLog.save(r), history.removeRow(r.runId)]);
+    await runLog.save(r);
     assert.equal(history.rows.length, 0);
-    assert.equal((await getAll(eventLog.getDb(), eventLog.STORE_RESULTS)).length, 0);
+    assert.equal((await getAll(eventLog.getDb(), runLog.STORE_RUNS)).filter(isRecord).length, 0);
     const again = await boot({ keepStorage:true });
-    await again.history.upsert(r); assert.equal(again.history.rows.length, 0);
+    await runLog.save(r); assert.equal(again.history.rows.length, 0);
   });
 
   it("retains records when deletion fails", async () => {
     const { timing, history } = await boot();
-    await timing.classify("DNS", "sprint", "keep");
-    const id = history.rows[0].id;
+    await timing.classify("DNS", { mode: "sprint", note: "keep" });
+    const id = history.rows[0].runId;
     const spy = vi.spyOn(eventLog.getDb(), "transaction").mockImplementation(() => { throw new Error("delete failed"); });
     await assert.rejects(history.removeRow(id), /delete failed/);
-    assert.equal(history.rows[0].id, id); spy.mockRestore();
+    assert.equal(history.rows[0].runId, id); spy.mockRestore();
   });
 });
 
@@ -200,24 +200,24 @@ it("reacquires automatically released wake locks and releases late requests afte
 
 it("exports all records and imports atomically with exact values, deduplication and rollback", async () => {
   let { timing, history } = await boot();
-  await timing.classify("DNS", "sprint", "sprint"); await timing.reset();
-  await timing.classify("DNF", "laps", "laps");
+  await timing.classify("DNS", { mode: "sprint", note: "sprint" }); await timing.reset();
+  await timing.classify("DNF", { mode: "laps", note: "laps" });
   const text = await history.recoveryJson(); const parsed = await backup.unpack(text);
-  assert.equal(parsed.results.length, 2);
+  assert.equal(parsed.runs.length, 2);
   ({ timing, history } = await boot());
   const file = { size: text.length, text: async () => text };
   assert.equal((await history.importJson(file)).added, 2);
   assert.equal(history.rows.length, 2); assert.equal(timing.armed, false);
   assert.equal((await history.importJson(file)).added, 0);
   assert.equal(history.rows.length, 2);
-  const conflict = runLog.clone(parsed); conflict.results[0].note = "different";
+  const conflict = runLog.clone(parsed); conflict.runs[0].note = "different";
   const bad = await backup.pack([], conflict);
-  await assert.rejects(history.importJson({ size:bad.length, text:async()=>bad }), /Conflicting record/);
+  await assert.rejects(history.importJson({ size:bad.length, text:async()=>bad }), /Conflicting run/);
   assert.equal(history.rows.length, 2);
   const corrupt = text.replace('"sprint"', '"altered"');
   await assert.rejects(backup.unpack(corrupt));
   const roundtrip = await backup.unpack(await history.recoveryJson());
-  assert.deepEqual(roundtrip.results.map(r=>r.classification).sort(), ["DNF","DNS"]);
+  assert.deepEqual(roundtrip.runs.map(r=>r.classification).sort(), ["DNF","DNS"]);
 });
 
 it("round-trips frozen GPS ticks, evidence and unfinished snapshots into a populated database", async () => {
@@ -254,7 +254,7 @@ it("round-trips frozen GPS ticks, evidence and unfinished snapshots into a popul
   await history.importJson({ size:text.length, text:async()=>text });
   assert.equal((await getAll(eventLog.getDb(), eventLog.STORE_EVENTS)).length, events.length);
   const after = await backup.unpack(await history.recoveryJson());
-  assert.equal(after.results.find(r=>r.runId===id).durationNs, expected.durationNs);
+  assert.equal(after.runs.find(r=>r.runId===id).durationNs, expected.durationNs);
 });
 
 it("rolls back earlier inserted evidence when a later import request aborts", async () => {
@@ -263,7 +263,7 @@ it("rolls back earlier inserted evidence when a later import request aborts", as
     capture_seq:1, master_tick:"16000000", hseq:1, received_at:1 };
   const pps = { master_boot_id:"500", tick:"16000000", seg:1, n:0, received_at:1 };
   await put(eventLog.getDb(), eventLog.STORE_PPS, pps);
-  const data = { results:[], runs:[], events:[e], pps:[{...pps,n:5}], quarantine:[], log:[] };
+  const data = { runs:[], events:[e], pps:[{...pps,n:5}], quarantine:[], log:[] };
   const text = await backup.pack([], data);
   await assert.rejects(history.importJson({size:text.length,text:async()=>text}), /Conflicting pps/);
   assert.equal((await getAll(eventLog.getDb(),eventLog.STORE_EVENTS)).length,0);
@@ -272,13 +272,12 @@ it("rolls back earlier inserted evidence when a later import request aborts", as
 
 it("exports memory-only quarantine and result data after a storage failure", async () => {
   const { timing, history } = await boot();
-  await timing.classify("DNS", "sprint", "memory backup");
+  await timing.classify("DNS", { mode: "sprint", note: "memory backup" });
   eventLog.reportWriteFailure(new Error("disk full"));
   await eventLog.ingestQuarantine({raw:"bad evidence", reason:"invalid", node:null, hseq:77, masterBootId:null});
   const text = await history.recoveryJson();
   const data = await backup.unpack(text);
-  assert.equal(data.results.length, 1);
-  assert.equal(data.results[0].durable, false);
+  assert.equal(data.runs.length, 1);
   assert.equal(data.runs[0].durable, false);
   assert.equal(data.quarantine.length, 1);
   const restored = await boot();
@@ -287,16 +286,16 @@ it("exports memory-only quarantine and result data after a storage failure", asy
   assert.equal((await eventLog.listQuarantine()).length, 1);
 });
 
-it("restores result-only deletions explicitly and remaps device-log evidence watermarks", async () => {
+it("restores deleted records explicitly and remaps device-log evidence watermarks", async () => {
   const { history } = await boot();
-  const row = {schema:3,runId:"archived",mode:"sprint",verification:"verified",classification:null,
-    closed:true,startTick:"16000000",finishTick:"32000000",durationNs:"1000000000",cursor:0,startedAt:1};
-  await history.upsert(row);
+  const row = {schema:RUN_SCHEMA,runId:"archived",mode:"sprint",verification:"verified",classification:null,
+    armed:false,closed:true,nodes:{},startTick:"16000000",finishTick:"32000000",durationNs:"1000000000",cursor:0,startedAt:1,recordedAt:1};
+  await runLog.save(row);
   const data = await backup.unpack(await history.recoveryJson());
   data.events = [{seq:100,kind:"quarantine",master_boot_id:"5",node_id:"*",hseq:1,raw:"bad",received_at:1}];
   data.log = [{at:1,kind:"state",code:"radio_history_clear",throughSeq:100,text:""}];
   const text = await backup.pack([],data);
-  await history.removeRow(history.rows[0].id);assert.equal(runLog.isDeleted(row.runId),true);
+  await history.removeRow(row.runId);assert.equal(runLog.isDeleted(row.runId),true);
   await history.importJson({size:text.length,text:async()=>text});
   assert.equal(runLog.isDeleted(row.runId),false);
   assert.equal(history.rows.length,1);
@@ -305,9 +304,9 @@ it("restores result-only deletions explicitly and remaps device-log evidence wat
   assert.equal(log.throughSeq,event.seq);
 });
 
-const reviewedRun = (runId, extra = {}) => ({ schema:3, usbProto:USB_PROTO_VERSION, radioProto:RADIO_PROTO_VERSION, runId, mode:"sprint", verification:"verified",
+const reviewedRun = (runId, extra = {}) => ({ schema:RUN_SCHEMA, usbProto:USB_PROTO_VERSION, radioProto:RADIO_PROTO_VERSION, runId, mode:"sprint", verification:"verified",
   classification:null, armed:false, closed:true, nodes:{}, cursor:0, throughSeq:0, crossingTicks:[], masterBootId:"500",
-  startTick:"16000000", finishTick:"32000000", calibration:null, durationNs:null, startedAt:1, durable:true, ...extra });
+  startTick:"16000000", finishTick:"32000000", calibration:null, durationNs:null, startedAt:1, recordedAt:1, durable:true, ...extra });
 const recoveryFile = text => ({ size:new TextEncoder().encode(text).length, text:async()=>text });
 // Evidence rows an imported record refers to, in its own order.
 const membersOf = async record => {
@@ -319,9 +318,9 @@ it("preserves operator classifications and explicit Clear while detached results
   for (const [before, after] of [[null,"DSQ"],["DSQ",null],["DNF","DNS"]]) {
     let { timing, history } = await boot();
     const run = reviewedRun("late-freeze", {classification:before,finalizeAt:Date.now()+80,calibrationEdges:[]});
-    await runLog.save(run,{select:true});await history.upsert(run);await timing.reset();
-    await timing.classify("DNS","sprint","next attempt");
-    await history.classify(run.runId,after);
+    await runLog.save(run,{select:true});await timing.reset();
+    await timing.classify("DNS",{mode:"sprint",note:"next attempt"});
+    await timing.classify(after,{runId:run.runId});
     await timing.settleResults();
     const row = history.rows.find(r=>r.runId===run.runId);
     assert.equal(row.classification,after);
@@ -338,9 +337,9 @@ const recoveryPps = () => [0,1,1000].map(n=>({ master_boot_id:"500",tick:String(
 it("freezes imported ongoing laps with file PPS, local PPS, or nominal timing, and never recalibrates them", async () => {
   for (const source of ["file","local","none","other-boot"]) {
     let { history } = await boot();
-    const run = reviewedRun(`laps-${source}`,{mode:"laps",armed:true,closed:false,startTick:null,finishTick:null,totalValid:true,
+    const run = reviewedRun(`laps-${source}`,{mode:"laps",armed:true,closed:false,startTick:null,finishTick:null,
       crossingTicks:["16001600","16017601600"]});
-    await runLog.save(run);await history.upsert(run);
+    await runLog.save(run);
     if (source==="file") for (const edge of recoveryPps()) await put(eventLog.getDb(),eventLog.STORE_PPS,edge);
     const text=await history.recoveryJson();
     ({history}=await boot());
@@ -367,10 +366,10 @@ it("freezes imported ongoing laps with file PPS, local PPS, or nominal timing, a
 it("preserves existing frozen calibration when imported without PPS", async () => {
   const {freezeCalibration}=await import("../src/lib/calibration.js");
   let {history}=await boot();
-  const run=reviewedRun("frozen-without-pps",{mode:"laps",totalValid:true,startTick:null,finishTick:null,
+  const run=reviewedRun("frozen-without-pps",{mode:"laps",startTick:null,finishTick:null,
     crossingTicks:["16001600","16017601600"],durationNs:"1000000000000"});
   run.calibration=freezeCalibration(recoveryPps(),run.crossingTicks);
-  await runLog.save(run);await history.upsert(run);
+  await runLog.save(run);
   const text=await history.recoveryJson();
   ({history}=await boot());await history.importJson(recoveryFile(text));
   assert.deepEqual(history.rows[0].calibration,run.calibration);
@@ -389,13 +388,12 @@ it("preserves exact evidence membership and source order across partial overlap,
       await eventLog.ingestLine({rows:[row],masterBootId:"500",hseq:n},1);
     }
     const run=reviewedRun("membership",{cursor:1,throughSeq:3,nodes:{ABCDEF01:{cpSeq:1}}});
-    const data={results:[{...run,cursorSeq:1}],runs:[run],events:[1,2,3].map(reviewedEvent),pps:[],quarantine:[],log:[]};
+    const data={runs:[run],events:[1,2,3].map(reviewedEvent),pps:[],quarantine:[],log:[]};
     const text=await backup.pack([],data);
     await history.importJson(recoveryFile(text));
     const assertMembers=async()=>{
       assert.deepEqual((await membersOf(history.rows[0])).map(e=>e.capture_seq),[2,3]);
-      assert.deepEqual((await membersOf(runLog.get(run.runId))).map(e=>e.capture_seq),[2,3]);
-      assert.ok(history.rows[0].throughSeq>history.rows[0].cursorSeq);
+      assert.ok(history.rows[0].throughSeq>history.rows[0].cursor);
     };
     await assertMembers();await history.importJson(recoveryFile(text));await assertMembers();
     ({history}=await boot({keepStorage:true}));await assertMembers();
@@ -412,7 +410,7 @@ it("remaps imported log-clear membership without clearing unrelated or later evi
   const checkpoint=n=>({...reviewedEvent(n),kind:"checkpoint",node_id:String(n).padStart(8,"0"),ev_seq:n,received_at:now,
     radio_history:{faults:[1,0,0,0,0,0],recovery:{count:0,failures:0,reason:0,result:0}}});
   for (const n of [2,99]) {const row=checkpoint(n);delete row.seq;await eventLog.ingestLine({rows:[row],masterBootId:"500",hseq:n},now);}
-  const data={results:[],runs:[],events:[1,2,3].map(checkpoint),pps:[],quarantine:[],
+  const data={runs:[],events:[1,2,3].map(checkpoint),pps:[],quarantine:[],
     log:[{at:1,kind:"state",code:"radio_history_clear",throughSeq:2,text:""}]};
   await history.importJson(recoveryFile(await backup.pack([],data)));
   const [mark]=await getAll(eventLog.getDb(),eventLog.STORE_LOG);
@@ -438,7 +436,7 @@ it("clears all records and caches, survives reload, and records again", async ()
   assert.ok(history.rows.length);
   assert.ok(eventLog.since(0).length);
   const clearing = history.clearAll();
-  assert.equal(await timing.classify("DNS", "sprint", "during deletion"), false);
+  assert.equal(await timing.classify("DNS", { mode: "sprint", note: "during deletion" }), false);
   assert.equal(await device.connect({kind:"fake"}), false);
   await clearing;
   assert.equal(device.connected, false);
@@ -451,7 +449,7 @@ it("clears all records and caches, survives reload, and records again", async ()
   assert.equal(localStorage.getItem("unrelated-setting"), "keep");
   for (const name of eventLog.getDb().objectStoreNames) assert.deepEqual(await getAll(eventLog.getDb(), name), [], name);
   const exported = await backup.unpack(await history.recoveryJson());
-  for (const key of ["results","runs","events","pps","quarantine","log"]) assert.deepEqual(exported[key], [], key);
+  for (const key of ["runs","events","pps","quarantine","log"]) assert.deepEqual(exported[key], [], key);
   // New measurements work without a page reload, including calibration finalization.
   const next = await mapSprint(device, settings);
   await timing.start("sprint", "new measurement");
@@ -471,20 +469,20 @@ it("clears all records and caches, survives reload, and records again", async ()
   assert.equal(history.rows.length, 0);
   assert.equal(device.logEntries.length, 0);
   const restored = await backup.unpack(await history.recoveryJson());
-  for (const key of ["results","runs","events","pps","quarantine","log"]) assert.deepEqual(restored[key], [], key);
+  for (const key of ["runs","events","pps","quarantine","log"]) assert.deepEqual(restored[key], [], key);
 });
 
 it("clears stale disk records and memory fallback after a storage failure", async () => {
   let {timing, history, device} = await boot();
-  await timing.classify("DNS", "sprint", "on disk");
+  await timing.classify("DNS", { mode: "sprint", note: "on disk" });
   eventLog.reportWriteFailure(new Error("storage lost"));
   await timing.reset();
-  await timing.classify("DNF", "sprint", "in memory");
+  await timing.classify("DNF", { mode: "sprint", note: "in memory" });
   await device.handleLine("X badcmd");
   await eventLog.ingestQuarantine({raw:"bad",reason:"invalid",node:null,hseq:1,masterBootId:null});
   await history.clearAll();
   const data = await backup.unpack(await history.recoveryJson());
-  for (const key of ["results","runs","events","pps","quarantine","log"]) assert.deepEqual(data[key], [], key);
+  for (const key of ["runs","events","pps","quarantine","log"]) assert.deepEqual(data[key], [], key);
   ({timing, history, device} = await boot({keepStorage:true}));
   await device.loadLog();
   assert.equal(history.rows.length, 0);
@@ -494,7 +492,7 @@ it("clears stale disk records and memory fallback after a storage failure", asyn
 
 it("retains data and releases the deletion lock when clearing fails", async () => {
   const {timing, history, device} = await boot();
-  await timing.classify("DNS", "sprint", "keep on failure");
+  await timing.classify("DNS", { mode: "sprint", note: "keep on failure" });
   const id = history.rows[0].runId;
   const spy = vi.spyOn(eventLog.getDb(), "transaction").mockImplementation(() => {throw new Error("clear failed");});
   try { await assert.rejects(history.clearAll(), /clear failed/); }
@@ -503,5 +501,5 @@ it("retains data and releases the deletion lock when clearing fails", async () =
   assert.equal(device.clearingData, false);
   assert.equal(history.rows[0].runId, id);
   assert.equal(timing.run.runId, id);
-  assert.equal((await getAll(eventLog.getDb(), eventLog.STORE_RESULTS))[0].runId, id);
+  assert.ok((await getAll(eventLog.getDb(), runLog.STORE_RUNS)).some((r) => r.runId === id));
 });

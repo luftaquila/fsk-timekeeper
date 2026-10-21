@@ -5,11 +5,12 @@ import * as deviceLog from "./deviceLog";
 import { transaction, request, done } from "./idb";
 import { enqueue } from "./storageQueue";
 import { rowKey } from "./protocol";
-import { resultNs, lapsNs, resultTicks } from "./results";
+import { resultNs, lapsNs, resultTicks, frozenDurationNs } from "./results";
 import { freezeCalibration } from "./calibration";
+import { RUN_SCHEMA, isRecord } from "./engine";
 
 export const MAX_BACKUP_BYTES = 64 * 1024 * 1024;
-const stores = { results: eventLog.STORE_RESULTS, runs: runLog.STORE_RUNS, events: eventLog.STORE_EVENTS,
+const stores = { runs: runLog.STORE_RUNS, events: eventLog.STORE_EVENTS,
   pps: eventLog.STORE_PPS, quarantine: eventLog.STORE_QUARANTINE, log: eventLog.STORE_LOG };
 const fail = message => { throw new Error(message); };
 const object = v => v && typeof v === "object" && !Array.isArray(v);
@@ -17,7 +18,7 @@ const uint = v => Number.isSafeInteger(v) && v >= 0;
 const tick = v => typeof v === "string" && /^(0|[1-9]\d{0,19})$/.test(v) && BigInt(v) <= 18446744073709551615n;
 const optionalTick = v => v == null || tick(v);
 const decimal = v => typeof v === "string" && /^-?\d{1,80}$/.test(v);
-const localFields = new Set(["id", "seq", "cursor", "cursorSeq", "throughSeq", "evidenceSeqs", "historyId", "cpSeq", "imported", "durable"]);
+const localFields = new Set(["id", "seq", "cursor", "throughSeq", "evidenceSeqs", "cpSeq", "imported", "durable"]);
 export function canonical(value) {
   if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
   if (object(value)) return `{${Object.keys(value).filter(k => value[k] !== undefined).sort().map(k => `${JSON.stringify(k)}:${canonical(value[k])}`).join(",")}}`;
@@ -37,10 +38,10 @@ export async function checksum(value) {
   return Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)), n => n.toString(16).padStart(2, "0")).join("");
 }
 
-export function snapshot(memoryResults, memoryPps = []) {
+export function snapshot(memoryPps = []) {
   return enqueue(async () => {
     const db = eventLog.getDb();
-    if (!db) return runLog.clone({ results: memoryResults, runs: runLog.all(), events: eventLog.since(0),
+    if (!db) return runLog.clone({ runs: runLog.all(), events: eventLog.since(0),
       pps: memoryPps, quarantine: await eventLog.listQuarantine(), log: await deviceLog.listEntries() });
     const tx = transaction(db, Object.values(stores));
     const finished = done(tx);
@@ -53,7 +54,7 @@ export function snapshot(memoryResults, memoryPps = []) {
 }
 
 export async function pack(History, recovery) {
-  const file = { format: "fsk-timekeeper", version: 1, exportedAt: new Date().toISOString(), History, recovery,
+  const file = { format: "fsk-timekeeper", version: 2, exportedAt: new Date().toISOString(), History, recovery,
     sha256: await checksum({ History, recovery }) };
   const text = JSON.stringify(file, null, 2);
   if (new TextEncoder().encode(text).length > MAX_BACKUP_BYTES) fail("JSON exceeds the 64 MB limit.");
@@ -69,18 +70,19 @@ function validateTree(v, depth = 0) {
     validateTree(item, depth + 1);
   }
 }
-function validateRun(r, full) {
+function validateRun(r) {
   if (!object(r) || typeof r.runId !== "string" || !r.runId.length || r.runId.length > 160 ||
       !["sprint", "laps"].includes(r.mode) || !["pending", "verified", "invalid"].includes(r.verification) ||
       (r.classification != null && !["DNS", "DNF", "DSQ"].includes(r.classification))) fail("Invalid run record.");
-  if (r.schema !== 3) fail("Unsupported run schema.");
+  if (r.schema !== RUN_SCHEMA) fail("Unsupported run schema.");
   for (const key of ["startTick", "finishTick", "boundaryTick"]) if (!optionalTick(r[key])) fail("Invalid run timestamp.");
   if (r.durationNs != null && (!decimal(r.durationNs) || BigInt(r.durationNs) < 0n)) fail("Invalid result duration.");
   if (r.masterBootId != null && !tick(r.masterBootId)) fail("Invalid master session.");
   if (r.crossingTicks != null && (!Array.isArray(r.crossingTicks) || r.crossingTicks.some(t => !tick(t)))) fail("Invalid lap timestamps.");
   if (r.finalizeAt != null && !uint(r.finalizeAt)) fail("Invalid finalization deadline.");
-  for (const key of ["cursor", "cursorSeq", "throughSeq"]) if (r[key] != null && !uint(r[key])) fail("Invalid evidence cursor.");
-  if (full && (!object(r.nodes) || typeof r.armed !== "boolean" || typeof r.closed !== "boolean" || !uint(r.cursor))) fail("Invalid run snapshot.");
+  if (r.recordedAt != null && !uint(r.recordedAt)) fail("Invalid record time.");
+  if (r.throughSeq != null && !uint(r.throughSeq)) fail("Invalid evidence cursor.");
+  if (!object(r.nodes) || typeof r.armed !== "boolean" || typeof r.closed !== "boolean" || !uint(r.cursor)) fail("Invalid run snapshot.");
   if (r.calibration) {
     const c = r.calibration;
     if (c.version !== 1 || !["nominal", "gps", "gps-extrapolated"].includes(c.method) || !object(c.points)) fail("Invalid calibration.");
@@ -99,14 +101,13 @@ function validateEvidenceRefs(row) {
 }
 
 // Import closes unfinished snapshots: frozen with same-session PPS, else nominal timing.
-function finalizeImported(row, edges, old, full, now) {
-  if (row.schema !== 3 || row.calibration || !resultTicks(row).length) return row;
+function finalizeImported(row, edges, old, now) {
+  if (row.calibration || !resultTicks(row).length) return row;
   const withoutCalibration = r => ({ ...r, calibration: null, durationNs: null });
-  const reuse = old?.calibration && equivalent(withoutCalibration(old), withoutCalibration(row), full);
+  const reuse = old?.calibration && equivalent(withoutCalibration(old), withoutCalibration(row), true);
   const calibration = reuse ? old.calibration : freezeCalibration(edges.filter(e => e.master_boot_id === row.masterBootId), resultTicks(row), now);
-  const next = { ...row, calibration, durationNs: null };
-  const ns = next.verification === "verified" ? resultNs(next) : null;
-  next.durationNs = ns == null ? null : String(ns);
+  const next = { ...row, calibration };
+  next.durationNs = frozenDurationNs(next);
   delete next.finalizeAt;
   delete next.calibrationEdges;
   return next;
@@ -117,18 +118,16 @@ export async function unpack(text) {
   let file;
   try { file = JSON.parse(text); } catch { fail("Invalid JSON file."); }
   validateTree(file);
-  if (file?.format !== "fsk-timekeeper" || file.version !== 1 || !object(file.recovery) || !Array.isArray(file.History)) fail("Unsupported recovery JSON format.");
+  if (file?.format !== "fsk-timekeeper" || file.version !== 2 || !object(file.recovery) || !Array.isArray(file.History)) fail("Unsupported recovery JSON format.");
   const data = file.recovery;
   for (const name of Object.keys(stores)) if (!Array.isArray(data[name]) || data[name].length > 500000) fail(`Invalid ${name} records.`);
   if (file.sha256 !== await checksum({ History: file.History, recovery: data })) fail("JSON integrity check failed.");
-  for (const [name, full] of [["results", false], ["runs", true]]) {
-    const ids = new Set();
-    for (const r of data[name]) {
-      validateRun(r, full);
-      validateEvidenceRefs(r);
-      if (ids.has(r.runId)) fail("Duplicate run ID in file.");
-      ids.add(r.runId);
-    }
+  const ids = new Set();
+  for (const r of data.runs) {
+    validateRun(r);
+    validateEvidenceRefs(r);
+    if (ids.has(r.runId)) fail("Duplicate run ID in file.");
+    ids.add(r.runId);
   }
   const seqs = new Set();
   for (const e of data.events) {
@@ -160,23 +159,15 @@ export function merge(data) {
     const finished = done(tx);
     // Install the rejection handler before doing request-level work.
     finished.catch(() => {});
-    const addedEvents = [], addedRuns = [], restoredIds = [];
+    const addedEvents = [], addedRuns = [];
     let added = 0, skipped = 0;
     try {
       const values = await Promise.all(Object.values(stores).map(s => request(tx.objectStore(s).getAll())));
       const existing = Object.fromEntries(Object.keys(stores).map((k, i) => [k, values[i]]));
-      const resultsById = new Map(existing.results.map(r => [r.runId, r]));
       const runsById = new Map(existing.runs.map(r => [r.runId, r]));
       const edges = [...new Map([...existing.pps, ...data.pps].map(e => [`${e.master_boot_id}:${e.tick}`, e])).values()];
       const now = Date.now();
-      data = { ...data,
-        results: data.results.map(r => finalizeImported(r, edges, resultsById.get(r.runId), false, now)),
-        runs: data.runs.map(r => finalizeImported(r, edges, runsById.get(r.runId), true, now)),
-      };
-      for (const r of data.results) {
-        const old = resultsById.get(r.runId);
-        if (old && !equivalent(old, r)) fail(`Conflicting record: ${r.runId}. Nothing was imported.`);
-      }
+      data = { ...data, runs: data.runs.map(r => finalizeImported(r, edges, runsById.get(r.runId), now)) };
       for (const r of data.runs) {
         const old = runsById.get(r.runId);
         if (old && !old.deleted && !equivalent(old, r, true)) fail(`Conflicting run: ${r.runId}. Nothing was imported.`);
@@ -197,7 +188,7 @@ export function merge(data) {
       }
       const sourceSeqs = [...remap.keys()].sort((a, b) => a - b);
       // Seq ranges are source-local: keep membership and order, even of an earlier import's list.
-      const evidence = (row, from = row.cursorSeq ?? row.cursor ?? 0) => {
+      const evidence = (row, from = row.cursor ?? 0) => {
         const source = row.evidenceSeqs ?? sourceSeqs.filter(seq => seq > from && (row.throughSeq == null || seq <= row.throughSeq));
         const evidenceSeqs = [...new Set(source.filter(seq => remap.has(seq)).map(seq => remap.get(seq)))];
         const low = evidenceSeqs.reduce((n, seq) => Math.min(n, seq), Infinity);
@@ -222,26 +213,6 @@ export function merge(data) {
           await request(tx.objectStore(stores[name]).add(row)); known.set(key(r), r);
         }
       }
-      for (const r of data.results) {
-        if (resultsById.has(r.runId)) {
-          const old = resultsById.get(r.runId);
-          if (old.durable === false) {
-            old.durable = true;
-            await request(tx.objectStore(stores.results).put(old));
-          }
-          skipped++; continue;
-        }
-        const refs = evidence(r);
-        const row = { ...r, durable: true, cursorSeq: refs.from, throughSeq: refs.throughSeq, evidenceSeqs: refs.evidenceSeqs };
-        delete row.id;
-        row.id = await request(tx.objectStore(stores.results).add(row));
-        resultsById.set(row.runId, row); added++;
-        // Explicit import may restore a previously deleted history row.
-        if (runsById.get(row.runId)?.deleted) {
-          await request(tx.objectStore(stores.runs).delete(row.runId));
-          restoredIds.push(row.runId);
-        }
-      }
       for (const r of data.runs) {
         if (runsById.has(r.runId) && !runsById.get(r.runId).deleted) {
           const old = runsById.get(r.runId);
@@ -249,13 +220,16 @@ export function merge(data) {
             const saved = { ...old, durable: true };
             await request(tx.objectStore(stores.runs).put(saved)); addedRuns.push(saved);
           }
+          if (isRecord(r)) skipped++;
           continue;
         }
+        // Explicit import may restore a previously deleted record.
         const refs = evidence(r);
         const row = { ...r, durable: true, armed: false, closed: true, imported: true, cursor: refs.from,
-          throughSeq: refs.throughSeq, evidenceSeqs: refs.evidenceSeqs, historyId: resultsById.get(r.runId)?.id ?? null,
+          throughSeq: refs.throughSeq, evidenceSeqs: refs.evidenceSeqs,
           nodes: Object.fromEntries(Object.entries(r.nodes).map(([node, v]) => [node, { ...v, cpSeq: v.cpSeq == null ? v.cpSeq : remap.get(v.cpSeq) ?? 0 }])) };
         await request(tx.objectStore(stores.runs).put(row)); addedRuns.push(row);
+        if (isRecord(row)) added++;
       }
       await finished;
     } catch (error) {
@@ -263,9 +237,8 @@ export function merge(data) {
       await finished.catch(() => {});
       throw error;
     }
-    for (const id of restoredIds) runLog.forgetTombstone(id);
     runLog.adopt(addedRuns);
     eventLog.adopt(addedEvents);
-    return { added, skipped, runs: addedRuns.length };
+    return { added, skipped };
   });
 }

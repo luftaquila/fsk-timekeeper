@@ -1,4 +1,4 @@
-// History rows and exports from raw ticks + frozen calibration (no IndexedDB: memory rows).
+// History rows (recorded runs) and exports from raw ticks + frozen calibration (no IndexedDB: memory runs).
 import { describe, it, beforeEach, vi } from "vitest";
 import assert from "node:assert/strict";
 import { createPinia, setActivePinia } from "pinia";
@@ -12,8 +12,11 @@ vi.mock("../src/lib/format.js", async (importOriginal) => ({
 }));
 
 const { useHistoryStore } = await import("../src/stores/history.js");
+const { useTimingStore } = await import("../src/stores/timing.js");
+const runLog = await import("../src/lib/runLog.js");
+const { RUN_SCHEMA } = await import("../src/lib/engine.js");
 const { freezeCalibration } = await import("../src/lib/calibration.js");
-const { resultNs, lapsNs } = await import("../src/lib/results.js");
+const { resultNs, lapsNs, frozenDurationNs } = await import("../src/lib/results.js");
 const { formatDuration, downloadBlob } = await import("../src/lib/format.js");
 const eventLog = await import("../src/lib/eventLog.js");
 const { encodeRun, decodeRun } = await import("../src/lib/run-codec.js");
@@ -51,7 +54,7 @@ function assertWorkbookRecords(sheetRows, records) {
 
 function run(fields) {
   return {
-    schema: 3,
+    schema: RUN_SCHEMA,
     radioProto: RADIO_PROTO_VERSION,
     usbProto: USB_PROTO_VERSION,
     runId: fields.runId,
@@ -59,21 +62,34 @@ function run(fields) {
     note: "",
     boundaryTick: String(T0),
     masterBootId: 1,
+    nodes: {},
     cursor: 0,
     lapTarget: null,
     debounceMs: 300,
+    armed: false,
+    closed: true,
     verification: "pending",
+    classification: null,
     startTick: null,
     finishTick: null,
     crossingTicks: [],
-    totalValid: true,
     calibration: null,
     durationNs: null,
     fault: null,
     startedAt: 1,
+    recordedAt: null,
     durable: true,
     ...fields,
   };
+}
+
+// A run past its first decided result.
+const recorded = (fields) => run({ recordedAt: 1, ...fields });
+
+// Frozen at the run's current ticks, as the timing store does.
+function frozen(r) {
+  const next = { ...r, calibration: freezeCalibration([], r.mode === "laps" ? r.crossingTicks : [r.startTick, r.finishTick].filter(Boolean), 1) };
+  return { ...next, durationNs: frozenDurationNs(next) };
 }
 
 describe("history rows and exports", () => {
@@ -87,17 +103,17 @@ describe("history rows and exports", () => {
       masterBootId: "18446744073709551615", nodes: { A: { boot: "9007199254740993", seq: 1, role: "start", cpSeq: 1 } }, closed: false });
     assert.deepEqual(decodeRun(encodeRun(current)), current);
     const history = useHistoryStore();
-    await history.upsert({ ...current, verification: "verified", crossingTicks: [tick(0), tick(1000)] });
+    await runLog.save({ ...current, verification: "verified", crossingTicks: [tick(0), tick(1000)], recordedAt: 1 });
     assert.equal(history.rows[0].masterBootId, current.masterBootId);
   });
 
-  it("Start, incomplete Stop and faults before a measured result create no records", async () => {
+  it("lists only runs past a decided result or with a classification", async () => {
     const history = useHistoryStore();
     for (const mode of ["sprint", "laps"]) {
-      for (const state of [{}, { closed: true },
-        { closed: true, startTick: tick(1000), crossingTicks: [tick(1000)] },
-        { closed: true, verification: "invalid", totalValid: false }]) {
-        await history.upsert(run({ runId: `${mode}-${JSON.stringify(state)}`, mode, ...state }));
+      for (const state of [{ closed: false }, {},
+        { startTick: tick(1000), crossingTicks: [tick(1000)] },
+        { verification: "invalid" }]) {
+        await runLog.save(run({ runId: `${mode}-${JSON.stringify(state)}`, mode, ...state }));
       }
     }
     assert.equal(history.rows.length, 0);
@@ -109,15 +125,15 @@ describe("history rows and exports", () => {
 
   it("manual classifications save untimed attempts and preserve measured results in exports", async () => {
     const history = useHistoryStore();
+    const timing = useTimingStore();
     for (const classification of ["DNS", "DNF", "DSQ"]) {
-      await history.upsert(run({ runId: classification, mode: "sprint", classification, closed: true }));
+      await runLog.save(run({ runId: classification, mode: "sprint", classification }));
       const row = history.rows.find((r) => r.runId === classification);
       assert.equal(history.status(row), classification);
       assert.equal(resultNs(row), null);
     }
-    const measured = run({ runId: "measured", mode: "laps", verification: "verified", crossingTicks: [tick(0), tick(1000), tick(2500)] });
-    await history.upsert(measured);
-    await history.classify("measured", "DSQ");
+    await runLog.save(recorded({ runId: "measured", mode: "laps", verification: "verified", crossingTicks: [tick(0), tick(1000), tick(2500)] }));
+    assert.equal(await timing.classify("DSQ", { runId: "measured" }), true);
     const row = history.rows.find((r) => r.runId === "measured");
     assert.equal(row.verification, "verified");
     assert.equal(history.status(row), "DSQ");
@@ -127,31 +143,26 @@ describe("history rows and exports", () => {
     await history.exportJson();
     const exported = JSON.parse(await downloadBlob.mock.calls.at(-1)[0].text());
     assert.equal(exported.History.find((r) => r.Result === "00:02.500").Status, "DSQ\nNot Saved");
-    await assert.rejects(history.classify("measured", "bad"), /Invalid classification/);
-    await assert.rejects(history.classify("missing", "DNS"), /Record not found/);
+    assert.equal(await timing.classify("bad", { runId: "measured" }), false);
+    assert.equal(await timing.classify("DNS", { runId: "missing" }), false);
+    assert.equal(history.status(history.rows.find((r) => r.runId === "measured")), "DSQ");
   });
 
   it("clearing a classification retains measured times and removes only untimed classification rows", async () => {
     const history = useHistoryStore();
-    const measured = run({ runId: "measured", mode: "laps", verification: "verified",
-      classification: "DSQ", crossingTicks: [tick(0), tick(1000), tick(2500)] });
-    await history.upsert(measured);
-    const id = history.rows[0].id;
-    await history.classify("measured", null);
+    const timing = useTimingStore();
+    await runLog.save(recorded({ runId: "measured", mode: "laps", verification: "verified",
+      classification: "DSQ", crossingTicks: [tick(0), tick(1000), tick(2500)] }));
+    await timing.classify(null, { runId: "measured" });
     assert.equal(history.status(history.rows[0]), "verified");
-    assert.equal(history.rows[0].id, id);
     assert.deepEqual(lapsNs(history.rows[0]), [1_000_000_000n, 1_500_000_000n]);
-    // The current-run upsert path must also clear the saved classification.
-    await history.upsert(measured);
-    await history.upsert({ ...measured, classification: null });
-    assert.equal(history.status(history.rows[0]), "verified");
-    await history.upsert(run({ runId: "partial", mode: "laps", verification: "invalid",
-      classification: "DNF", totalValid: false, crossingTicks: [tick(0), tick(1000)] }));
-    await history.classify("partial", null);
+    await runLog.save(recorded({ runId: "partial", mode: "laps", verification: "invalid",
+      classification: "DNF", crossingTicks: [tick(0), tick(1000)] }));
+    await timing.classify(null, { runId: "partial" });
     assert.deepEqual(lapsNs(history.rows.find((r) => r.runId === "partial")), [1_000_000_000n]);
     for (const classification of ["DNS", "DNF", "DSQ"]) {
-      await history.upsert(run({ runId: classification, mode: "sprint", classification }));
-      await history.classify(classification, null);
+      await runLog.save(run({ runId: classification, mode: "sprint", classification }));
+      await timing.classify(null, { runId: classification });
       assert.ok(!history.rows.some((r) => r.runId === classification));
     }
   });
@@ -159,16 +170,16 @@ describe("history rows and exports", () => {
   it("Excel stays display-only while JSON includes all records and recovery data", async () => {
     const history = useHistoryStore();
     const note = '=1+1, 한글 "note"\nsecond line';
-    await history.upsert(run({ runId: "sprint", mode: "sprint", note, verification: "verified",
+    await runLog.save(recorded({ runId: "sprint", mode: "sprint", note, verification: "verified",
       masterBootId: "18446744073709551615", startTick: "9007199254740993000", finishTick: "9007199254756993000",
       durationNs: "1000000000", classification: "DSQ" }));
-    await history.upsert(run({ runId: "laps", mode: "laps", verification: "verified", note: "Car 7",
+    await runLog.save(recorded({ runId: "laps", mode: "laps", verification: "verified", note: "Car 7",
       crossingTicks: [tick(0), tick(2000), tick(3500), tick(6000), tick(8500)],
       fault: { kind: "test", reasons: [{ role: "finish", reason: "Sensor ABC: Capture Loss", lo: tick(100), hi: null }] } }));
-    await history.upsert(run({ runId: "manual", mode: "sprint", classification: "DNS" }));
+    await runLog.save(run({ runId: "manual", mode: "sprint", classification: "DNS" }));
     // Same date and note must not merge two attempts or detach their laps.
-    history.rows.push({ ...run({ runId: "same-context", mode: "laps", note: "Car 7", verification: "verified",
-      crossingTicks: [tick(0), tick(1000), tick(3000)] }), id: 100, createdAt: 1 });
+    await runLog.save(recorded({ runId: "same-context", mode: "laps", note: "Car 7", verification: "verified",
+      crossingTicks: [tick(0), tick(1000), tick(3000)] }));
     const snapshot = history.exportData();
     assert.deepEqual(snapshot.History.filter((r) => r.Mode === "Laps").map((r) => r["Lap Times"].map((lap) => lap.Time)),
       [["00:02.000", "00:01.500", "00:02.500", "00:02.500"], ["00:01.000", "00:02.000"]]);
@@ -188,9 +199,9 @@ describe("history rows and exports", () => {
     assert.match(jsonName, /\.json$/);
     const json = JSON.parse(await jsonBlob.text());
     assert.deepEqual(json.History, snapshot.History);
-    assert.equal(json.version, 1);
-    assert.equal(json.recovery.results.length, 4);
-    assert.equal(json.recovery.results.find(r => r.runId === "sprint").masterBootId, "18446744073709551615");
+    assert.equal(json.version, 2);
+    assert.equal(json.recovery.runs.length, 4);
+    assert.equal(json.recovery.runs.find(r => r.runId === "sprint").masterBootId, "18446744073709551615");
     await history.exportExcel();
     const [excelBlob, filename] = downloadBlob.mock.calls.at(-1);
     assert.match(filename, /^fsk-timekeeper-all-.*\.xlsx$/);
@@ -202,7 +213,7 @@ describe("history rows and exports", () => {
     await history.exportJson("sprint");
     const filtered = JSON.parse(await downloadBlob.mock.calls.at(-1)[0].text());
     assert.deepEqual(filtered.History, snapshot.History);
-    assert.equal(filtered.recovery.results.length, 4);
+    assert.equal(filtered.recovery.runs.length, 4);
     await history.exportExcel("sprint");
     const [filteredExcel] = downloadBlob.mock.calls.at(-1);
     assertWorkbookRecords(await readSheet(Buffer.from(await filteredExcel.arrayBuffer()), "History"), history.exportData("sprint").History);
@@ -211,13 +222,12 @@ describe("history rows and exports", () => {
   it("Stop keeps the recorded laps and total", async () => {
     const history = useHistoryStore();
     const crossings = [tick(1000), tick(6000), tick(11500)];
-    const r = run({ runId: "laps-1", mode: "laps", verification: "verified", crossingTicks: crossings });
-    await history.upsert(r);
-    const id = history.rows[0].id;
-    await history.upsert({ ...r, closed: true, calibration: freezeCalibration([], crossings, 1) });
+    const r = recorded({ runId: "laps-1", mode: "laps", verification: "verified", crossingTicks: crossings, closed: false });
+    await runLog.save(r);
+    await runLog.save(frozen({ ...r, closed: true }));
     const row = history.rows[0];
     assert.equal(history.rows.length, 1);
-    assert.equal(row.id, id);
+    assert.equal(row.durationNs, "10500000000");
     assert.equal(resultNs(row), 10_500_000_000n);
     const record = history.exportData().History[0];
     assert.equal(record.Status, "Verified\nNot Saved");
@@ -228,16 +238,12 @@ describe("history rows and exports", () => {
   it("a later loss keeps the confirmed laps but voids the total, also after the freeze", async () => {
     const history = useHistoryStore();
     const crossings = [tick(1000), tick(6000), tick(11500)];
-    const r = run({ runId: "laps-1", mode: "laps", verification: "verified", crossingTicks: crossings.slice(0, 2) });
-    await history.upsert(r);
-    const id = history.rows[0].id;
+    const r = recorded({ runId: "laps-1", mode: "laps", verification: "verified", crossingTicks: crossings.slice(0, 2), closed: false });
+    await runLog.save(r);
     const fault = { kind: "measurement", reasons: [{ role: "start", reason: "Sensor ABC: Capture Loss", lo: tick(12000), hi: null }] };
-    const lost = { ...r, closed: true, verification: "invalid", totalValid: false, crossingTicks: crossings, fault };
-    await history.upsert(lost);
-    await history.updateCalibration({ ...lost, calibration: freezeCalibration([], crossings, 1) });
+    await runLog.save(frozen({ ...r, closed: true, verification: "invalid", crossingTicks: crossings, fault }));
     const row = history.rows[0];
     assert.equal(history.rows.length, 1);
-    assert.equal(row.id, id);
     assert.equal(row.durationNs, null);
     assert.equal(resultNs(row), null);
     assert.deepEqual(lapsNs(row), [5_000_000_000n, 5_500_000_000n]);
@@ -246,19 +252,6 @@ describe("history rows and exports", () => {
     assert.equal(record.Result, "-");
     assert.deepEqual(Object.values(record["Lap Summary"]), [2, "00:05.000 (#1)", "00:05.250", "-"]);
     assert.match(record.Errors[0], /^Start\nSensor ABC: Capture Loss\n/);
-  });
-
-  it("concurrent first-lap and later-lap writes create one result row", async () => {
-    const history = useHistoryStore();
-    const r = run({ runId: "burst", mode: "laps", verification: "verified", crossingTicks: [tick(0), tick(1000)] });
-    await Promise.all([
-      history.upsert(r),
-      history.upsert({ ...r, crossingTicks: [tick(0), tick(1000), tick(2000)] }),
-      history.upsert({ ...r, crossingTicks: [tick(0), tick(1000), tick(2000)], closed: true }),
-    ]);
-    assert.equal(history.rows.length, 1);
-    assert.equal(history.rows[0].closed, true);
-    assert.equal(resultNs(history.rows[0]), 2_000_000_000n);
   });
 
   it("the list and the result come from the same points", () => {

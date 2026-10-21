@@ -177,12 +177,12 @@ describe("PPS timeline", () => {
     const a = String(osc(3.2));
     const b = String(osc(33.7)); // beyond the edges at freeze time: extrapolated
     const calibration = freezeCalibration(early, [a, b], 1);
-    const run = { schema: 3, mode: "sprint", startTick: a, finishTick: b, calibration, durationNs: null };
+    const run = { mode: "sprint", startTick: a, finishTick: b, calibration, durationNs: null };
     const frozen = resultNs(run, buildTimeline(early));
     const later = buildTimeline(edgesOf(osc, range(0, 60)));
     assert.equal(resultNs(run, later), frozen);
     assert.equal(calibration.method, "gps-extrapolated");
-    const laps = { schema: 3, mode: "laps", crossingTicks: [a, b], totalValid: true, calibration };
+    const laps = { mode: "laps", crossingTicks: [a, b], calibration };
     assert.deepEqual(lapsNs(laps, later), [frozen]);
   });
 

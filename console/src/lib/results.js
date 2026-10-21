@@ -19,14 +19,22 @@ export function spanNs(run, a, b, source = null) {
   return durationNs(pointsFor(run, [a, b], source), a, b);
 }
 
-// The result: sprint F1 − S1; laps last − first confirmed crossing, only while the total is valid.
+// The result: sprint F1 − S1; laps last − first confirmed crossing, void once a loss made it invalid.
 export function resultNs(run, source = null) {
   if (!run) return null;
   if (run.durationNs != null) return BigInt(run.durationNs);
   if (run.mode === "sprint") return run.startTick && run.finishTick ? spanNs(run, run.startTick, run.finishTick, source) : null;
   const c = run.crossingTicks || [];
-  if (!run.totalValid || c.length < 2) return null;
+  if (run.verification === "invalid" || c.length < 2) return null;
   return spanNs(run, c[0], c[c.length - 1], source);
+}
+
+// The stored exact result (durationNs): the current result under the frozen calibration only.
+export function frozenDurationNs(run) {
+  const frozen = run.calibration?.points;
+  if (!frozen || !resultTicks(run).every((t) => frozen[t])) return null;
+  const ns = resultNs({ ...run, durationNs: null });
+  return ns == null ? null : String(ns);
 }
 
 // Confirmed laps (ns, bigint) of a laps run; the confirmed ones only, also for an invalid run.

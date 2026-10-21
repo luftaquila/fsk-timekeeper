@@ -1,205 +1,36 @@
-// Results history (IndexedDB `results`, memory fallback): raw ticks, frozen calibration, exact ns.
+// Results history: the recorded runs of the run log (raw ticks, frozen calibration, exact ns).
 import writeExcelFile from "write-excel-file/universal";
 import { defineStore } from "pinia";
-import { ref, toRaw } from "vue";
+import { ref, computed } from "vue";
 import * as eventLog from "../lib/eventLog";
-import { getAll, put, remove, transaction, done } from "../lib/idb";
 import { enqueue, flush } from "../lib/storageQueue";
 import * as runLog from "../lib/runLog";
 import * as backup from "../lib/backup";
 import { useTimingStore } from "./timing";
-import { RUN_SCHEMA } from "../lib/engine";
-import { ROLE_LABEL, RESULT_CLASSIFICATIONS } from "../lib/constants";
+import { isRecord } from "../lib/engine";
+import { ROLE_LABEL } from "../lib/constants";
 import { downloadBlob, timestampSlug, formatDuration } from "../lib/format";
-import { resultNs, resultTicks, lapsNs } from "../lib/results";
 import { historyRecord, lapSummary, lapDelta, statusValue } from "../lib/historyPresentation";
 import { faultWindow, formatFaultReason } from "../lib/fault-text";
 import { useDeviceStore } from "./device";
 
-// Run fields copied into its history row.
-const RUN_FIELDS = [
-  "mode",
-  "verification",
-  "classification",
-  "closed",
-  "startTick",
-  "finishTick",
-  "crossingTicks",
-  "totalValid",
-  "calibration",
-  "durationNs",
-  "lapTarget",
-  "debounceMs",
-  "startedUtc",
-  "gpsAtStart",
-  "masterBootId",
-  "boundaryTick",
-  "schema",
-  "radioProto",
-  "usbProto",
-];
-
-function plain(value) {
-  return value == null ? value : JSON.parse(JSON.stringify(toRaw(value)));
-}
+// History rows of a run list, newest first.
+const recordsOf = (runs) => runs.filter(isRecord).sort((a, b) => b.startedAt - a.startedAt);
 
 export const useHistoryStore = defineStore("history", () => {
   const importing = ref(false);
   const clearing = ref(false);
-  const rows = ref([]); // newest first
-  let memoryId = 0;
+  const revision = ref(0); // bumped on every run-log change
+  runLog.onChange(() => revision.value++);
+  const rows = computed(() => {
+    revision.value;
+    return recordsOf(runLog.list());
+  });
 
-
-  function db() {
-    return eventLog.getDb();
+  function removeRow(runId) {
+    return runLog.remove(runId);
   }
 
-  async function init() {
-    try {
-      if (db()) {
-        const all = await getAll(db(), eventLog.STORE_RESULTS);
-        rows.value = all.filter((row) => row.schema === RUN_SCHEMA).sort((a, b) => b.createdAt - a.createdAt);
-      }
-    } catch (error) {
-      eventLog.reportWriteFailure(error);
-      rows.value = [];
-    }
-  }
-
-  async function save(row) {
-    if (db()) {
-      try {
-        row.id = await put(db(), eventLog.STORE_RESULTS, row);
-      } catch (error) {
-        if (row.id == null) row.id = -++memoryId;
-        row.durable = false;
-        eventLog.reportWriteFailure(error);
-      }
-    } else {
-      if (row.id == null) row.id = -++memoryId;
-      row.durable = false;
-    }
-    const idx = rows.value.findIndex((r) => r.runId === row.runId);
-    if (idx >= 0) rows.value[idx] = row;
-    else rows.value.unshift(row);
-    return row.id;
-  }
-
-  function fieldsOf(run) {
-    const out = {};
-    for (const key of RUN_FIELDS) out[key] = plain(run[key] ?? null);
-    out.fault = run.fault ? { kind: run.fault.kind, reasons: plain(run.fault.reasons) } : null;
-    out.durable = run.durable !== false;
-    return out;
-  }
-
-  // A row begins once an interval is decided or a classification is set; updates reuse that row.
-  // A laps run keeps its confirmed laps when a loss voids the total, as on the timing screen.
-  function hasResult(run) {
-    if (run.mode === "laps") return run.verification !== "pending" && (run.crossingTicks?.length ?? 0) >= 2;
-    return run.verification === "verified" && resultNs(run) != null;
-  }
-
-  async function saveResult(run, { throughSeq = null } = {}) {
-    if (runLog.isDeleted(run.runId)) return null;
-    const existing = rows.value.find((r) => r.runId === run.runId);
-    const measured = hasResult(run);
-    if (!existing && ((!measured && !RESULT_CLASSIFICATIONS.includes(run.classification)) || run.historyId != null)) return null;
-    const row = existing ? { ...toRaw(existing) } : {
-      runId: run.runId,
-      note: run.note || "",
-      masterDevId: run.masterDevId ?? null,
-      cursorSeq: run.cursor,
-      throughSeq: null,
-      createdAt: run.startedAt || Date.now(),
-    };
-    if (measured || !existing) {
-      const frozen = row.calibration && JSON.stringify(resultTicks(row)) === JSON.stringify(resultTicks(run))
-        ? { calibration: row.calibration, durationNs: row.durationNs } : null;
-      Object.assign(row, fieldsOf(run));
-      if (frozen) Object.assign(row, frozen);
-      row.note = run.note || row.note;
-      if (throughSeq != null) row.throughSeq = throughSeq;
-    } else {
-      // Stopping or a later fault cannot overwrite an already recorded sprint result.
-      row.closed = run.closed || row.closed;
-      if (run.durable === false) row.durable = false;
-      const ticks = resultTicks(row);
-      if (run.calibration && ticks.length && ticks.every((tick) => run.calibration.points?.[tick])) {
-        row.calibration = plain(run.calibration);
-        row.durationNs = null;
-        const ns = resultNs(row);
-        row.durationNs = ns == null ? null : String(ns);
-      }
-    }
-    if (run.classification === null && RESULT_CLASSIFICATIONS.includes(existing?.classification)) {
-      return saveClassification(row, null);
-    }
-    if (RESULT_CLASSIFICATIONS.includes(run.classification)) row.classification = run.classification;
-    row.updatedAt = Date.now();
-    return save(row);
-  }
-
-  function upsert(run, options = {}) {
-    // Snapshot now and serialize: more laps or calibration can arrive while the first insert runs.
-    const snapshot = plain(run);
-    return enqueue(() => saveResult(snapshot, options));
-  }
-
-  // Timing only, on the row read in-queue: a classification (even Clear) survives a late freeze.
-  function updateCalibration(run) {
-    const snapshot = plain(run);
-    return enqueue(async () => {
-      const existing = rows.value.find(r => r.runId === snapshot.runId);
-      if (!existing || existing.calibration || runLog.isDeleted(snapshot.runId)) return;
-      const ticks = resultTicks(existing);
-      if (!ticks.length || !ticks.every(tick => snapshot.calibration?.points?.[tick])) return;
-      const row = { ...plain(existing), calibration: snapshot.calibration, durationNs: null, updatedAt: Date.now() };
-      const ns = resultNs(row);
-      row.durationNs = ns == null ? null : String(ns);
-      if (snapshot.durable === false) row.durable = false;
-      return save(row);
-    });
-  }
-
-  async function saveClassification(row, classification) {
-    if (classification === null && resultNs(row) == null && !lapsNs(row).length) {
-      if (db() && row.id > 0) await remove(db(), eventLog.STORE_RESULTS, row.id);
-      rows.value = rows.value.filter((r) => r.runId !== row.runId);
-      return null;
-    }
-    return save({ ...plain(row), classification, closed: true, updatedAt: Date.now() });
-  }
-
-  function classify(runId, classification) {
-    if (classification !== null && !RESULT_CLASSIFICATIONS.includes(classification)) return Promise.reject(new Error("Invalid classification"));
-    return enqueue(() => {
-      const row = rows.value.find((r) => r.runId === runId);
-      if (!row) throw new Error("Record not found");
-      return saveClassification(row, classification);
-    });
-
-  }
-
-  function deleteRows(select) {
-    return enqueue(async () => {
-      const removed = select(rows.value);
-      const ids = new Set(removed.map(r => r.runId));
-      if (db()) {
-        const tx = transaction(db(), [eventLog.STORE_RESULTS, runLog.STORE_RUNS], "readwrite");
-        const finished = done(tx);
-        for (const row of removed) {
-          if (row.id > 0) tx.objectStore(eventLog.STORE_RESULTS).delete(row.id);
-          tx.objectStore(runLog.STORE_RUNS).put({ runId: row.runId, deleted: true });
-        }
-        await finished;
-      }
-      for (const id of ids) runLog.tombstone(id);
-      rows.value = rows.value.filter(r => !ids.has(r.runId));
-    });
-  }
-
-  function removeRow(id) { return deleteRows(rows => rows.filter(r => r.id === id)); }
   async function clearAll() {
     const timing = useTimingStore(), device = useDeviceStore();
     if (clearing.value || importing.value || timing.armed || timing.starting || timing.classifying || device.connecting || device.updateInProgress || device.dfuInProgress) {
@@ -212,8 +43,6 @@ export const useHistoryStore = defineStore("history", () => {
       await eventLog.flush();
       await flush();
       await enqueue(() => eventLog.clearAllData());
-      rows.value = [];
-      memoryId = 0;
       timing.discardRecords();
       device.discardRecords();
     } finally {
@@ -295,9 +124,8 @@ export const useHistoryStore = defineStore("history", () => {
     if (clearing.value) throw new Error("Wait for data deletion to finish before backing up.");
     await useTimingStore().settleResults();
     await eventLog.flush();
-    const recovery = await backup.snapshot(rows.value, useDeviceStore().ppsEdges);
-    recovery.results.sort((a, b) => b.createdAt - a.createdAt);
-    return backup.pack(exportData(null, recovery.results).History, recovery);
+    const recovery = await backup.snapshot(useDeviceStore().ppsEdges);
+    return backup.pack(exportData(null, recordsOf(recovery.runs)).History, recovery);
   }
 
   async function exportJson() {
@@ -316,12 +144,11 @@ export const useHistoryStore = defineStore("history", () => {
       const data = await backup.unpack(await file.text());
       await timing.settleResults();
       const result = await backup.merge(data);
-      await init();
       timing.markRestored();
       await device.loadLog();
       return result;
     } finally { importing.value = false; }
   }
 
-  return { rows, importing, clearing, init, flush, recoveryJson, importJson, upsert, updateCalibration, classify, removeRow, clearAll, filtered, status, edgesFor, exportData, exportExcel, exportJson };
+  return { rows, importing, clearing, flush, recoveryJson, importJson, removeRow, clearAll, filtered, status, edgesFor, exportData, exportExcel, exportJson };
 });

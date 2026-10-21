@@ -316,14 +316,14 @@ describe("app under jsdom", () => {
     assert.match(wrapper.text(), /Start → Finish/);
 
     // A saved fault must remain readable without hovering over a status chip.
+    const runLog = await import("../src/lib/runLog.js");
     const saved = history.rows[0];
-    const priorFault = saved.fault;
-    saved.fault = { reasons: [{ role: "finish", reason: `Sensor ${b}: Capture Loss`, lo: saved.boundaryTick, hi: null }] };
+    await runLog.save({ ...saved, fault: { reasons: [{ role: "finish", reason: `Sensor ${b}: Capture Loss`, lo: saved.boundaryTick, hi: null }] } });
     await flushPromises();
     assert.match(wrapper.find(".fault-row").text(), /Finish/);
     assert.match(wrapper.find(".fault-row").text(), /Capture Loss/);
     assert.match(wrapper.find(".fault-row .fault-window").text(), /end not known yet/);
-    saved.fault = priorFault;
+    await runLog.save(saved);
 
     // Start/Stop without a crossing must not classify the attempt as DNS.
     await router.push("/");

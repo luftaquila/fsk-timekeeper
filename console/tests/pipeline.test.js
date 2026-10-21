@@ -37,6 +37,7 @@ const { resultNs } = await import("../src/lib/results.js");
 const { formatDuration } = await import("../src/lib/format.js");
 const { timingHealth } = await import("../src/lib/quality.js");
 const runLog = await import("../src/lib/runLog.js");
+const { isRecord } = await import("../src/lib/engine.js");
 const { getAll } = await import("../src/lib/idb.js");
 
 fakeDefaults.slotDelayMin = 10;
@@ -60,7 +61,6 @@ async function boot({ keepStorage = false } = {}) {
   const timing = useTimingStore();
   await eventLog.init();
   const history = useHistoryStore();
-  await history.init();
   const device = useDeviceStore();
   await timing.reevaluate();
   return { device, settings: useSettingsStore(), timing, history };
@@ -235,7 +235,7 @@ describe("pipeline with the fake master", () => {
 
   it("manual classification works offline, survives reload and does not recreate a deleted record", async () => {
     let { timing, history } = await boot();
-    assert.equal(await timing.classify("DNS", "sprint", "Car 7"), true);
+    assert.equal(await timing.classify("DNS", { mode: "sprint", note: "Car 7" }), true);
     const id = timing.run.runId;
     assert.equal(history.rows.length, 1);
     assert.equal(history.rows[0].note, "Car 7");
@@ -251,14 +251,13 @@ describe("pipeline with the fake master", () => {
     assert.equal(history.status(history.rows[0]), "DSQ");
     await timing.classify(null);
     assert.equal(history.rows.length, 0);
-    assert.equal(timing.run.historyId, null);
     ({ timing, history } = await boot({ keepStorage: true }));
     assert.equal(timing.run.classification, null);
     assert.equal(history.rows.length, 0);
     assert.equal(await timing.classify("DNS"), true);
     assert.equal(history.rows[0].runId, id);
     assert.equal(history.status(history.rows[0]), "DNS");
-    await history.removeRow(history.rows[0].id);
+    await history.removeRow(history.rows[0].runId);
     ({ timing, history } = await boot({ keepStorage: true }));
     assert.equal(history.rows.length, 0);
     timing.reset();
@@ -622,7 +621,7 @@ describe("pipeline with the fake master", () => {
     assert.equal(history.rows.length, 0);
     fake.crossing(a, { at: t0 + 400n * 16000n });
     await waitFor(() => history.rows.length === 1);
-    const recordId = history.rows[0].id;
+    const recordId = history.rows[0].runId;
     for (const offset of [800, 1200]) fake.crossing(a, { at: t0 + BigInt(offset) * 16000n });
     await waitFor(() => timing.run.crossingTicks.length === 4);
     assert.equal(timing.run.verification, "verified"); // so far
@@ -642,9 +641,9 @@ describe("pipeline with the fake master", () => {
     assert.equal(ms(timing.run.durationNs), 1200);
     await waitFor(() => history.rows[0].durationNs != null);
     assert.equal(history.rows.length, 1);
-    assert.equal(history.rows[0].id, recordId);
+    assert.equal(history.rows[0].runId, recordId);
     assert.equal(ms(resultNs(history.rows[0])), 1200);
-    const saved = await getAll(eventLog.getDb(), eventLog.STORE_RESULTS);
+    const saved = (await getAll(eventLog.getDb(), runLog.STORE_RUNS)).filter(isRecord);
     assert.equal(saved.length, 1);
     assert.equal(saved[0].crossingTicks.length, 4);
     timing.reset();
@@ -696,7 +695,7 @@ describe("pipeline with the fake master", () => {
     assert.equal(again.timing.resultNs, null);
     assert.equal(again.history.rows.length, 0);
     assert.equal(again.history.exportData().History.length, 0);
-    assert.deepEqual(await getAll(eventLog.getDb(), eventLog.STORE_RESULTS), []);
+    assert.deepEqual((await getAll(eventLog.getDb(), runLog.STORE_RUNS)).filter(isRecord), []);
   });
 
   it("refuses to start without a master or with missing roles", { timeout: 20000 }, async () => {
@@ -771,7 +770,6 @@ describe("pipeline with the fake master", () => {
     fake.rebootMaster();
     await waitFor(() => timing.run.verification === "invalid");
     assert.equal(timing.run.closed, true);
-    assert.equal(timing.run.totalValid, false);
     assert.equal(timing.resultNs, null);
     assert.equal(timing.run.crossingTicks.length, 3);
     await waitFor(() => timing.lapRows.length === 2 && timing.lapRows.every((l) => l.ns != null), 4000);

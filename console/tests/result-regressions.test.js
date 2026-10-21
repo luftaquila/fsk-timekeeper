@@ -13,7 +13,7 @@ import * as backup from "../src/lib/backup";
 import { getAll, put } from "../src/lib/idb";
 import { useTimingStore } from "../src/stores/timing";
 import { useHistoryStore } from "../src/stores/history";
-import { createRun, evaluateRun } from "../src/lib/engine";
+import { createRun, evaluateRun, RUN_SCHEMA } from "../src/lib/engine";
 import { historyRecord } from "../src/lib/historyPresentation";
 import { RADIO_PROTO_VERSION, USB_PROTO_VERSION } from "../src/lib/protocol";
 import TimingView from "../src/views/TimingView.vue";
@@ -32,7 +32,6 @@ async function boot(clear = true) {
   setActivePinia(pinia);
   await eventLog.init();
   const history = useHistoryStore();
-  await history.init();
   return { pinia, history, timing: useTimingStore() };
 }
 
@@ -83,23 +82,20 @@ it("shows only confirmed laps after Stop and preserves them through reload", asy
 it("marks restored records durable and accepts reimport of the original unsaved backup", async () => {
   const { history } = await boot();
   const record = {
-    schema: 3, radioProto: RADIO_PROTO_VERSION, usbProto: USB_PROTO_VERSION, runId: "volatile",
+    schema: RUN_SCHEMA, radioProto: RADIO_PROTO_VERSION, usbProto: USB_PROTO_VERSION, runId: "volatile",
     mode: "sprint", verification: "pending", classification: "DNS", closed: true, armed: false,
-    nodes: {}, cursor: 0, crossingTicks: [], createdAt: 1, durable: false,
+    nodes: {}, cursor: 0, crossingTicks: [], startedAt: 1, durable: false,
   };
-  const text = await backup.pack([], { results: [record], runs: [record], events: [], pps: [], quarantine: [], log: [] });
+  const text = await backup.pack([], { runs: [record], events: [], pps: [], quarantine: [], log: [] });
   const file = { size: new TextEncoder().encode(text).length, text: async () => text };
   await history.importJson(file);
   const db = eventLog.getDb();
-  const stored = (await getAll(db, eventLog.STORE_RESULTS))[0];
-  expect(stored.durable).toBe(true);
-  expect(historyRecord(history.rows[0]).Status).not.toContain("Not Saved");
   const run = (await getAll(db, runLog.STORE_RUNS))[0];
   expect(run.durable).toBe(true);
+  expect(historyRecord(history.rows[0]).Status).not.toContain("Not Saved");
   await history.importJson(file);
   expect(history.rows).toHaveLength(1);
   // Successful reimport also repairs a previously persisted false flag.
-  await put(db, eventLog.STORE_RESULTS, { ...stored, durable: false });
   await put(db, runLog.STORE_RUNS, { ...run, durable: false });
   await history.importJson(file);
   expect(runLog.get(record.runId).durable).toBe(true);
@@ -111,11 +107,10 @@ it("marks restored records durable and accepts reimport of the original unsaved 
 it("keeps the selected run durable after a restore and a later classification", async () => {
   await boot();
   const record = {
-    schema: 3, radioProto: RADIO_PROTO_VERSION, usbProto: USB_PROTO_VERSION, runId: "selected",
+    schema: RUN_SCHEMA, radioProto: RADIO_PROTO_VERSION, usbProto: USB_PROTO_VERSION, runId: "selected",
     mode: "sprint", verification: "pending", classification: "DNS", closed: true, armed: false,
-    nodes: {}, cursor: 0, crossingTicks: [], createdAt: 1, startedAt: 1, durable: false,
+    nodes: {}, cursor: 0, crossingTicks: [], startedAt: 1, durable: false,
   };
-  await put(eventLog.getDb(), eventLog.STORE_RESULTS, { ...record });
   await runLog.save(record, { select: true });
   await runLog.flush();
   const { timing, history } = await boot(false);
@@ -127,10 +122,47 @@ it("keeps the selected run durable after a restore and a later classification", 
   expect(timing.run.durable).toBe(true);
   expect(await timing.classify("DSQ")).toBe(true);
   await runLog.flush();
-  const stored = (await getAll(eventLog.getDb(), eventLog.STORE_RESULTS))[0];
+  const stored = (await getAll(eventLog.getDb(), runLog.STORE_RUNS))[0];
   expect([stored.classification, stored.durable]).toEqual(["DSQ", true]);
   expect(history.rows[0].durable).toBe(true);
   expect(runLog.get(record.runId).durable).toBe(true);
   timing.discardRecords();
+  eventLog._reset();
+});
+
+it("a result voided after it was recorded reads the same in History and still freezes", { timeout: 15000 }, async () => {
+  for (const mode of ["sprint", "laps"]) {
+    const { timing, history } = await boot();
+    const tick = ms => String(160000000n + BigInt(ms) * 16000n), now = Date.now();
+    const row = (node, kind, capture_seq, ms) => ({ node_id: node, kind, capture_seq, end_seq: capture_seq,
+      master_tick: tick(ms), end_tick: tick(ms), master_boot_id: "500", sensor_boot_id: "100", flags: 7 });
+    let hseq = 0;
+    const ingest = async (rows) => {
+      timing.onEventRows((await eventLog.ingestLine({ rows, masterBootId: "500", hseq: ++hseq }, now)).rows);
+      await runLog.flush();
+    };
+    const nodes = mode === "sprint" ? ["00000001", "00000002"] : ["00000001"];
+    await ingest(nodes.map(node => row(node, "checkpoint", 0, -1)));
+    timing.run = createRun({
+      mode, clock: { master_tick: tick(0), master_boot_id: "500" },
+      mappings: nodes.map((node_id, i) => ({ node_id, role: i ? "finish" : "start" })),
+      findCheckpoint: node => eventLog.latestCheckpoint(node, "500", tick(0)), currentSensorBoot: () => "100",
+      lastSeq: eventLog.getLastSeq() - nodes.length, now,
+    });
+    await ingest(mode === "sprint"
+      ? [row("00000001", "capture", 1, 1000), row("00000002", "capture", 1, 3000)]
+      : [1000, 3000, 5000].map((ms, i) => row("00000001", "capture", i + 1, ms)));
+    expect(history.rows.map(r => r.verification)).toEqual(["verified"]);
+    // A start capture out of order below a decided crossing: the crossings above it are uncertain again.
+    await ingest([mode === "sprint" ? row("00000001", "capture", 2, 500) : row("00000001", "capture", 4, 2000)]);
+    expect(timing.run.verification).toBe("invalid");
+    expect(history.rows.map(r => [r.verification, r.crossingTicks.length])).toEqual([["invalid", mode === "sprint" ? 0 : 1]]);
+    await timing.settleResults();
+    const [record] = history.rows;
+    expect(record.calibration).not.toBeNull();
+    expect(record.durationNs).toBeNull();
+    expect(historyRecord(record)).toMatchObject({ Result: "-", Status: "Invalid" });
+    timing.discardRecords();
+  }
   eventLog._reset();
 });

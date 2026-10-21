@@ -37,7 +37,7 @@ const lapSummaries = computed(() => new Map(rows.value.map((r) => [r.runId, lapS
 async function openLaps(r) {
   const stats = lapSummaries.value.get(r.runId);
   if (!stats) return;
-  lapPopup.value = { ...stats, note: r.note, date: fmtDateTime(r.createdAt) };
+  lapPopup.value = { ...stats, note: r.note, date: fmtDateTime(r.startedAt) };
   await nextTick();
   lapDialog.value.showModal();
 }
@@ -51,11 +51,7 @@ function badgeClass(r) {
 async function classify(r, event) {
   classifying.value = true;
   try {
-    const classification = event.target.value || null;
-    if (timing.run?.runId === r.runId) await timing.classify(classification);
-    else await history.classify(r.runId, classification);
-  } catch (error) {
-    notyf.error(error.message || "Could not save classification");
+    await timing.classify(event.target.value || null, { runId: r.runId });
   } finally {
     event.target.value = history.status(history.rows.find((row) => row.runId === r.runId) || r);
     classifying.value = false;
@@ -78,8 +74,8 @@ async function importFile(event) {
   event.target.value = "";
   if (!file || importBlocked.value) return;
   try {
-    const { added, skipped, runs } = await history.importJson(file);
-    notyf.success(`Restored ${added} records and ${runs} run snapshots; ${skipped} duplicates skipped`);
+    const { added, skipped } = await history.importJson(file);
+    notyf.success(`Restored ${added} records; ${skipped} duplicates skipped`);
   } catch (error) { notyf.error(error.message || "Restore failed"); }
 }
 
@@ -101,7 +97,7 @@ function restoreBackup() {
 }
 
 async function remove(r) {
-  try { await history.removeRow(r.id); notyf.success("Deleted"); }
+  try { await history.removeRow(r.runId); notyf.success("Deleted"); }
   catch (error) { notyf.error(error.message || "Delete failed"); }
 }
 async function clearAll() {
@@ -148,9 +144,9 @@ async function clearAll() {
             </tr>
           </thead>
           <tbody>
-            <template v-for="r in rows" :key="r.id">
+            <template v-for="r in rows" :key="r.runId">
               <tr>
-                <td class="mono nowrap">{{ fmtDateTime(r.createdAt) }}</td>
+                <td class="mono nowrap">{{ fmtDateTime(r.startedAt) }}</td>
                 <td class="centered"><span class="badge mode-chip" :class="{ 'mode-sprint': r.mode === 'sprint', 'mode-laps': r.mode === 'laps' }">{{ MODE_LABEL[r.mode] || r.mode }}</span></td>
                 <td class="note-cell">{{ r.note || "-" }}</td>
                 <td class="mono nowrap result-cell centered">

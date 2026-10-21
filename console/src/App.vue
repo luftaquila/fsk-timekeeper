@@ -5,14 +5,12 @@ import NavTabs from "./components/NavTabs.vue";
 import QualityAlert from "./components/QualityAlert.vue";
 import MasterConnectionLight from "./components/MasterConnectionLight.vue";
 import { useTimingStore } from "./stores/timing";
-import { useHistoryStore } from "./stores/history";
 import { useDeviceStore } from "./stores/device";
 import * as eventLog from "./lib/eventLog";
 import * as ppsLog from "./lib/ppsLog";
 import * as deviceLog from "./lib/deviceLog";
 
 const timing = useTimingStore();
-const history = useHistoryStore();
 const device = useDeviceStore();
 const ready = ref(false);
 
@@ -22,7 +20,6 @@ onMounted(async () => {
   device.durableError = error?.message || null;
   if (error) await deviceLog.addEntry({ kind: "console", code: "storage_failure", at: Date.now(), text: error.message || String(error) });
   device.requestPersistence();
-  await history.init();
   await device.loadLog();
   await timing.reevaluate();
   ready.value = true;

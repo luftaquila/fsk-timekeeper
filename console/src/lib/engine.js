@@ -1,4 +1,5 @@
-/* Run engine: START snapshot, evidence evaluation and run states. A run is plain JSON:
+/* Run engine: START snapshot, evidence evaluation and run states. A run is plain JSON and is
+ * also its history record (no separate result copy):
  * {
  *   schema, radioProto, usbProto, runId, mode: "sprint" | "laps", note,
  *   boundaryTick: string, masterBootId: string,
@@ -7,14 +8,15 @@
  *   lapTarget: number|null, debounceMs: number,        // frozen at START
  *   armed, closed,
  *   stoppedClockDisplay?: string,                      // timer snapshot at manual Stop, not the result
- *   verification: "pending" | "verified" | "invalid",
+ *   verification: "pending" | "verified" | "invalid",   // the latest evaluation, also once recorded
  *   classification: "DNS" | "DNF" | "DSQ" | null,      // explicit operator decision
  *   startTick, finishTick: string|null,                // sprint result S1, F1
- *   crossingTicks: string[], totalValid: boolean,      // laps: confirmed crossings C0..Ck
+ *   crossingTicks: string[],                           // laps: confirmed crossings C0..Ck
  *   calibration: null | frozen descriptor (calibration.js), durationNs: string|null,
  *   fault: null | { fault_id, mode, run_id, kind, occurred_at, reasons: [{ node_id, role, reason, lo, hi }] },
  *   masterSessionEnded: null | { reason },             // master reboot / version change seen while open
- *   gpsAtStart, startedUtc, startedAt, historyId, durable,
+ *   gpsAtStart, startedUtc, startedAt, durable,
+ *   recordedAt: number|null,                           // wall ms the result was first decided
  *   masterDevId: string|null,                          // master chip id at START
  *   throughSeq: number,                                // last event-log seq evaluated
  *   finalizeAt?, calibrationEdges?,                    // PPS freeze deadline/edges until frozen
@@ -29,7 +31,7 @@ import { FLAG_HEALTHY, FLAG_TIME_UNKNOWN, RADIO_PROTO_VERSION, USB_PROTO_VERSION
 import { MASTER_TICKS_PER_MS } from "./event-timing";
 import { WIRELESS_STATUS_MAX_AGE_MS, DEFAULT_DEBOUNCE_MS, RESULT_CLASSIFICATIONS, MODES } from "./constants";
 
-export const RUN_SCHEMA = 3;
+export const RUN_SCHEMA = 4;
 const MASTER_TIMEBASE_ENDED = "The master timebase ended during the run.";
 export const MASTER_REBOOTED = "The master rebooted during the run.";
 
@@ -99,7 +101,6 @@ export function createRun({
     startTick: null,
     finishTick: null,
     crossingTicks: [],
-    totalValid: true,
     calibration: null,
     durationNs: null,
     fault: null,
@@ -107,7 +108,7 @@ export function createRun({
     gpsAtStart,
     startedUtc,
     startedAt: now,
-    historyId: null,
+    recordedAt: null,
     durable,
   };
 }
@@ -123,10 +124,21 @@ export function createClassifiedRun({ mode, note = "", classification, cursor = 
     boundaryTick: null, masterBootId: null, nodes: {}, cursor,
     lapTarget: null, debounceMs: DEFAULT_DEBOUNCE_MS,
     armed: false, closed: true, verification: "pending",
-    startTick: null, finishTick: null, crossingTicks: [], totalValid: true,
+    startTick: null, finishTick: null, crossingTicks: [],
     calibration: null, durationNs: null, fault: null, masterSessionEnded: null,
-    gpsAtStart: null, startedUtc: null, startedAt: now, historyId: null, durable,
+    gpsAtStart: null, startedUtc: null, startedAt: now, recordedAt: null, durable,
   };
+}
+
+// A decided result: sprint S1 and F1 confirmed; laps at least one confirmed lap once not pending.
+function hasResult(run) {
+  return run.mode === "laps" ? run.verification !== "pending" && run.crossingTicks.length >= 2 : run.verification === "verified";
+}
+
+// History lists a run from its first decided result on (whatever later evaluations say) or while
+// the operator's classification stands.
+export function isRecord(run) {
+  return !!run && !run.deleted && (run.recordedAt != null || RESULT_CLASSIFICATIONS.includes(run.classification));
 }
 
 export function runTouchedBy(run, rows) {
@@ -190,7 +202,6 @@ export function evaluateRun(run, rows, { now = Date.now() } = {}) {
   let startTick = null;
   let finishTick = null;
   let crossingTicks = [];
-  let totalValid = true;
   let finishCertain = null;
   const invalid = (cuts) => {
     state = "invalid";
@@ -209,7 +220,6 @@ export function evaluateRun(run, rows, { now = Date.now() } = {}) {
       crossingTicks = confirmed.slice(0, target + 1);
     } else if (cutBelow(startRole, null)) {
       invalid(cutsBelow(startRole, null));
-      totalValid = false;
     } else if (confirmed.length >= 2 && !startRole.cuts.length) {
       state = "verified"; // so far: the run stays open until its target or Stop
     }
@@ -248,8 +258,9 @@ export function evaluateRun(run, rows, { now = Date.now() } = {}) {
   // A verified sprint stays open: only Stop, lost timebase, invalid result or lap target end it.
   const decided = state === "invalid" || sessionEnd != null ||
     (state === "verified" && run.mode === "laps" && run.lapTarget && crossingTicks.length === run.lapTarget + 1);
-  let next = { ...run, verification: state, startTick, finishTick, crossingTicks, totalValid };
+  let next = { ...run, verification: state, startTick, finishTick, crossingTicks };
   if (decided) next = { ...next, armed: false, closed: true };
+  if (next.recordedAt == null && hasResult(next)) next.recordedAt = now;
   if (state === "invalid") next.fault = run.fault || makeFault(run, (faultCuts || []).map(reasonOf), "measurement", now);
   else if (state === "verified") next.fault = null;
 

@@ -29,7 +29,7 @@ const canStart = computed(() => device.connected && !device.updateInProgress && 
           :class="timing.run?.classification === value ? 'btn-danger' : 'btn-ghost'"
           :aria-pressed="timing.run?.classification === value"
           :disabled="timing.starting || timing.classifying"
-          @click="timing.classify(timing.run?.classification === value ? null : value, settings.state.mode, note)">{{ value }}</button>
+          @click="timing.classify(timing.run?.classification === value ? null : value, { mode: settings.state.mode, note })">{{ value }}</button>
       </div>
       <button class="btn btn-ghost btn-block mt-1" :disabled="!timing.run || timing.armed || timing.classifying" @click="timing.reset()">Clear</button>
       <div class="readiness-status" role="status" aria-live="polite" aria-atomic="true">

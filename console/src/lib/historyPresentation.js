@@ -14,7 +14,7 @@ export function statusLabel(row) {
 
 export function historyRecord(row, edges) {
   return {
-    Date: fmtDateTime(row.createdAt),
+    Date: fmtDateTime(row.startedAt),
     Mode: MODE_LABEL[row.mode] || row.mode,
     Note: row.note || "-",
     Result: formatDuration(resultNs(row, edges)),

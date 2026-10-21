@@ -1,8 +1,9 @@
 import { describe, it } from "vitest";
 import assert from "node:assert/strict";
-import { createRun, evaluateRun, stopRun, endMasterSession, shouldInvalidateOnMasterBoot, EngineError, RUN_SCHEMA } from "../src/lib/engine.js";
+import { createRun, evaluateRun, stopRun, endMasterSession, shouldInvalidateOnMasterBoot, isRecord, EngineError, RUN_SCHEMA } from "../src/lib/engine.js";
 import { RADIO_PROTO_VERSION, USB_PROTO_VERSION } from "../src/lib/protocol.js";
 import { nominalNs } from "../src/lib/event-timing.js";
+import { resultNs } from "../src/lib/results.js";
 
 const MS = 16000n;
 const T0 = 1_000_000_000n; // boundary tick
@@ -307,7 +308,7 @@ describe("dependency intervals and holes", () => {
     edge.capture("A", 5000);
     r = ev(run2, edge);
     assert.equal(r.run.verification, "invalid");
-    assert.equal(r.run.totalValid, false);
+    assert.equal(resultNs(r.run), null);
     assert.deepEqual(r.run.crossingTicks, [tick(1000)]);
   });
 
@@ -444,7 +445,7 @@ describe("dependency intervals and holes", () => {
     const r = evaluateRun(endMasterSession(run), log.since(run.cursor));
     assert.equal(r.run.verification, "invalid");
     assert.deepEqual(r.run.crossingTicks, [tick(1000), tick(6000), tick(11000)]);
-    assert.equal(r.run.totalValid, false);
+    assert.equal(resultNs(r.run), null);
     assert.match(r.run.fault.reasons[0].reason, /Reboot During Run|rebooted/);
   });
 
@@ -562,7 +563,7 @@ describe("laps", () => {
     log.checkpoint("A", 23000);
     const stopped = stopRun(ev(run, log).run);
     assert.equal(stopped.verification, "invalid");
-    assert.equal(stopped.totalValid, false);
+    assert.equal(resultNs(stopped), null);
     assert.deepEqual(stopped.crossingTicks, [1000, 11000, 21000].map(tick));
   });
 
@@ -576,7 +577,7 @@ describe("laps", () => {
     const r = ev(run, log);
     assert.equal(r.run.verification, "invalid");
     assert.equal(r.run.closed, true);
-    assert.equal(r.run.totalValid, false);
+    assert.equal(resultNs(r.run), null);
     assert.deepEqual(r.run.crossingTicks, [1000, 6000, 11000].map(tick));
   });
 
@@ -590,6 +591,42 @@ describe("laps", () => {
       assert.equal(stopped.closed, true);
       assert.deepEqual(stopped.crossingTicks, crossings.map(tick));
     }
+  });
+});
+
+describe("records", () => {
+  it("a sprint becomes a record at its decided result and stays one when a later fault voids it", () => {
+    const log = sprintLog();
+    let run = start(log, "sprint", SPRINT);
+    log.capture("A", 1000);
+    run = ev(run, log).run;
+    assert.equal(run.recordedAt, null);
+    assert.equal(isRecord(run), false);
+    log.capture("B", 3000);
+    run = ev(run, log).run;
+    assert.equal(run.verification, "verified");
+    assert.equal(run.recordedAt, NOW);
+    // An out-of-order capture below S1 makes S1 uncertain again: the record follows the evaluation.
+    log.capture("A", 500);
+    run = evaluateRun(run, log.since(run.cursor), { now: NOW + 1 }).run;
+    assert.equal(run.verification, "invalid");
+    assert.equal(run.startTick, null);
+    assert.equal(run.recordedAt, NOW);
+    assert.equal(isRecord(run), true);
+  });
+
+  it("laps record at the first confirmed lap; Stop alone records nothing, a classification lists the run", () => {
+    const log = lapsLog();
+    let run = start(log, "laps", LAPS);
+    log.capture("A", 1000);
+    const single = stopRun(ev(run, log).run);
+    assert.equal(isRecord(single), false);
+    assert.equal(isRecord({ ...single, classification: "DNS" }), true);
+    log.capture("A", 6000);
+    run = ev(run, log).run;
+    assert.equal(run.verification, "verified");
+    assert.equal(isRecord(run), true);
+    assert.equal(isRecord({ ...run, deleted: true }), false);
   });
 });
 

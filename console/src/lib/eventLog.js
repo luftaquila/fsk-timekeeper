@@ -6,9 +6,8 @@ import { rowKey, lineKey } from "./protocol";
 import * as runLog from "./runLog";
 
 export const DB_NAME = "fsk-timekeeper";
-export const DB_VERSION = 3;
+export const DB_VERSION = 4;
 export const STORE_EVENTS = "events";
-export const STORE_RESULTS = "results";
 export const STORE_PPS = "pps";
 export const STORE_LOG = "log";
 export const STORE_QUARANTINE = "quarantine";
@@ -34,10 +33,6 @@ function upgrade(database) {
   const events = database.createObjectStore(STORE_EVENTS, { keyPath: "seq", autoIncrement: true });
   events.createIndex("node_boot", ["node_id", "master_boot_id"]);
   events.createIndex("row", ROW_INDEX, { unique: true });
-  const results = database.createObjectStore(STORE_RESULTS, { keyPath: "id", autoIncrement: true });
-  results.createIndex("runId", "runId", { unique: true });
-  results.createIndex("mode", "mode");
-  results.createIndex("createdAt", "createdAt");
   database.createObjectStore(STORE_PPS, { keyPath: ["master_boot_id", "tick"] }).createIndex("received_at", "received_at");
   database.createObjectStore(STORE_LOG, { keyPath: "id", autoIncrement: true }).createIndex("at", "at");
   database.createObjectStore(STORE_QUARANTINE, { keyPath: "id", autoIncrement: true }).createIndex("line", "line", { unique: true });

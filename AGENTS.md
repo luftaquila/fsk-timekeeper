@@ -75,6 +75,8 @@
   - Stop은 수집 종료만. DNS/DNF 자동 판정 없음, 통과 없이 Start→Stop만 있으면 기록 미생성
   - 저장 시점: sprint는 첫 도착 확정 시, laps는 첫 확정 랩부터
   - DNS/DNF/DSQ는 운영자가 지정·해제, 측정값 보존. 경기별 시간 제한 없음
+- 기록은 run 하나(`runs` 스토어). 별도 결과 사본 없음. History는 `isRecord()`인 run 목록(첫 결과 확정 시 찍는 `recordedAt` 또는 분류)
+- History는 엔진의 최신 판정을 그대로 표시. 확정 뒤 철회(예: 캡처 순서 오류)되면 기록은 남고 Invalid로 바뀜
 - 보정 소스는 GPS PPS뿐
   - 온도 모델 없음, 이전 부팅 보정값 재사용 금지
   - PPS 없으면 nominal 16 MHz로 환산

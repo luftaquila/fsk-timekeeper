@@ -1,4 +1,5 @@
-/* The single run: START sequence, evidence evaluation, calibration freeze, live elapsed clock. */
+/* The single run: START sequence, evidence evaluation, calibration freeze, live elapsed clock.
+ * The run itself is the history record (runLog); History lists it once isRecord(). */
 import { defineStore } from "pinia";
 import { ref, reactive, computed } from "vue";
 import { useNotification } from "../composables/useNotification";
@@ -12,8 +13,8 @@ import { wirelessQuality, missingRoles as missingRolesOf } from "../lib/quality"
 import { encodeRun, decodeRun } from "../lib/run-codec";
 import * as runLog from "../lib/runLog";
 import { MODES, CALIBRATION_WAIT_MS, RESULT_CLASSIFICATIONS } from "../lib/constants";
-import { buildTimeline, freezeCalibration, utcMsAt, durationNs } from "../lib/calibration";
-import { resultTicks, resultNs as resultNsOf, lapsNs as lapsNsOf, spanNs } from "../lib/results";
+import { buildTimeline, freezeCalibration, utcMsAt } from "../lib/calibration";
+import { resultTicks, resultNs as resultNsOf, lapsNs as lapsNsOf, spanNs, frozenDurationNs } from "../lib/results";
 import { formatDuration } from "../lib/format";
 
 const VERSION_CHANGED = "The master reports another protocol version.";
@@ -80,13 +81,6 @@ export const useTimingStore = defineStore("timing", () => {
     const saved = persist();
     eventLog.protect(openCursor());
     return saved;
-  }
-
-  async function syncHistory(current, options = {}) {
-    const id = await useHistoryStore().upsert(current, options);
-    if (id != null && run.value?.runId === current.runId && run.value.historyId !== id) {
-      setRun({ ...run.value, historyId: id });
-    }
   }
 
   function stopClock() {
@@ -204,20 +198,23 @@ export const useTimingStore = defineStore("timing", () => {
     return true;
   }
 
-  async function classify(classification, mode = useSettingsStore().state.mode, note = "") {
+  // DNS/DNF/DSQ (null clears) on the selected run, on another run by runId, or without any run on a
+  // new untimed one. Classifying the selected run ends it.
+  async function classify(classification, { mode, note = "", runId = run.value?.runId ?? null } = {}) {
     if (starting.value || classifying.value || useHistoryStore().importing || useHistoryStore().clearing || (classification !== null && !RESULT_CLASSIFICATIONS.includes(classification))) return false;
-    if (classification === null && !run.value?.classification) return true;
+    const selected = runId === (run.value?.runId ?? null);
+    const current = selected ? run.value : runLog.get(runId);
+    if (!selected && (!current || current.deleted)) {
+      notyf.error("Record not found");
+      return false;
+    }
+    if (classification === null && !current?.classification) return true;
     classifying.value = true;
     try {
-      const current = run.value || createClassifiedRun({ mode, note, classification,
-        cursor: eventLog.getLastSeq(), durable: useDeviceStore().durable });
-      const next = { ...current, classification, armed: false, closed: true };
-      await applyEvaluation({ run: next, crossings: live.crossings, laps: live.laps });
-      // Clearing an untimed classification removes its row; this attempt can be classified again.
-      if (classification === null && run.value?.runId === next.runId &&
-          !useHistoryStore().rows.some((row) => row.runId === next.runId)) {
-        setRun({ ...run.value, historyId: null });
-      }
+      const next = { ...(current || createClassifiedRun({ mode: mode ?? useSettingsStore().state.mode, note, classification,
+        cursor: eventLog.getLastSeq(), durable: useDeviceStore().durable })), classification, armed: false, closed: true };
+      if (selected) await applyEvaluation({ run: next, crossings: live.crossings, laps: live.laps });
+      else await runLog.save(next);
       return true;
     } catch (error) {
       notyf.error(error.message || "Could not save classification");
@@ -241,8 +238,14 @@ export const useTimingStore = defineStore("timing", () => {
     resetLive();
   }
 
-  function pendingRun(current) {
-    if (!current || current.calibration || !(current.closed || (current.mode === "sprint" && current.verification === "verified"))) return current;
+  // A decided result (sprint arrival, closed run) waits for its calibration freeze; once frozen,
+  // durationNs follows the current result.
+  function withFreezeState(current) {
+    if (current?.calibration) {
+      const ns = frozenDurationNs(current);
+      return ns === current.durationNs ? current : { ...current, durationNs: ns };
+    }
+    if (!current || !(current.closed || (current.mode === "sprint" && current.verification === "verified"))) return current;
     if (!resultTicks(current).length || current.finalizeAt != null) return current;
     const device = useDeviceStore();
     return { ...current, finalizeAt: Date.now() + CALIBRATION_WAIT_MS,
@@ -255,21 +258,14 @@ export const useTimingStore = defineStore("timing", () => {
     freezes.delete(runId);
     const current = runLog.get(runId);
     if (!current || current.deleted || current.calibration || current.finalizeAt == null) return;
-    const ticks = resultTicks(current);
-    const calibration = freezeCalibration(current.calibrationEdges || [], ticks);
-    let ns = null;
-    if (current.verification === "verified") {
-      if (current.mode === "sprint") ns = durationNs(calibration.points, current.startTick, current.finishTick);
-      else if (current.totalValid && ticks.length >= 2) ns = durationNs(calibration.points, ticks[0], ticks[ticks.length - 1]);
-    }
-    const next = { ...current, calibration, durationNs: ns == null ? null : String(ns) };
+    const next = { ...current, calibration: freezeCalibration(current.calibrationEdges || [], resultTicks(current)) };
+    next.durationNs = frozenDurationNs(next);
     delete next.calibrationEdges;
     delete next.finalizeAt;
     if (run.value?.runId === runId) {
       await setRun(next);
       if (run.value?.runId === runId && !next.armed) showStoppedClock();
     } else await runLog.save(next);
-    await useHistoryStore().updateCalibration(next);
   }
 
   function scheduleFreeze(current = run.value) {
@@ -308,7 +304,7 @@ export const useTimingStore = defineStore("timing", () => {
   }
 
   function applyEvaluation(result) {
-    const next = pendingRun({ ...result.run, throughSeq: eventLog.getLastSeq() });
+    const next = withFreezeState({ ...result.run, throughSeq: eventLog.getLastSeq() });
     const before = run.value;
     live.crossings = result.crossings;
     live.laps = result.laps;
@@ -322,20 +318,9 @@ export const useTimingStore = defineStore("timing", () => {
       stopClock();
       showStoppedClock();
     }
-    const changed =
-      !before ||
-      before.runId !== next.runId ||
-      before.verification !== next.verification ||
-      before.classification !== next.classification ||
-      before.closed !== next.closed ||
-      before.armed !== next.armed ||
-      before.startTick !== next.startTick ||
-      before.finishTick !== next.finishTick ||
-      (before.crossingTicks || []).length !== next.crossingTicks.length;
-    const saved = changed ? syncHistory(next, { throughSeq: eventLog.getLastSeq() }) : Promise.resolve();
     if ((next.closed && !(before?.closed && before.runId === next.runId)) ||
         (next.mode === "sprint" && next.verification === "verified" && before?.verification !== "verified")) scheduleFreeze();
-    return Promise.all([persisted, saved]);
+    return persisted;
   }
 
   function evaluateOpen(current = run.value) {
@@ -365,12 +350,11 @@ export const useTimingStore = defineStore("timing", () => {
     evaluateOpen(endMasterSession(current, VERSION_CHANGED));
   }
 
-  // Storage failed: the run and its history row are no longer durable.
+  // Storage failed: the run is no longer durable.
   function markNonDurable() {
     const current = run.value;
     if (!current || current.durable === false) return;
     setRun({ ...current, durable: false });
-    syncHistory(run.value, {});
   }
 
   // A restore saved the selected run again: follow the run log's durable state.
@@ -400,13 +384,12 @@ export const useTimingStore = defineStore("timing", () => {
         await scheduleFreeze(next);
       }
     }
-    let current = pendingRun(run.value);
+    let current = withFreezeState(run.value);
     if (current !== run.value) await setRun(current);
     resetLive();
     if (!current) return;
     const device = useDeviceStore();
     if (current.masterBootId != null && !device.connected) await device.useEdgesOf(current.masterBootId);
-    await syncHistory(current, {});
     if (current.closed) {
       if (current.mode === "sprint") {
         live.crossings = [
