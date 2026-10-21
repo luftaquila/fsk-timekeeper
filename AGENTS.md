@@ -1,0 +1,98 @@
+# AGENTS.md
+
+- USB 마스터 1대 + 센서 최대 5대의 LoRa 계측 시스템
+- 위치: 펌웨어 `device/firmware`, 웹 콘솔 `console`, 보드 `device/hardware`
+
+## 시스템 구조
+- 마스터는 PC에 USB로 연결된 보드 1대뿐
+  - USB 분리 시 무선 정지, 재연결 시 재부팅 후 새 세션
+  - 배터리 마스터 모드·두 번째 마스터 감지 없음
+- 펌웨어 단일. 마스터·센서 구분은 부팅 시 USB 호스트 enumerate 여부로 1회 결정
+- 한 번에 한 경기. 센서 기준 2대(start/finish), 상한 5대
+  - start·finish 각각에 여러 센서 매핑 가능. laps는 start만 필요
+- 연속 가동 최대 하루 가정. 시각·link_id overflow 미처리
+- 책임 분담
+  - 센서: 캡처 유효성(`HEALTH_*` 비트)
+  - 마스터: 전송 무결성(인증, 세션, 재전송, 순서, 큐)
+  - 콘솔: 센서→start/finish 매핑, 런 제어, 판정, 보관
+- 센서 입력·라디오 DIO1·PPS는 GPIOTE→PPI→TIMER1 하드웨어 캡처
+- 공통 타임베이스는 마스터 TIMER1 하나
+
+## 설계 원칙
+- 최신 상태만 기준. 구 프로토콜·저장 형식·DB 스키마·설정 호환 코드 없음
+- 무선·USB 프로토콜 변경 시 마스터·센서·콘솔 함께 갱신
+- 무선(`PROTO_VER`)·USB(`PU_USB_PROTO`) 프로토콜 버전은 호환되지 않는 형식 변경 시에만 올림
+- 무선·USB 프로토콜, 패킷, 슬롯 변경은 별도 사전 승인 필요
+- 드문 경우 때문에 정상 경로에 지연·airtime·슬롯 비용 추가 금지. 드문 경우만 타는 경로로 처리하거나(예: 동기 공백 중 캡처만 보간) 감지 후 무효·보류 판정
+- 비용 기준: airtime, 업링크 지연, 슬롯 점유
+- 약점은 기존 메커니즘 재정의로 해결. 같은 기능에 병렬 경로(예: 슬롯 송신 + 즉시 송신)·예외 규칙 추가 금지. 기존 장점 상실 시 명시
+- 장치별 고정 보정 상수 금지
+
+## 작업 원칙
+- 코드 변경 시 관련 문서(`README.md`, `AGENTS.md`)와 주석이 낡지 않았는지 확인하고 함께 갱신
+
+## 무선·MAC
+- 국내 USN 규정: 중심 주파수 922.3–923.1 MHz, EIRP 25 mW 이하
+- 간섭 회피는 RSSI LBT. 듀티 사이클 방식 미사용
+- SF7/BW250 단일 채널, 전 보드 동일 무선 설정
+- 전용 슬롯 MAC: 1 s 비콘 프레임 안에서 마스터가 6×120 ms 슬롯 배정
+  - 슬롯 0–4는 DATA(등록 센서에 돌아가며 배정), 마지막 슬롯은 REQUEST(가입용)
+- 센서는 비콘 프레임당 1패킷 stop-and-wait 송신. ACK는 비콘의 누적 ACK
+- 등록 자동(JOIN→OFFER→CONFIRM). 수동 등록·해제 없음. 새 장치 때문에 정상 센서 축출 금지
+- CAD는 매 송신 필수, RSSI LBT는 보드 설정으로 on/off. 두 기능 통합 금지
+- 송신 시작 시한(`SLOT_LATE_MS`, `BEACON_ACCESS_MS`) 초과 시 송신 생략. CAD 생략 강제 송신 없음
+
+## 시각 동기
+- 센서가 캡처를 마스터 시각으로 변환해 송신
+- 오프셋은 비콘·DATA 업링크에 얹은 양방향 교환으로만 산출. 매 비콘의 송신·수신 시각 쌍은 skew 추정 전용
+- skew는 변환에만 적용, 클럭 조정 없음
+- 정상 캡처는 즉시 변환. 동기 공백 중 캡처만 보관 후 보간
+- 마스터 클럭 절대 주파수는 펌웨어에서 보정하지 않고 콘솔이 GPS PPS로 환산
+- 계측은 HFCLK가 Xtal일 때만
+
+## 보안
+- 모든 공중 패킷은 AEAD(XChaCha20-Poly1305)로 봉인. 상호 challenge-response로 연결별 키 생성
+- 인증 전 센서는 ACK·동기·큐 변경 불가
+- 플릿 PSK는 USB로 보드마다 주입. 보드 flash와 운영자가 따로 관리하는 사본에만 보관, 콘솔은 메모리에만 유지. 빌드·repo·CI 반입 금지
+- USB↔PC는 신뢰 구간
+- boot_id(64비트)·node_id(32비트) 축소 금지
+
+## 견고성
+- 하드웨어 워치독 미사용. fault 시 원인을 retained RAM에 남기고 재부팅
+  - 연속 fault 재부팅이 3회를 넘으면 정지. 60 s 가동하거나 소프트웨어 리셋이 아닌 리셋이면 횟수 초기화(`FAULT_*`)
+- RadioLib 무한 BUSY 대기는 `NrfHal::yield()` 가드로 차단. 벤더 소스 수정 금지
+- 라디오 고장 상태로 콘솔 Start 차단 금지. 라디오 복구 시 TIMER1·세션·큐 초기화 금지
+- 오류 보고는 USB X 메시지와 리셋 원인만. 새 USB 메시지 종류·부팅 배너 추가 금지
+- 무선 ACK 보장 범위는 마스터 RAM 수신까지. 무손실 복구 없이 영향 구간을 무효·보류 판정
+- IndexedDB 저장 실패 후에도 메모리에 두고 E 메시지 확인(C) 계속, 해당 기록은 `Not Saved` 표시
+
+## 콘솔 판정·기록
+- 판정은 콘솔에서만, fail-closed. 놓친 통과 가능성이 남으면 미확정
+- USB E 메시지는 IndexedDB 기록을 마친 뒤 C 메시지로 확인
+- 디바운스는 센서별 독립. sprint에서 첫 start보다 앞선 finish는 경고 없이 무시
+- laps에서 회복 불가 유실(`engine.js`의 `invalid` 판정) 시 화면·History·Excel 모두 확정 랩만 표시, 상태 Invalid, Total 빈칸
+- 기록은 FSK 서비스(`luftaquila/formula-student-korea`의 `competition/modules/traffic`) 방식
+  - Stop은 수집 종료만. DNS/DNF 자동 판정 없음, 통과 없이 Start→Stop만 있으면 기록 미생성
+  - 저장 시점: sprint는 첫 도착 확정 시, laps는 첫 확정 랩부터
+  - DNS/DNF/DSQ는 운영자가 지정·해제, 측정값 보존. 경기별 시간 제한 없음
+- 보정 소스는 GPS PPS뿐
+  - 온도 모델 없음, 이전 부팅 보정값 재사용 금지
+  - PPS 없으면 nominal 16 MHz로 환산
+  - fix 없이 잰 드리프트는 표시만, 보정 미사용
+- 보정값은 런마다 한 번 동결: 결과 확정(sprint 도착 확정, 런 종료) 후 다음 PPS를 최대 `CALIBRATION_WAIT_MS` 기다린 뒤. 이후 변경 금지
+- 원시값(tick, 보정 정보(`freezeCalibration()` 결과), 정확한 ns) 저장. 반올림은 표시 시에만(half-up, 3자리), 반올림 안내문 없음
+- 링크 상태(OK/STALE/LOST) 임계값은 펌웨어 `LINK_OK_MS`·`LINK_STALE_MS`에만. 콘솔 `WIRELESS_STATUS_MAX_AGE_MS` 등은 별개
+- Timing 화면의 상태 표시와 콘솔 Start는 같은 판정(`qualityFor`) 사용
+- 기록은 브라우저 내부 저장에만. JSON 내보내기는 전체 복구 백업, Excel은 화면 표시값
+- 펌웨어 업데이트는 콘솔 Web Serial로, 사용자가 고른 릴리스 ZIP만 사용
+
+## 하드웨어
+- J1은 필드 하네스 핀아웃 [1 +12V, 2 NC, 3 SENSE, 4 GND]
+- 센서는 Autonics BA2M-DDT(NPN open collector)
+- GPS(U4)는 마스터에만 실장
+- 필드 검증 보드 기준은 `luftaquila/formula-student-korea` git HEAD의 `competition/modules/traffic/device/wireless/hardware`. 작업 트리는 기준 아님
+- 필드 보드는 핀맵이 달라 테스트 펌웨어는 repo 밖 임시 사본에서 빌드, repo 수정 금지
+
+## 검증
+- 호스트 테스트·시뮬레이터 통과는 RF·보드 동작 검증이 아님. 실측 없이 정확도·하드웨어 동작 주장 금지
+- ARM 툴체인은 newlib-nano 포함 필요. 없으면 `PREFIX`로 지정
