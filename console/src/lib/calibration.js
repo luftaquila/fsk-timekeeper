@@ -79,8 +79,8 @@ function endWindow(seg, atEnd) {
   return { f: q(last.tick - first.tick, last.n - first.n), mid: q(last.n - first.n, 2n) };
 }
 
-// Ticks/s at one end of segs[index]: its own end window, else the facing window of the segment
-// nearest in time (the crystal runs on whatever the GPS does), else nominal.
+// Ticks/s at one end of segs[index]: its own end window, else the facing window of the nearest
+// segment in time that has one (the crystal runs on whatever the GPS does), else nominal.
 function segmentFrequency(segs, index, atEnd) {
   const own = endWindow(segs[index], atEnd);
   if (own) return own.f;

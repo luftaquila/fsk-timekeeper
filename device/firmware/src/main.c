@@ -176,7 +176,8 @@ static uint32_t g_hfxo_stops; /* board_hfxo_stops() already handled */
 static uint64_t g_reported_boot;
 static uint32_t g_reported_usb_epoch;
 
-/* HFXO fault (even a restarted stop) ends the timebase session; its marker precedes new records. */
+/* An HFXO fault (even a restarted stop), TX counter exhaustion or a new key ends the timebase
+ * session; its marker precedes the new session's records. */
 static int master_clock_check(void)
 {
     static int faulted, reported;

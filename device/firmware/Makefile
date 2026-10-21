@@ -4,7 +4,9 @@
 #   make clean               remove build/
 #   make distclean           remove build/ and vendor/
 #   FW_VERSION=v1.2.3 make   version on the USB `I` line (CI passes the release tag)
-#   make test                host tests (C11/C++17 compilers and python3, no ARM toolchain)
+#   make test                host tests: GPS, sync, queues, fault, secure, protocol, capture, main,
+#                            HAL, MAC simulator, radio, USB lines, tools
+#                            (C11/C++17 compilers and python3, no ARM toolchain)
 #
 # One binary for every board: master when a PC enumerates its USB, sensor otherwise (src/main.c).
 # The fleet key is provisioned over USB (`K`, src/keystore.c), never compiled in, so CI builds are
@@ -69,9 +71,6 @@ INC := -Isrc -Iconfig \
 MCU  := -mcpu=cortex-m4 -mthumb -mfloat-abi=hard -mfpu=fpv4-sp-d16
 OPT  := -O2 -g -DNDEBUG
 DEFS := -DNRF52840_XXAA -include $(BUILD)/firmware_info.h
-ifeq ($(NODE_DEBUG),1)
-DEFS += -DNODE_DEBUG
-endif
 
 COMMON   := $(MCU) $(OPT) -ffunction-sections -fdata-sections $(INC) $(DEFS) -MMD -MP
 CFLAGS   := $(COMMON) -std=gnu11
@@ -81,6 +80,7 @@ CXXFLAGS := $(COMMON) -std=gnu++17 -fno-exceptions -fno-rtti -fno-threadsafe-sta
 ASFLAGS  := $(MCU) -x assembler-with-cpp -DNRF52840_XXAA -D__HEAP_SIZE=4096
 
 # newlib-nano + nosys stubs; the linker script places the app at 0x26000 (S140 app base).
+# Link with $(CXX) so libstdc++ (nano) comes in for the C++ objects.
 LDSCRIPT := linker/nrf52840_app.ld
 LDFLAGS  := $(MCU) -T $(LDSCRIPT) -L$(MDK) --specs=nano.specs --specs=nosys.specs \
 	-Wl,--gc-sections -Wl,--undefined=fsk_firmware_metadata -Wl,-Map=$(BUILD)/$(TARGET).map -Wl,--print-memory-usage

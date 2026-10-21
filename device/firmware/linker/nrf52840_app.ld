@@ -2,7 +2,7 @@
  *
  *   0x00000000  MBR                                    untouched
  *   0x00001000  S140 v6.1.1 SoftDevice                 present, never enabled
- *   0x00026000  application (this image)               FLASH below; main() sets VTOR
+ *   0x00026000  application (this image)               FLASH below; board_init() sets VTOR
  *   0x000F2000  radio settings page (radio_cfg.c)      outside FLASH, survives DFU
  *   0x000F3000  fleet-key page (keystore.c)            outside FLASH, survives DFU
  *   0x000F4000  bootloader + MBR params + settings     untouched

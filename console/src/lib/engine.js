@@ -15,6 +15,10 @@
  *   fault: null | { fault_id, mode, run_id, kind, occurred_at, reasons: [{ node_id, role, reason, lo, hi }] },
  *   masterSessionEnded: null | { reason },             // master reboot / version change seen while open
  *   gpsAtStart, startedUtc, startedAt, historyId, durable,
+ *   masterDevId: string|null,                          // master chip id at START
+ *   throughSeq: number,                                // last event-log seq evaluated
+ *   finalizeAt?, calibrationEdges?,                    // PPS freeze deadline/edges until frozen
+ *   imported?, evidenceSeqs?,                          // backup import: flag, remapped evidence seqs
  * }
  * A result depends only on its interval (sprint: start through S1, finish through F1; laps: the
  * start role through the last lap); a possible missed crossing inside keeps it unconfirmed.

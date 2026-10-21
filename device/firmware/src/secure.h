@@ -43,9 +43,9 @@ int sec_seal_key(const uint8_t key[32], uint8_t *out, int out_cap, uint8_t type,
 int sec_seal_uplink(const uint8_t key[32], uint8_t *out, int out_cap, uint32_t node_id,
                      const void *payload, int payload_len, int wire_len);
 
-/* Seal a payload model (payload_len = its sizeof) as [header|ciphertext|mac]; node_id: sender,
- * ignored downlink. Advances the tx counter. Returns wire length or -1 out too small, -3 counter
- * exhausted, -4 unprovisioned/no boot id, -5 not a control type (use sec_seal_uplink/_key). */
+/* Seal a payload model (payload_len = its sizeof) as [header|ciphertext|mac], advancing the tx
+ * counter; node_id = sender (ignored downlink). Returns the wire length, or -1 out too small or
+ * payload not encodable, -3 counter exhausted, -4 no key/boot id, -5 not a control type. */
 int sec_seal(uint8_t *out, int out_cap, uint8_t type, uint32_t node_id,
              const void *payload, int payload_len);
 

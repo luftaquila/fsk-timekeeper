@@ -35,7 +35,7 @@ pcb_cy = 98.03;
 /* [Shell] */
 wall = 2.5;        // side wall thickness
 lid_th = 2;        // lid ceiling thickness
-base_th = 3;       // base plate thickness (>= edge_r so its bottom edge can be filleted)
+base_th = 3;       // base plate thickness
 pcb_clear = 0.5;   // gap between PCB edge and wall inner face
 standoff_h = 2.5;  // PCB bottom height above base top
 edge_r = 2.5;      // fillet radius for ALL outer edges of the body

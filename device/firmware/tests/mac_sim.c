@@ -1,6 +1,13 @@
 /* MAC simulator: the production MAC, sync, FIFO, registry, host queue and line formats on fake
  * air (airtime, collisions, loss, half duplex), TIMER1, ppm clocks and an acking USB host; one
- * process per scenario. Sensor TX stays in its dealt slots, never overlapping (check_slots). */
+ * process per scenario. Invariants checked:
+ *   - every TX sits in its slot window: DATA in a slot dealt to that sensor, JOIN in a REQUEST
+ *     slot, OFFER/CONFIRM in their admission slots; none overlaps another TX or a beacon, except
+ *     JOINs with each other (check_slots)
+ *   - every capture reaches the host exactly once and in order, or is covered by a loss range
+ *   - stamps are within a few ticks of the truth, interpolated ones after a beacon gap too
+ *   - checkpoints never claim past an undelivered capture
+ */
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>

@@ -48,7 +48,8 @@ void mac_master_checkpoint(mac_master_t *m);
 /* A new master session after sec_init(). */
 void mac_master_session(mac_master_t *m);
 
-/* `?STATUS` D lines; changed_only: transitions at once, plus all every SENSOR_STATUS_PERIOD_MS. */
+/* D and J lines of the registered sensors (J WAIT for candidates on a full report). ?STATUS asks
+ * for all; changed_only (beacon loop): transitions at once, all every SENSOR_STATUS_PERIOD_MS. */
 void mac_master_report(mac_master_t *m, int changed_only);
 
 #endif /* MAC_MASTER_H */

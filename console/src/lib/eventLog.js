@@ -1,6 +1,6 @@
-/* Evidence rows: IndexedDB log + the in-memory mirror the engine reads. An E line's rows commit in
- * one transaction before its ack (the master re-sends until then). Without IndexedDB, or after a
- * write failure, rows stay in memory: stalling the master queue is worse than losing durability. */
+/* Evidence rows: IndexedDB `events` store + in-memory mirror for the engine. An E line's rows
+ * commit in one transaction before its ack (the master re-sends until then). Without IndexedDB,
+ * or after a write failure, rows stay in memory: stalling the master queue would be worse. */
 import { openDb, transaction, request, done, addAll, getAll, count, removeRange } from "./idb";
 import { rowKey, lineKey } from "./protocol";
 import * as runLog from "./runLog";

@@ -1,5 +1,6 @@
-// Device log (IndexedDB `log`): { id, at, kind: "X"|"boot"|"console"|"radio"|"state", code, text,
-// devid, masterBootId }; kept 30 days, trimmed to LOG_MAX_ENTRIES ("state" stays until expiry).
+// Device log (IndexedDB `log`): X lines (noprov once per episode, not the badcmd answering ?KEY),
+// each new I identity's reset reason, console and radio entries; kept 30 days, trimmed to
+// LOG_MAX_ENTRIES ("state" until expiry). Entry: { id, at, kind, code, text, devid, masterBootId }.
 import { add, getAll, clear, removeByIndex, count, transaction, done } from "./idb";
 import * as eventLog from "./eventLog";
 import { LOG_RETENTION_MS, LOG_MAX_ENTRIES } from "./constants";

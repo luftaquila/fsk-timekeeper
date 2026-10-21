@@ -19,12 +19,14 @@ export const REQUIRED_ROLES = Object.freeze({
   laps: ["start"],
 });
 
-// D freshness, not link state: the master refreshes registered sensors every 5 s, LOST ones too.
+// Freshness limit of master lines, sensor D reports, admission WAIT and the START checkpoint (not
+// link state); the master re-reports registered sensors every 5 s, LOST ones too.
 export const WIRELESS_STATUS_MAX_AGE_MS = 12000;
 export const WIRELESS_MAX_SKEW_PPM = 100;
 export const WIRELESS_SYNC_TTL_MS = 7000;
 
-// START refuses at this master queue fill, or while one E line repeats for over HEAD_STUCK_MS.
+// START refuses above this master queue fill (depth > 12 of 16), or while one E line repeats for
+// over HEAD_STUCK_MS.
 export const QUEUE_HEALTH_RATIO = 0.75;
 export const HEAD_STUCK_MS = 5000;
 // Repeats of one unreadable E line before the fatal alarm.
