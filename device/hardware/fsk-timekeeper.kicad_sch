@@ -3598,10 +3598,6 @@
 		(uuid "74816864-e3de-4b8f-8b2b-d90c610dcd48")
 	)
 	(no_connect
-		(at 86.36 83.82)
-		(uuid "83a4ee70-f830-4d35-b6e6-cb1e93170d7a")
-	)
-	(no_connect
 		(at 48.26 91.44)
 		(uuid "b6402e7f-0893-4e03-9f5d-2639f1334e5e")
 	)
@@ -3620,10 +3616,6 @@
 	(no_connect
 		(at 132.08 93.98)
 		(uuid "cc0b77ec-92eb-47a1-aafd-aaba04560b91")
-	)
-	(no_connect
-		(at 199.39 124.46)
-		(uuid "e14ca517-7785-4e61-9253-1a35fa6c1196")
 	)
 	(no_connect
 		(at 64.77 106.68)
@@ -4017,6 +4009,16 @@
 		)
 		(uuid "20402b3a-7fdf-42c7-ba65-f8da4d8478ce")
 	)
+	(label "TRIG"
+		(at 86.36 83.82 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left bottom)
+		)
+		(uuid "311ddc58-642a-41a8-b6b0-de8997557528")
+	)
 	(label "MOSI"
 		(at 48.26 83.82 180)
 		(effects
@@ -4156,6 +4158,16 @@
 			(justify right bottom)
 		)
 		(uuid "c66a8a35-f233-4922-b677-06a7911cfcf1")
+	)
+	(label "TRIG"
+		(at 199.39 124.46 180)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right bottom)
+		)
+		(uuid "d83ec537-dfe4-4319-b985-5105a2037c40")
 	)
 	(label "NSS"
 		(at 111.76 88.9 180)
