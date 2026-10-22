@@ -1,0 +1,94 @@
+name: Build camera
+
+on:
+  push:
+    branches:
+      - '**'
+    paths:
+      - 'photofinish/**'
+      # The link tests run the firmware's camera code (tests/camera_sim.c).
+      - 'device/firmware/src/**'
+      - 'device/firmware/tests/camera_sim.c'
+      - '.github/workflows/camera.yml'
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Install
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends tesseract-ocr
+          python3 -m pip install -r photofinish/app/requirements-test.txt
+      - name: Test
+        working-directory: photofinish/app
+        run: python3 -m pytest -q
+
+  image:
+    needs: test
+    runs-on: ubuntu-24.04-arm
+    env:
+      APP: ghcr.io/${{ github.repository_owner }}/fsk-timekeeper-camera
+      PUBLISH: ${{ github.ref_type == 'tag' || github.event_name == 'workflow_dispatch' }}
+    outputs:
+      version: ${{ steps.tags.outputs.version }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        if: env.PUBLISH == 'true'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Tags
+        id: tags
+        run: |
+          if [ "${{ github.ref_type }}" = tag ]; then version="${GITHUB_REF_NAME}"; else version="edge-${GITHUB_SHA::7}"; fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.ref_type }}" = tag ]; then
+            echo "app_tags=$APP:$version,$APP:latest" >> "$GITHUB_OUTPUT"
+          else
+            echo "app_tags=$APP:$version" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Workload image
+        uses: docker/build-push-action@v7
+        with:
+          context: photofinish/app
+          file: photofinish/app/Containerfile
+          platforms: linux/arm64
+          push: ${{ env.PUBLISH == 'true' }}
+          tags: ${{ steps.tags.outputs.app_tags }}
+          build-args: VERSION=${{ steps.tags.outputs.version }}
+          cache-from: type=gha,scope=camera-app
+          cache-to: type=gha,scope=camera-app,mode=max
+
+  installer:
+    needs: image
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - name: Check
+        run: shellcheck -s bash photofinish/host/install.sh photofinish/host/files/usr/local/bin/* photofinish/host/files/etc/NetworkManager/dispatcher.d/*
+      - name: Package
+        env:
+          VERSION: ${{ needs.image.outputs.version }}
+        run: |
+          mkdir -p .tmp/photofinish-installer
+          sed -e "s|@REPO@|${GITHUB_REPOSITORY}|" -e "s|@VERSION@|${VERSION}|" photofinish/host/install.sh \
+            > .tmp/photofinish-installer/install-photofinish.sh
+          tar -czf .tmp/photofinish-installer/fsk-timekeeper-photofinish.tar.gz -C photofinish/host files
+      - uses: actions/upload-artifact@v7
+        with:
+          name: photofinish-installer
+          path: .tmp/photofinish-installer
