@@ -1,0 +1,6 @@
+numpy
+opencv-python-headless
+aiohttp
+pyserial
+pytest
+pytest-aiohttp

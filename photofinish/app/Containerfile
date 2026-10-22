@@ -1,0 +1,30 @@
+# FSK Timekeeper camera workload: the master's USB bridge, Aravis acquisition, detection, OCR,
+# clips and the console's API, one process (python -m fsk_timekeeper). Run by the host's
+# fsk-timekeeper.service through fsk-timekeeper-run (photofinish/host). Built by
+# .github/workflows/camera.yml.
+
+FROM docker.io/library/debian:bookworm-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        python3 \
+        python3-gi \
+        gir1.2-aravis-0.8 \
+        aravis-tools-cli \
+        python3-numpy \
+        python3-opencv \
+        python3-aiohttp \
+        python3-serial \
+        tesseract-ocr \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /opt/fsk-timekeeper
+COPY fsk_timekeeper ./fsk_timekeeper
+
+ARG VERSION=0.0.0
+RUN sed -i "s/^__version__ = .*/__version__ = \"${VERSION}\"/" fsk_timekeeper/__init__.py
+
+ENV PYTHONUNBUFFERED=1 \
+    FSK_TIMEKEEPER_STATE=/var/lib/fsk-timekeeper
+
+ENTRYPOINT ["python3", "-m", "fsk_timekeeper"]
