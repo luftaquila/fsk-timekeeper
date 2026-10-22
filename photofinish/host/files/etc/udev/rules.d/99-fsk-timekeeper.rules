@@ -1,0 +1,22 @@
+# FSK Timekeeper camera host: the master (FSK-WL, USB CDC) -> /dev/ttyUSB-fsk-timekeeper.
+# FSK_DEVICE is stored in udev's database on `add` and replayed on `remove`, so the
+# replug rule below matches both. ModemManager must never probe the port.
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1999", ATTRS{idProduct}=="0515", \
+    SYMLINK+="ttyUSB-fsk-timekeeper", MODE="0660", GROUP="dialout", ENV{ID_MM_DEVICE_IGNORE}="1", ENV{FSK_DEVICE}="master"
+
+# Plug or unplug: fsk-timekeeper-replug.service restarts the workload with the port as it is now.
+# A replugged master reboots into a new session anyway.
+SUBSYSTEM=="tty", ENV{FSK_DEVICE}=="?*", ACTION=="add|remove", \
+    TAG+="systemd", ENV{SYSTEMD_WANTS}="fsk-timekeeper-replug.service"
+
+# No USB autosuspend on the master: a suspended CDC link can fail to resume on Pi 5 + RP1.
+SUBSYSTEM=="usb", ATTR{idVendor}=="1999", ATTR{idProduct}=="0515", ATTR{power/control}="on"
+
+# Jumbo frames on the camera's port (the camera sends 7716-byte packets): the full line rate does
+# not fit 1500-byte packets. Set on `add`, while the port is still down: Pi 5's Ethernet refuses an
+# MTU change once up, so NetworkManager cannot set it.
+SUBSYSTEM=="net", ACTION=="add", KERNEL=="eth0", ATTR{mtu}="9000"
+
+# Full CPU clock at all times, no power saving. Same match as Raspberry Pi OS's
+# 60-ondemand-governor.rules, later in order, so this governor is the one that stays.
+KERNEL=="cpu*", SUBSYSTEM=="cpu", ATTR{cpufreq/scaling_governor}="performance"

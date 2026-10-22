@@ -1,0 +1,10 @@
+[Unit]
+Description=Restart fsk-timekeeper.service on master plug/unplug
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=oneshot
+# Coalesce the add/remove burst of one replug.
+ExecStartPre=/bin/sleep 2
+ExecStart=/usr/bin/systemctl restart fsk-timekeeper.service

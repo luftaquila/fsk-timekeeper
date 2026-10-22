@@ -1,0 +1,24 @@
+# The Ethernet port belongs to the GigE camera: link-local addressing, which the camera uses by
+# default (GEV LLA); never a default route. Above any other eth0 profile (Raspberry Pi OS's DHCP).
+# Energy-Efficient Ethernet off: its low-power idle drops stretches of the camera's stream.
+# Jumbo frames: the udev rule (99-fsk-timekeeper.rules) sets the MTU, since NetworkManager cannot
+# change it on this port; mtu=9000 here keeps NetworkManager from putting back 1500.
+[connection]
+id=fsk-timekeeper-camera
+type=ethernet
+interface-name=eth0
+autoconnect=true
+autoconnect-priority=100
+
+[ethernet]
+mtu=9000
+
+[ethtool]
+eee-enabled=false
+
+[ipv4]
+method=link-local
+never-default=true
+
+[ipv6]
+method=ignore

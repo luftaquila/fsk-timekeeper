@@ -1,0 +1,33 @@
+#!/bin/bash
+# Camera workload launcher (fsk-timekeeper.service): passes the master's port when it is plugged
+# in (fsk-timekeeper-replug.service restarts this on plug/unplug), keeps clips and settings on the
+# host, never updates by itself. The image: /etc/fsk-timekeeper/image, written by the installer.
+set -euo pipefail
+
+IMAGE="$(cat /etc/fsk-timekeeper/image)"
+NAME="fsk-timekeeper"
+PORT=/dev/ttyUSB-fsk-timekeeper
+
+DEVS=()
+if [ -e "$PORT" ]; then
+    DEVS+=(--device "$PORT:$PORT")
+fi
+ENVS=()
+if [ -f /etc/fsk-timekeeper/camera.conf ]; then
+    ENVS+=(--env-file /etc/fsk-timekeeper/camera.conf)
+fi
+
+podman rm -f "$NAME" >/dev/null 2>&1 || true
+
+# Host network: GigE Vision discovery on the camera's link, and the API on 127.0.0.1:8080 for
+# `tailscale serve`. No log driver: the workload's output reaches the journal once, as this
+# service's (podman's own journald copy would double it).
+exec podman run \
+    --name "$NAME" \
+    --rm \
+    --network=host \
+    --log-driver=none \
+    "${DEVS[@]}" \
+    "${ENVS[@]}" \
+    --volume /var/lib/fsk-timekeeper:/var/lib/fsk-timekeeper \
+    "$IMAGE"
