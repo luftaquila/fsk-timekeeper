@@ -5,8 +5,9 @@ Wireless timing system for Formula Student Korea dynamic events.
 ## Features
 
 * Wireless timing with one USB master and up to five sensors
+   * Wireless range over 200 m and time synchronization error below 3 µs
+* Optional line-scan [photo finish camera](photofinish) with car number recognition
 * [Web console](https://luftaquila.github.io/fsk-timekeeper/) with a standalone HTML file for offline use
-* Wireless range over 200 m and time synchronization error below 3 µs
 
 <details>
 <summary>Wireless time sync test result</summary>
@@ -89,7 +90,7 @@ Results are saved in the browser and listed in `History`.
 | 4x | [Molex 5569-04A2 (39300040)](https://www.molex.com/en-us/products/part-detail/39300040) board connector | <img src=".github/assets/components/molex-39300040.jpg" alt="Molex 39300040 board connector" width="120"> |
 | 4x | [Molex 5557-04R (39012040)](https://www.molex.com/en-us/products/part-detail/39012040) cable housing | <img src=".github/assets/components/molex-39012040.jpg" alt="Molex 39012040 cable housing" width="120"> |
 | 12x | [Molex 5556T (39000038)](https://www.molex.com/en-us/products/part-detail/39000038) crimp terminal | <img src=".github/assets/components/molex-39000038.jpg" alt="Molex 39000038 crimp terminal" width="120"> |
-| 1x | `ATGM336H` GPS module with antenna (optional) | <img src=".github/assets/components/atgm336h.jpg" alt="ATGM336H GPS module and antenna" width="120"> |
+| 1x | `ATGM336H` GPS module with antenna | <img src=".github/assets/components/atgm336h.jpg" alt="ATGM336H GPS module and antenna" width="120"> |
 
 </details>
 
@@ -101,7 +102,7 @@ Results are saved in the browser and listed in `History`.
 > Solder `U2` first. Installing `U1` first makes `U2` harder to solder.
 
 1. All boards: solder `U2` (Ra-01SH), `U1` (SuperMini nRF52840), and `L1` (22 µH 0630 inductor).
-2. Master: solder the optional GPS module at `U4` and connect its antenna.
+2. Master: solder the GPS module at `U4` and connect its antenna.
 3. Sensors: solder the battery holder at `BT1` and the `5569-04A2` connector at `J1`, then wire the toggle switch to `SW1`.
 4. Connect each LoRa module to an IPEX-to-SMA cable.
 
