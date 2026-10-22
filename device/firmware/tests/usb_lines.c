@@ -54,6 +54,38 @@ static void events(void)
     for (unsigned i = 0; i < mq_depth(&q); i++) { fputs(q.item[i].line, stdout); }
 }
 
+/* Camera node (the master's sender id, devid low word of the I lines) records. */
+static void camera(void)
+{
+    static mq_t q;
+    mq_init(&q);
+    q.next_hseq = 6;
+    pu_camera_crossing_t c = { UINT64_MAX, UINT64_MAX, 65535, HEALTH_EVENT_REQUIRED, 4294967295u,
+                               18446744073709551614ull, 18446744073709000000ull, CAM_PERIOD_MAX,
+                               18446744073709551000ull, UINT64_MAX, 999, 100 };
+    mq_push_camera_crossing(&q, 0x89EF4567u, &c);
+    pu_camera_crossing_t low = { 11, 42, 3, HEALTH_EVENT_REQUIRED, 1, 1201, 16480400, CAM_PERIOD_MIN,
+                                 640, 1500, 0, 0 };
+    mq_push_camera_crossing(&q, 0x89EF4567u, &low);
+
+    uplink_pl_t u;
+    memset(&u, 0, sizeof u);
+    u.kind = UL_KIND_LOSS;
+    u.flags = HEALTH_EVENT_REQUIRED;
+    u.ev_seq = 4;
+    u.master_boot_id = 11;
+    u.capture_seq = u.u.loss.end_seq = 2;
+    u.tick = 16500001;
+    u.u.loss.end_tick = 16600000;
+    mq_push_uplink(&q, 0x89EF4567u, 42, &u, 0.0f, 0.0f);
+    u.kind = UL_KIND_CHECKPOINT;
+    memset(&u.u, 0, sizeof u.u); /* the camera's checkpoints carry no radio history */
+    u.ev_seq = 5;
+    u.tick = 16700000;
+    mq_push_uplink(&q, 0x89EF4567u, 42, &u, 0.0f, 0.0f);
+    for (unsigned i = 0; i < mq_depth(&q); i++) { fputs(q.item[i].line, stdout); }
+}
+
 static void diagnostics(void)
 {
     pu_diag_t d;
@@ -96,6 +128,20 @@ static void diagnostics(void)
     d.tx_drop = 9;
     d.master_boot_id = UINT64_MAX;
     pu_emit_diag(&d);
+
+    memset(&d, 0, sizeof d); /* camera node */
+    d.node_id = 0x89EF4567u;
+    d.state = PU_STATE_OK;
+    d.last_seen_ms = 830;
+    d.lat_ms = 412;
+    d.provisioned = 1;
+    d.diag_valid = 1;
+    d.health = HEALTH_EVENT_REQUIRED;
+    d.capture_overflow = 2;
+    d.fifo_drop = 1;
+    d.sensor_boot_id = 42;
+    d.master_boot_id = 11;
+    pu_emit_diag(&d);
 }
 
 int main(void)
@@ -106,10 +152,13 @@ int main(void)
     pu_emit_identity(0x0123ABCDu, 0x89EF4567u, 0, 0, &low);
     pu_emit_heartbeat(UINT64_MAX, 12345, 200, 3);
     events();
+    camera();
     diagnostics();
     pu_emit_pps(123456789012345678ull, 1727500000u, -1234, 1, 1, 9, 64, 3, 17);
     pu_emit_clock("0123456789abcdef0123456789abcdef", 99, UINT64_MAX);
     pu_emit_ack("CP");
+    pu_emit_ack("V");
+    pu_emit_err("camwait");
     pu_emit_err_count("radio_reset", 3);
     pu_emit_fault(0x00027F38u, 0x0002A001u, "hard", 0x00000400u);
     return 0;

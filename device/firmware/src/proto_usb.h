@@ -1,7 +1,8 @@
-/* Master <-> PC USB-CDC line protocol v7: newline-delimited ASCII, first token = line type.
- * Node "0" = master, sensors = 8 upper-case hex. crc = CRC-32/IEEE as 8 upper-case hex over the
- * text before " <crc>". Lines are built without printf (newlib-nano has no %f / %llu), so 64-bit
- * ticks stay exact.
+/* Master <-> PC USB-CDC line protocol v8: newline-delimited ASCII, first token = line type.
+ * Node "0" = master, sensors = 8 upper-case hex; the line-scan camera is the node of the master's
+ * own sender id (node_sender_id(), the low 8 hex of the I line devid). crc = CRC-32/IEEE as 8
+ * upper-case hex over the text before " <crc>". Lines are built without printf (newlib-nano has
+ * no %f / %llu), so 64-bit ticks stay exact.
  *
  *   Master -> PC:
  *     I FSK-WL <usb_proto> <fw> <devid16> <M|S> <radio_proto> <freq_khz> <sf> <bw> <ticks_per_ms> <reset_reason>
@@ -14,6 +15,12 @@
  *       K: <tick> <cad_count> <spi_count> <tx_count> <rx_count> <clock_count> <init_count>
  *          <recovery_count> <recovery_failures> <recovery_reason> <recovery_result>
  *          (through tick the last capture is capture_seq; history frozen at creation)
+ *       V: <line> <tick> <period> <run_lo> <run_hi> <car> <conf>  (camera node: a vehicle front
+ *          first seen on line, exposed at tick; lines run_lo..run_hi expose at
+ *          tick + (n - line) * period; car 0 = unread, conf 0..100)
+ *       Camera node records: sensor_boot_id = camera session, ev_seq = host record number q
+ *       (low 16 bits), sync_age/rssi/snr 0; V and L take one capture_seq each, K none. Its L
+ *       bounds lines that may hide a crossing; its K has zero history.
  *     D <node> <OK|STALE|LOST> <skew_ppm> <rx_miss> <beacon_gap> <last_seen_ms> <rssi> <snr>
  *       <lat_ms> <temp_c10> <batt_mv> <sec_drop> <provisioned> <sync_valid> <skew_valid>
  *       <XTAL|RC> <sync_age_ms> <capture_overflow> <fifo_drop> <queue_depth> <queue_overflow>
@@ -21,6 +28,10 @@
  *       <recovery_count> <recovery_failures> <recovery_reason> <recovery_result> <diag_valid>
  *       D recovery fields are master-only; sensors send four zeroes (history comes in E K).
  *       diag_valid=0: no diagnostic uplink on this connection yet, clock/health unknown.
+ *       Camera node D: state by the last host record's age, sync/skew_valid = session running,
+ *       XTAL/RC = the master's clock, last_seen_ms = that age, lat_ms = host lag behind its
+ *       checkpoints, capture_overflow = 0, fifo_drop = L records,
+ *       sensor_boot_id = session; radio fields 0.
  *     T <32-hex token> <tick> <master_boot_id>
  *     P <pps_tick> <utc_s> <ppb> <pps_valid> <fix> <sats> <span_s> <seg> <n>
  *       One line per captured edge, never replayed; seg gates calibration (ppb/span_s may be a
@@ -35,6 +46,15 @@
  *       A R OK: stored and RX started; X cfgfail: storage failed;
  *       I then X cfgapply: stored, radio startup failed; X cfgpending: stored, bring-up pending
  *     C <hseq> <master_boot_id> <crc>   (host stored this E line; pops the queue head on exact match)
+ *   Camera host -> master (each answered by A V OK or an X camera reason):
+ *     V S <period>                      start a session, a line every period ticks (0 = stop)
+ *     V C <q> <line> <car> <conf>       vehicle front first seen on line
+ *     V L <q> <first> <last>            lines first..last may hide a crossing
+ *     V K <q> <line>                    every crossing through line has been sent
+ *       q = 1.. per session: q = last + 1 is taken, q = last is re-acknowledged, others camseq.
+ *       Lines never go back: C and L above the last record's line, K at or above it (camseq).
+ *       X camoff: no session; camwait: no anchor past the line yet, resend; camfull: host queue
+ *       full, resend; camline: the line numbers no longer match the strobes, session ended.
  */
 #ifndef PROTO_USB_H
 #define PROTO_USB_H
@@ -48,7 +68,7 @@
 extern "C" {
 #endif
 
-#define PU_USB_PROTO 7u
+#define PU_USB_PROTO 8u
 
 /* Reset reason byte (I line, D line, sensor diagnostics). 0 = power-on/brown-out. */
 #define RESET_PIN    0x01u
@@ -139,6 +159,22 @@ int pu_format_uplink(char *buf, unsigned cap, uint32_t hseq, uint32_t node_id, u
 int pu_format_timebase_end(char *buf, unsigned cap, uint32_t hseq, uint64_t master_boot_id,
                            uint64_t tick, uint32_t *crc);
 
+/* A camera crossing (E V) of the camera node. */
+typedef struct {
+    uint64_t master_boot_id;
+    uint64_t session;
+    uint32_t q;
+    uint8_t  flags;     /* HEALTH_* */
+    uint32_t capture_seq;
+    uint64_t line, tick;
+    uint32_t period;
+    uint64_t run_lo, run_hi;
+    uint16_t car;
+    uint8_t  conf;
+} pu_camera_crossing_t;
+int pu_format_camera_crossing(char *buf, unsigned cap, uint32_t hseq, uint32_t node_id,
+                              const pu_camera_crossing_t *c, uint32_t *crc);
+
 /* Parsed PC -> master command. */
 typedef enum {
     PU_CMD_NONE = 0,  /* no complete line yet */
@@ -151,8 +187,20 @@ typedef enum {
     PU_CMD_EVENT_ACK, /* C <hseq> <master_boot_id> <crc> (see pu_ack_*) */
     PU_CMD_CLOCK,     /* T <32-hex> (see pu_clock_token) */
     PU_CMD_CHECKPOINT,/* CP */
+    PU_CMD_CAMERA,    /* V ... (see pu_camera) */
     PU_CMD_BAD,       /* a full line that is not a command */
 } pu_cmd_t;
+
+/* A parsed camera host command. */
+typedef struct {
+    char     kind;    /* 'S', 'C', 'L' or 'K' */
+    uint32_t period;  /* S: 0 = stop, else CAM_PERIOD_MIN..CAM_PERIOD_MAX */
+    uint32_t q;       /* C, L, K: >= 1 */
+    uint64_t line;    /* C, K: >= 1; L: first line */
+    uint64_t last;    /* L: last line, >= line */
+    uint16_t car;     /* C: 0..999 */
+    uint8_t  conf;    /* C: 0..100 */
+} pu_camera_cmd_t;
 
 /* Feed one received byte; returns a command when a line completes. */
 pu_cmd_t pu_feed(int c);
@@ -164,6 +212,7 @@ uint32_t pu_ack_hseq(void);
 uint64_t pu_ack_boot(void);
 uint32_t pu_ack_crc(void);
 const char *pu_clock_token(void);
+const pu_camera_cmd_t *pu_camera(void);
 
 #ifdef __cplusplus
 }

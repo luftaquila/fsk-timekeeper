@@ -205,7 +205,7 @@ describe("app under jsdom", () => {
       const spy = vi.spyOn(fake, "write").mockImplementation(async (line) => {
         if (!line.startsWith("R ")) return write(line);
         if (code !== "cfgfail") {
-          await device.handleLine(`I FSK-WL 7 ${device.identity.fw} ${device.identity.devid} M 17 923100 7 250.00 16000 0 -3 0`);
+          await device.handleLine(`I FSK-WL 8 ${device.identity.fw} ${device.identity.devid} M 17 923100 7 250.00 16000 0 -3 0`);
         }
         await device.handleLine(`X ${code}`);
         return true;

@@ -16,8 +16,12 @@
 #define PIN_LORA_DIO1  PIN(1, 6)  /* GPIOTE capture (Tx/RxDone) — port 1 */
 #define PIN_LORA_NRST  PIN(0, 11) /* radio reset (NOT the board RST pin) */
 
-/* Sensor input (BA2M NPN open-collector, falling edge) — sensor role */
+/* Sensor input (BA2M NPN open-collector, falling edge) — sensor role; on the camera master the
+ * line-scan camera's Strobe (Line 1, NPN, low while exposing) on the same J1 SENSE pin. */
 #define PIN_SENSOR_IN  PIN(1, 13) /* GPIOTE capture (falling) — port 1 */
+
+/* Line-scan camera line trigger (J1 pin 2 -> camera Line 2+, 3.3 V single-ended), master only */
+#define PIN_CAMERA_TRIG PIN(0, 31) /* GPIOTE task output, driven by TIMER4 */
 
 /* GPS (ATGM336H, master only); P0.09/P0.10 are NFC pins until board_init() clears UICR.NFCPINS. */
 #define PIN_GPS_PPS    PIN(0, 9)  /* 1PPS in — GPIOTE capture (rising) */
@@ -138,6 +142,16 @@
 #define GPS_RMC_STALE_MS    2500u  /* no well-formed RMC A for this long -> qualification lost */
 #define GPS_RMC_LAG_MAX_MS  900u   /* an RMC done within this after a PPS edge carries its UTC */
 #define GPS_CFG_RESEND_MS   10000u /* $PCAS03 (volatile in the module) re-sent at most this often */
+
+/* Line-scan camera (master): a session triggers one line every period ticks of TIMER1's clock;
+ * the camera's line rate (58 kHz) bounds the period from below. Strobe anchors are sampled every
+ * CAM_SAMPLE_MS; an anchor whose tick step is not its strobe step times the period within
+ * CAM_JITTER_TICKS (< CAM_PERIOD_MIN / 2) ends the session (cam_track.h). CAM_JITTER_TICKS is a
+ * provisional bound until the trigger-to-exposure jitter is measured. */
+#define CAM_PERIOD_MIN   276u
+#define CAM_PERIOD_MAX   16000u
+#define CAM_SAMPLE_MS    10u
+#define CAM_JITTER_TICKS 64u
 
 /* Role is set once at boot: master if a USB host enumerates the board within this, else sensor. */
 #define ROLE_SETTLE_MS   1500u

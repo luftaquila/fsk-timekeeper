@@ -384,12 +384,29 @@ int pu_format_timebase_end(char *buf, unsigned cap, uint32_t hseq, uint64_t mast
     return lb_seal(&b, buf, crc);
 }
 
+int pu_format_camera_crossing(char *buf, unsigned cap, uint32_t hseq, uint32_t node_id,
+                              const pu_camera_crossing_t *c, uint32_t *crc)
+{
+    lb_t b; lb_init(&b, buf, cap);
+    lb_event_head(&b, hseq, node_id, 0, 'V', (uint16_t)c->q, c->flags, c->master_boot_id, c->session,
+                  0, 0.0f, 0.0f, c->capture_seq);
+    lb_sp(&b); lb_u64(&b, c->line);
+    lb_sp(&b); lb_u64(&b, c->tick);
+    lb_sp(&b); lb_u32(&b, c->period);
+    lb_sp(&b); lb_u64(&b, c->run_lo);
+    lb_sp(&b); lb_u64(&b, c->run_hi);
+    lb_sp(&b); lb_u32(&b, c->car);
+    lb_sp(&b); lb_u32(&b, c->conf);
+    return lb_seal(&b, buf, crc);
+}
+
 /* ---- command parser -------------------------------------------------------- */
 static uint8_t s_key[32];
 static radio_cfg_t s_radio;
 static uint32_t s_ack_hseq, s_ack_crc;
 static uint64_t s_ack_boot;
 static char s_clock_token[33];
+static pu_camera_cmd_t s_camera;
 
 const uint8_t *pu_setkey(void) { return s_key; }
 const radio_cfg_t *pu_radio_cfg(void) { return &s_radio; }
@@ -397,6 +414,7 @@ uint32_t pu_ack_hseq(void) { return s_ack_hseq; }
 uint64_t pu_ack_boot(void) { return s_ack_boot; }
 uint32_t pu_ack_crc(void) { return s_ack_crc; }
 const char *pu_clock_token(void) { return s_clock_token; }
+const pu_camera_cmd_t *pu_camera(void) { return &s_camera; }
 
 static int hexval(char c)
 {
@@ -494,6 +512,35 @@ static int parse_radio(const char *s)
     return 1;
 }
 
+/* V S <period> | V C <q> <line> <car> <conf> | V L <q> <first> <last> | V K <q> <line> */
+static int parse_camera(const char *s)
+{
+    pu_camera_cmd_t c = { s[2], 0, 0, 0, 0, 0, 0 };
+    uint32_t car = 0, conf = 0;
+    s += 3;
+    if (*s++ != ' ') { return 0; }
+    if (c.kind == 'S') {
+        if (!parse_u32(&s, &c.period) || *s != '\0') { return 0; }
+        if (c.period && (c.period < CAM_PERIOD_MIN || c.period > CAM_PERIOD_MAX)) { return 0; }
+        s_camera = c;
+        return 1;
+    }
+    if (c.kind != 'C' && c.kind != 'L' && c.kind != 'K') { return 0; }
+    if (!parse_u32(&s, &c.q) || c.q == 0 || *s++ != ' ') { return 0; }
+    if (!parse_u64(&s, &c.line) || c.line == 0) { return 0; }
+    if (c.kind == 'C') {
+        if (*s++ != ' ' || !parse_u32(&s, &car) || car > 999u) { return 0; }
+        if (*s++ != ' ' || !parse_u32(&s, &conf) || conf > 100u) { return 0; }
+        c.car = (uint16_t)car;
+        c.conf = (uint8_t)conf;
+    } else if (c.kind == 'L') {
+        if (*s++ != ' ' || !parse_u64(&s, &c.last) || c.last < c.line) { return 0; }
+    }
+    if (*s != '\0') { return 0; }
+    s_camera = c;
+    return 1;
+}
+
 static pu_cmd_t classify(const char *s)
 {
     if (s[0] == '\0') { return PU_CMD_NONE; }
@@ -505,6 +552,7 @@ static pu_cmd_t classify(const char *s)
     if (s[0] == 'K' && s[1] == ' ') { return parse_key(s + 2) ? PU_CMD_SETKEY : PU_CMD_BAD; }
     if (s[0] == 'R' && s[1] == ' ') { return parse_radio(s) ? PU_CMD_RADIO : PU_CMD_BAD; }
     if (s[0] == 'C' && s[1] == ' ') { return parse_event_ack(s) ? PU_CMD_EVENT_ACK : PU_CMD_BAD; }
+    if (s[0] == 'V' && s[1] == ' ' && s[2]) { return parse_camera(s) ? PU_CMD_CAMERA : PU_CMD_BAD; }
     if (s[0] == 'T' && s[1] == ' ' && strlen(s + 2) == 32u) {
         for (unsigned i = 0; i < 32u; i++) {
             if (hexval(s[i + 2]) < 0) { return PU_CMD_BAD; }

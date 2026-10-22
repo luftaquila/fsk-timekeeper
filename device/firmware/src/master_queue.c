@@ -61,6 +61,15 @@ int mq_push_timebase_end(mq_t *q, uint64_t master_boot_id, uint64_t tick)
     return commit(q, it, hseq, master_boot_id, len);
 }
 
+int mq_push_camera_crossing(mq_t *q, uint32_t node_id, const pu_camera_crossing_t *c)
+{
+    mq_item_t *it = tail_slot(q);
+    if (!it) { return 0; }
+    uint32_t hseq = q->next_hseq;
+    int len = pu_format_camera_crossing(it->line, sizeof(it->line), hseq, node_id, c, &it->crc);
+    return commit(q, it, hseq, c->master_boot_id, len);
+}
+
 int mq_ack(mq_t *q, uint32_t hseq, uint64_t master_boot_id, uint32_t crc)
 {
     /* Re-acks of a popped line (the host saw a re-send) are harmless; other mismatches count. */

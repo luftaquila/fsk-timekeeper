@@ -4,8 +4,8 @@
 #   make clean               remove build/
 #   make distclean           remove build/ and vendor/
 #   FW_VERSION=v1.2.3 make   version on the USB `I` line (CI passes the release tag)
-#   make test                host tests: GPS, sync, queues, fault, secure, protocol, capture, main,
-#                            HAL, MAC simulator, radio, USB lines, tools
+#   make test                host tests: GPS, sync, queues, fault, secure, protocol, capture, camera,
+#                            main, HAL, MAC simulator, radio, USB lines, tools
 #                            (C11/C++17 compilers and python3, no ARM toolchain)
 #
 # One binary for every board: master when a PC enumerates its USB, sensor otherwise (src/main.c).
@@ -43,7 +43,8 @@ APP_C := \
 	src/fault.c src/power.c src/secure.c src/entropy.c src/nvmc.c src/keystore.c \
 	src/radio_cfg.c src/protocol.c src/proto_usb.c src/node_id.c src/firmware_info.c \
 	src/usb.c src/usb_descriptors.c src/gps.c src/sync.c src/sensor_queue.c \
-	src/master_queue.c src/registry.c src/mac_sensor.c src/mac_master.c src/master_admission.c
+	src/master_queue.c src/registry.c src/mac_sensor.c src/mac_master.c src/master_admission.c \
+	src/camera.c src/cam_track.c
 APP_CXX := src/radio_hal.cpp src/radio.cpp src/runtime.cpp
 
 # Vendored: warnings off. RadioLib is built whole; --gc-sections drops unused modules.

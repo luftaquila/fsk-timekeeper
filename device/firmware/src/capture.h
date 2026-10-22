@@ -1,6 +1,7 @@
 /* TIMER1 hardware timestamps: 16 MHz (62.5 ns), extended to 64 bits in software. GPIOTE->PPI
- * latches DIO1 (Tx/RxDone), SENSOR and GPS PPS into CC with no CPU latency; captures widen against
- * now. capture_now64() must run at least once per ~268 s wrap. Main loop except where noted. */
+ * latches DIO1 (Tx/RxDone), SENSOR (camera Strobe on the master) and GPS PPS into CC with no CPU
+ * latency; captures widen against now. capture_now64() must run at least once per ~268 s wrap.
+ * Main loop except where noted. */
 #ifndef CAPTURE_H
 #define CAPTURE_H
 
@@ -34,5 +35,14 @@ uint16_t capture_sensor_overflow(void);
 
 /* Latest PPS rising edge since the last call (1), or none (0). */
 int capture_pps_get(uint64_t *tick);
+
+/* Camera Strobe on the SENSOR pin (master role): the sensor's TIMER1 + TIMER3 path, no ISR. */
+void capture_strobe_enable(void);
+/* Zero the strobe count for a new camera session, with the line triggers stopped. */
+void capture_strobe_reset(void);
+/* Strobes since the last reset (wraps at 2^32). */
+uint32_t capture_strobe_count(void);
+/* Count and tick of the latest strobe, only when no strobe arrived during the read (else 0). */
+int capture_strobe_sample(uint32_t *count, uint64_t *tick);
 
 #endif /* CAPTURE_H */

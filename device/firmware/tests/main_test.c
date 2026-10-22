@@ -64,6 +64,17 @@ int keystore_write(const uint8_t key[KEYSTORE_KEY_LEN]) {
 void mac_master_session(mac_master_t *m) { (void)m; sessions++; }
 void mac_master_checkpoint(mac_master_t *m) { (void)m; checkpoints++; }
 void mac_master_report(mac_master_t *m, int changed) { (void)m; (void)changed; }
+static unsigned camera_inits, camera_stops, camera_commands;
+void camera_init(void) { camera_inits++; }
+void camera_stop(void) { camera_stops++; }
+void camera_poll(uint32_t now_ms) { (void)now_ms; }
+void camera_command(const pu_camera_cmd_t *cmd, mq_t *q, uint64_t master_boot_id, uint32_t now_ms)
+{
+    (void)cmd; (void)q; (void)master_boot_id; (void)now_ms;
+    camera_commands++;
+    pu_emit_ack("V");
+}
+int camera_diag(pu_diag_t *d, uint32_t now_ms) { (void)d; (void)now_ms; return 0; }
 uint8_t fault_reset_reason(void) { return 0; }
 static int fault_pending;
 int fault_take_report(uint32_t *pc, uint32_t *lr, const char **cause, uint32_t *cfsr)
@@ -146,8 +157,9 @@ static void radio_settings(void)
         assert(strstr(output, "923100 7 250.00 16000 0 12 1\nX cfgapply\n"));
         assert(!strstr(output, "A R") && radio_needs_reset());
         assert(rx_starts == before_rx + (failure == 1));
-        command(PU_CMD_STATUS); assert(strstr(output, "D 0 LOST"));
-        command(PU_CMD_CLOCK); assert(strstr(output, "X clock"));
+        /* The timebase does not wait for the radio; sensor checkpoints do. */
+        command(PU_CMD_STATUS); assert(strstr(output, "D 0 OK"));
+        command(PU_CMD_CLOCK); assert(!strncmp(output, "T ", 2));
         unsigned before_cp = checkpoints;
         command(PU_CMD_CHECKPOINT); assert(strstr(output, "X clock") && checkpoints == before_cp);
         assert(boot == saved_boot && sessions == saved_sessions && capture_inits == saved_inits);
@@ -257,6 +269,7 @@ static void queue_pressure_report(void)
 int main(void)
 {
     mq_init(&g_queue);
+    g_timebase = 1;
     command(PU_CMD_STATUS);
     assert(!strstr(output, "P ") && strstr(output, "A STATUS OK"));
     pps_pending = 1;
@@ -267,9 +280,13 @@ int main(void)
     puts("PASS main_pps_status_does_not_repeat");
     command(PU_CMD_CLOCK);
     assert(strstr(output, "9007199254740993"));
+    assert(feed("V S 400\n") == PU_CMD_CAMERA);
+    command(PU_CMD_CAMERA); assert(camera_commands == 1 && strstr(output, "A V OK"));
     xtal = 0; stops++;
     command(PU_CMD_CLOCK); assert(strstr(output, "X clock"));
     assert(mq_depth(&g_queue) == 1 && g_queue.item[0].master_boot_id == boot);
+    assert(camera_stops == 1); /* the camera session ends with the timebase */
+    command(PU_CMD_CAMERA); assert(camera_commands == 1 && strstr(output, "X camoff"));
     command(PU_CMD_CHECKPOINT); assert(checkpoints == 0 && strstr(output, "X clock"));
     command(PU_CMD_STATUS); assert(strstr(output, "D 0 LOST") && !strstr(output, "P "));
     assert(mq_depth(&g_queue) == 1);
@@ -279,12 +296,15 @@ int main(void)
     boot_ready = ready = 1;
     command(PU_CMD_CLOCK); assert(strstr(output, "9007199254740994"));
     command(PU_CMD_CHECKPOINT); assert(checkpoints == 1);
+    command(PU_CMD_CAMERA); assert(camera_commands == 2 && camera_stops == 1);
     const mq_item_t *old = &g_queue.item[g_queue.head];
     assert(mq_ack(&g_queue, old->hseq, old->master_boot_id, old->crc));
     assert(capture_inits == 0); /* clock-session recovery never resets TIMER1 */
-    radio_fault = 1;
-    command(PU_CMD_CLOCK); assert(strstr(output, "X clock"));
-    command(PU_CMD_STATUS); assert(strstr(output, "D 0 LOST"));
+    radio_fault = 1; /* the radio is down, the timebase keeps serving */
+    command(PU_CMD_CLOCK); assert(!strncmp(output, "T ", 2));
+    command(PU_CMD_STATUS); assert(strstr(output, "D 0 OK"));
+    command(PU_CMD_CHECKPOINT); assert(strstr(output, "X clock") && checkpoints == 1);
+    command(PU_CMD_CAMERA); assert(camera_commands == 3);
     puts("PASS main_clock_commands_recovery");
     radio_settings();
     key_settings();
@@ -322,7 +342,8 @@ int main(void)
     output[0] = 0; pps_pending = 1; console_epoch++;
     emit_pps(); assert(!strncmp(output, "D 0 ", 4) && strstr(output, "\nP "));
     puts("PASS main_pps_session_before_edge");
-    /* Failed attempts never start captures; the successful attempt initializes once. */
+    /* Sensor: failed attempts never start captures; the successful attempt initializes once. */
+    g_timebase = 0;
     retry_t retry; retry_init(&retry, now, 0);
     rx_fail = 1;
     assert(!retry_bring_up(&retry, 0, now));
@@ -332,6 +353,18 @@ int main(void)
     assert(!retry_bring_up(&retry, 0, now) && capture_inits == first_init);
     rx_fail = 0; now += RADIO_RESET_BACKOFF_MAX_MS + 1u;
     assert(retry_bring_up(&retry, 0, now) && capture_inits == first_init + 1u);
+    /* Master: the timebase starts with the crystal, before the radio, and never again. */
+    g_timebase = 0; rx_fail = 1;
+    unsigned cameras = camera_inits;
+    retry_init(&retry, now, 0);
+    assert(!retry_bring_up(&retry, 1, now) && capture_inits == first_init + 2u && camera_inits == cameras + 1u);
+    now += RADIO_RESET_BACKOFF_MAX_MS + 1u;
+    assert(!retry_bring_up(&retry, 1, now) && capture_inits == first_init + 2u);
+    rx_fail = 0; now += RADIO_RESET_BACKOFF_MAX_MS + 1u;
+    assert(retry_bring_up(&retry, 1, now) && capture_inits == first_init + 2u && camera_inits == cameras + 1u);
+    g_timebase = 0; xtal = 0;
+    assert(!start_timebase(1) && capture_inits == first_init + 2u);
+    xtal = 1;
     puts("PASS main_capture_preserved_on_boot_retry");
     return 0;
 }

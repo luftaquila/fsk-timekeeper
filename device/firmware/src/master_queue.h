@@ -35,6 +35,8 @@ unsigned mq_depth(const mq_t *q);
 int mq_push_uplink(mq_t *q, uint32_t node_id, uint64_t sensor_boot_id, const uplink_pl_t *u,
                    float rssi, float snr);
 int mq_push_timebase_end(mq_t *q, uint64_t master_boot_id, uint64_t tick);
+/* Queue one camera crossing of the camera node. 0 when full. */
+int mq_push_camera_crossing(mq_t *q, uint32_t node_id, const pu_camera_crossing_t *c);
 
 /* 1: exact match pops the head. 0: empty queue or older hseq ignored, else a counted mismatch. */
 int mq_ack(mq_t *q, uint32_t hseq, uint64_t master_boot_id, uint32_t crc);

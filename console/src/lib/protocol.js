@@ -1,4 +1,4 @@
-/* FSK-WL USB line protocol v7 (newline-delimited ASCII, one space between tokens).
+/* FSK-WL USB line protocol v8 (newline-delimited ASCII, one space between tokens).
  *
  * Master -> host:
  *   I FSK-WL <usb_proto> <fw> <devid16> <M|S> <radio_proto> <freq_khz> <sf> <bw> <ticks_per_ms> <reset_reason>
@@ -7,6 +7,9 @@
  *   E <hseq> <node> <C|L|K> <ev_seq> <flags> <master_boot_id> <sensor_boot_id> <sync_age_ms> <rssi> <snr>
  *     <capture_seq> <payload...> <crc>   C: <count> <tick>...  L: <end_seq> <tick> <end_tick>  K: <tick> <cad_count> <spi_count> <tx_count> <rx_count> <clock_count> <init_count>
  *       <recovery_count> <recovery_failures> <recovery_reason> <recovery_result>
+ *       V (camera node): <line> <tick> <period> <run_lo> <run_hi> <car> <conf>; lines run_lo..run_hi
+ *       expose at tick + (n - line) * period. The camera node is the master's own sender id (low
+ *       8 hex of the I line devid); its sensor_boot_id is the camera session.
  *   D <node> <OK|STALE|LOST> <skew_ppm> <rx_miss> <beacon_gap> <last_seen_ms> <rssi> <snr> <lat_ms>
  *     <temp_c10> <batt_mv> <sec_drop> <provisioned> <sync_valid> <skew_valid> <XTAL|RC> <sync_age_ms>
  *     <capture_overflow> <fifo_drop> <queue_depth> <queue_overflow> <err_flags> <ver_drop> <tx_drop>
@@ -19,6 +22,7 @@
  *   A <cmd> OK
  *   X <code> [args...]
  * Host -> master: ?ID ?STATUS ?KEY PING CP K <64hex> T <32hex> C <hseq> <master_boot_id> <crc>
+ *   (the camera host's V S/C/L/K commands never come from the console)
  *   R <freq_khz> <power_dbm> <0|1>   (store/apply: I, then A R OK; X cfgapply/cfgpending if not running)
  *
  * 64-bit ticks stay decimal strings (BigInt on use). Node "0" is the master; sensors are
@@ -30,7 +34,11 @@ import { MASTER_TICKS_PER_MS } from "./event-timing";
 
 export const NODE_MASTER = "0";
 export const RADIO_PROTO_VERSION = 17;
-export const USB_PROTO_VERSION = 7;
+export const USB_PROTO_VERSION = 8;
+// Camera line period bounds in master ticks (firmware CAM_PERIOD_MIN / CAM_PERIOD_MAX).
+export const CAMERA_PERIOD_MIN = 276;
+export const CAMERA_PERIOD_MAX = 16000;
+export const CAMERA_CAR_MAX = 999;
 
 // What the Ra-01SH is rated for (firmware config.h); the board stores what R sends.
 export const RADIO_FREQ_MIN_KHZ = 803000;
@@ -265,6 +273,12 @@ export function contractOf(identity) {
   return { ok: true, reason: null };
 }
 
+// The camera node of a master: its own sender id, the low word of the I line devid.
+export function cameraNodeOf(identity) {
+  const devid = identity?.devid;
+  return typeof devid === "string" && /^[0-9A-F]{16}$/.test(devid) && !/^0{8}$/.test(devid.slice(8)) ? devid.slice(8) : null;
+}
+
 export function lineKey(masterBootId, hseq) {
   return `${masterBootId}:${hseq}`;
 }
@@ -301,7 +315,7 @@ export function parseEventLine(raw) {
   const rssi = /^-?\d+(\.\d+)?$/.test(t[9] ?? "") ? Number(t[9]) : NaN;
   const snr = /^-?\d+(\.\d+)?$/.test(t[10] ?? "") ? Number(t[10]) : NaN;
   const captureSeq = uint(t[11], U32_MAX);
-  if (!["C", "L", "K"].includes(kind)) return invalid("kind");
+  if (!["C", "L", "K", "V"].includes(kind)) return invalid("kind");
   if (evSeq == null) return invalid("ev_seq");
   if (flags == null || flags & ~FLAGS_KNOWN) return invalid("flags");
   if (sensorBootId == null) return invalid("sensor_boot_id");
@@ -334,6 +348,16 @@ export function parseEventLine(raw) {
       const seq = (captureSeq + i) >>> 0;
       return { ...base, kind: "capture", capture_seq: seq, end_seq: seq, master_tick: tick, end_tick: tick };
     });
+  } else if (kind === "V") {
+    const [line, tick, periodToken, runLo, runHi, carToken, confToken] = payload;
+    const period = uint(periodToken, CAMERA_PERIOD_MAX);
+    const car = uint(carToken, CAMERA_CAR_MAX);
+    const conf = uint(confToken, 100);
+    if (node === NODE_MASTER || payload.length !== 7 || [line, tick, runLo, runHi].some((v) => tickOf(v) == null) ||
+        period == null || period < CAMERA_PERIOD_MIN || car == null || conf == null) return invalid("camera payload");
+    if (!(BigInt(runLo) < BigInt(line) && BigInt(line) <= BigInt(runHi))) return invalid("camera run");
+    rows = [{ ...base, kind: "capture", capture_seq: captureSeq, end_seq: captureSeq, master_tick: tick, end_tick: tick,
+      camera: { line, period, run_lo: runLo, run_hi: runHi, car, conf } }];
   } else if (kind === "L") {
     const endSeq = uint(payload[0], U32_MAX);
     const tick = tickOf(payload[1]);

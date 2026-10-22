@@ -1,11 +1,13 @@
 /* One master and up to MAX_NODES sensors, one channel/timebase; one binary, role from USB at boot.
- * MASTER (a PC enumerates it): beacons, queues sensor records, speaks FSK-WL lines (proto_usb.h).
+ * MASTER (a USB host enumerates it): beacons, queues sensor records, drives the line-scan camera
+ * (camera.h), speaks FSK-WL lines (proto_usb.h).
  * SENSOR: syncs to beacons, hardware-captures SENSOR edges, uplinks in its slots (mac_sensor.h). */
 #include <stdint.h>
 #include <stddef.h>
 #include <string.h>
 
 #include "board.h"
+#include "camera.h"
 #include "capture.h"
 #include "config.h"
 #include "errlog.h"
@@ -85,22 +87,38 @@ static void service(uint32_t now)
 
 /* ===== bring-up ========================================================== */
 
-/* Radio, TIMER1, role captures; 0 when up. Fail closed: no radio or TIMER1 work on HFINT. */
+static int g_timebase;        /* TIMER1 and the role's captures run */
+static uint32_t g_hfxo_stops; /* board_hfxo_stops() already handled (master) */
+
+/* TIMER1 and the role's captures, once and only on the crystal; 1 when running. */
+static int start_timebase(int master)
+{
+    if (g_timebase || !board_hfclk_xtal()) { return g_timebase; }
+    capture_init();
+    if (master) {
+        g_hfxo_stops = board_hfxo_stops(); /* stops before the timebase do not end it */
+        capture_pps_enable();
+        gps_init();
+        camera_init();
+    } else {
+        capture_sensor_enable();
+    }
+    g_timebase = 1;
+    return 1;
+}
+
+/* Radio and the timebase; 0 when both are up. Fail closed: no radio or TIMER1 work on HFINT.
+ * The master's timebase (GPS, camera) needs no radio; a sensor's starts after the last fallible
+ * step. Neither restarts on a retry, so live counters survive. */
 static int bring_up(int master)
 {
     if (!board_hfclk_xtal()) { return -1; }
+    if (master) { start_timebase(1); }
     int st = radio_begin();
     if (st != 0) { return st; }
     st = radio_start_rx();
     if (st != 0) { return st; }
-    /* Start captures only after the last fallible step, so a retry cannot reset live counters. */
-    capture_init();
-    if (master) {
-        capture_pps_enable();
-        gps_init();
-    } else {
-        capture_sensor_enable();
-    }
+    start_timebase(master);
     return 0;
 }
 
@@ -172,12 +190,11 @@ static void run_sensor(int st)
 static mq_t g_queue;
 static mac_master_t g_mac;
 static int g_rekey;
-static uint32_t g_hfxo_stops; /* board_hfxo_stops() already handled */
 static uint64_t g_reported_boot;
 static uint32_t g_reported_usb_epoch;
 
 /* An HFXO fault (even a restarted stop), TX counter exhaustion or a new key ends the timebase
- * session; its marker precedes the new session's records. */
+ * session and the camera session in it; its marker precedes the new session's records. */
 static int master_clock_check(void)
 {
     static int faulted, reported;
@@ -191,6 +208,7 @@ static int master_clock_check(void)
         boot = sec_boot_id();
         faulted = 1;
         reported = 0;
+        camera_stop();
     }
     if (!faulted) { return sec_boot_ready(); }
     /* A full host queue defers the marker; retrying every pass is not an overflow. */
@@ -206,10 +224,11 @@ static int master_clock_check(void)
     return 0;
 }
 
-/* Node 0 self-report: die temperature, charge rail, security and queue counters. */
+/* Node 0 self-report: die temperature, charge rail, security and queue counters. The state is the
+ * timebase's; radio faults show only in err_flags and the recovery fields. */
 static int emit_self(int timebase_ok)
 {
-    timebase_ok = timebase_ok && sec_ready() && !radio_needs_reset();
+    timebase_ok = timebase_ok && sec_ready();
     pu_diag_t d = {0};
     d.is_master = 1;
     d.diag_valid = 1; /* self diagnostics are observed locally, even when unhealthy */
@@ -237,6 +256,15 @@ static int emit_self(int timebase_ok)
     return 1;
 }
 
+/* Camera node report, once a camera session has existed. */
+static void emit_camera(uint32_t now)
+{
+    pu_diag_t d;
+    if (!camera_diag(&d, now)) { return; }
+    d.master_boot_id = sec_boot_id();
+    pu_emit_diag(&d);
+}
+
 static void emit_pps(void)
 {
     if (!usb_console_ready() || !gps_report_due()) { return; } /* includes ?STATUS */
@@ -253,6 +281,7 @@ static void emit_pps(void)
 static void master_stopped(mp_state_t *power, int radio_up)
 {
     if (radio_up) { radio_standby(); }
+    camera_stop();
     board_led_off();
     uint32_t t0 = board_millis();
     for (;;) {
@@ -276,7 +305,9 @@ static void master_hello(void)
 static void master_command(pu_cmd_t cmd, int st, uint32_t now, uint8_t idle_seq)
 {
     if (cmd == PU_CMD_NONE) { return; }
-    int ready = st == 0 && master_clock_check() && sec_ready() && !radio_needs_reset();
+    /* The timebase (clock, PPS, camera) does not wait for the radio; sensor checkpoints do. */
+    int ready = g_timebase && master_clock_check() && sec_ready();
+    int radio = st == 0 && !radio_needs_reset();
     switch (cmd) {
     case PU_CMD_ID:
         master_hello();
@@ -288,6 +319,7 @@ static void master_command(pu_cmd_t cmd, int st, uint32_t now, uint8_t idle_seq)
                           st == 0 ? (int)reg_count(&g_mac.reg) : 0);
         if (st == 0) { mac_master_report(&g_mac, 0); }
         emit_self(ready);
+        emit_camera(now);
         if (ready) { emit_pps(); }
         pu_emit_ack("STATUS");
         break;
@@ -311,9 +343,13 @@ static void master_command(pu_cmd_t cmd, int st, uint32_t now, uint8_t idle_seq)
         pu_emit_clock(pu_clock_token(), capture_now64(), sec_boot_id());
         break;
     case PU_CMD_CHECKPOINT:
-        if (!ready) { pu_emit_err("clock"); break; } /* no beacons without a timebase */
+        if (!ready || !radio) { pu_emit_err("clock"); break; } /* no beacons without a timebase */
         mac_master_checkpoint(&g_mac);
         pu_emit_ack("CP");
+        break;
+    case PU_CMD_CAMERA:
+        if (!ready) { pu_emit_err("camoff"); break; }
+        camera_command(pu_camera(), &g_queue, sec_boot_id(), now);
         break;
     case PU_CMD_BAD:
         pu_emit_err("badcmd");
@@ -326,13 +362,12 @@ static void master_command(pu_cmd_t cmd, int st, uint32_t now, uint8_t idle_seq)
 static void run_master(int st)
 {
     mq_init(&g_queue);
-    g_hfxo_stops = board_hfxo_stops();
     if (st == 0) { mac_master_init(&g_mac, &g_queue); }
 
     mp_state_t power = MP_RUN;
     retry_t retry;
     retry_init(&retry, board_millis(), RADIO_BOOT_RETRY_MS);
-    uint32_t last = board_millis();
+    uint32_t last = board_millis(), last_camera = last;
     uint8_t idle_seq = 0;
     for (;;) {
         uint32_t now = board_millis();
@@ -346,30 +381,32 @@ static void run_master(int st)
         }
         mq_pump(&g_queue, now);
 
-        if (st != 0) {
-            if (retry_bring_up(&retry, 1, now)) {
-                st = 0;
-                g_hfxo_stops = board_hfxo_stops();
-                mac_master_init(&g_mac, &g_queue);
-                continue;
-            }
-            if ((uint32_t)(now - last) >= 1000u) {
-                last = now;
-                pu_emit_heartbeat(0, now, idle_seq++, 0);
-                if ((uint8_t)(idle_seq % CHECKPOINT_PERIOD_BEACONS) == 0u) { emit_self(0); }
-            }
+        if (st != 0 && retry_bring_up(&retry, 1, now)) {
+            st = 0;
+            mac_master_init(&g_mac, &g_queue);
             continue;
         }
-        if (!master_clock_check()) { continue; }
+        int timed = start_timebase(1) && master_clock_check();
+        if (st != 0 && (uint32_t)(now - last) >= 1000u) { /* no beacons to pace these */
+            last = now;
+            int ready = timed && sec_ready();
+            pu_emit_heartbeat(ready ? capture_now64() : 0, now, idle_seq++, 0);
+            if ((uint8_t)(idle_seq % CHECKPOINT_PERIOD_BEACONS) == 0u) { emit_self(ready); }
+        }
+        if (!timed) { continue; }
         gps_poll();
-        if (sec_ready() && !radio_needs_reset()) { emit_pps(); }
+        camera_poll(now);
+        if (sec_ready()) { emit_pps(); }
+        if ((uint32_t)(now - last_camera) >= SENSOR_STATUS_PERIOD_MS) {
+            last_camera = now;
+            emit_camera(now);
+        }
 
-        if (mac_master_step(&g_mac)) {
+        if (st == 0 && mac_master_step(&g_mac)) {
             uint8_t sent = (uint8_t)(g_mac.seq - 1u);
             /* Without a key sec_seal refuses: no beacon goes out; tell the PC. */
             if (!sec_provisioned() && (sent % 5u) == 0u) { pu_emit_err("noprov"); }
-            int ready = sec_ready() && !radio_needs_reset();
-            pu_emit_heartbeat(ready ? capture_now64() : 0, now, sent, (int)reg_count(&g_mac.reg));
+            pu_emit_heartbeat(sec_ready() ? capture_now64() : 0, now, sent, (int)reg_count(&g_mac.reg));
             mac_master_report(&g_mac, 1);
             if ((uint8_t)(g_mac.seq % CHECKPOINT_PERIOD_BEACONS) == 0u) { emit_self(1); }
         }

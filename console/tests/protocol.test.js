@@ -35,9 +35,9 @@ describe("parseLine", () => {
       assert.deepEqual(parseLine(line), { type: "K", key: null });
     }
   });
-  it("parses I v7 and checks the contract", () => {
-    const i = parseLine("I FSK-WL 7 1.0.0 0123456789ABCDEF M 17 922900 7 250.00 16000 4 -9 0");
-    assert.deepEqual(i, { type: "I", product: "FSK-WL", usbProto: 7, fw: "1.0.0", devid: "0123456789ABCDEF", role: "M", radioProto: 17, freqKhz: 922900, sf: 7, bw: 250, ticksPerMs: 16000, resetReason: 4, powerDbm: -9, lbt: 0 });
+  it("parses I v8 and checks the contract", () => {
+    const i = parseLine("I FSK-WL 8 1.0.0 0123456789ABCDEF M 17 922900 7 250.00 16000 4 -9 0");
+    assert.deepEqual(i, { type: "I", product: "FSK-WL", usbProto: 8, fw: "1.0.0", devid: "0123456789ABCDEF", role: "M", radioProto: 17, freqKhz: 922900, sf: 7, bw: 250, ticksPerMs: 16000, resetReason: 4, powerDbm: -9, lbt: 0 });
     assert.deepEqual(radioOf(i), { freqKhz: 922900, powerDbm: -9, lbt: 0 });
     assert.deepEqual(contractOf(i), { ok: true, reason: null });
     assert.equal(contractOf({ ...i, usbProto: i.usbProto + 1 }).reason, CONTRACT_VERSION);
@@ -141,7 +141,7 @@ describe("parseEventLine", () => {
       ],
     );
     assert.equal(p.rows[0].raw, C_LINE);
-    assert.equal(p.rows[0].usb_proto, 7);
+    assert.equal(p.rows[0].usb_proto, 8);
     assert.equal(rowKey(p.rows[1]), "3735928559:0D2243B0:305419896:capture:43:123456789028345678");
     assert.equal(formatAck(p), `C 17 3735928559 ${C_LINE.slice(-8)}`);
   });
