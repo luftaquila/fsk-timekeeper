@@ -2,12 +2,13 @@
 import { computed } from "vue";
 import { useTimingStore } from "../stores/timing";
 import { useSettingsStore } from "../stores/settings";
-import { MODE_LABEL } from "../lib/constants";
+import { MODE_LABEL, CAMERA_MODES } from "../lib/constants";
 import { formatDuration, formatDelta } from "../lib/format";
 import FaultReasons from "../components/FaultReasons.vue";
 import RunControlCard from "../components/RunControlCard.vue";
 import RunSetupCard from "../components/RunSetupCard.vue";
 import TimerCard from "../components/TimerCard.vue";
+import PhotoTimingPanel from "../components/PhotoTimingPanel.vue";
 
 const timing = useTimingStore();
 const settings = useSettingsStore();
@@ -16,8 +17,8 @@ const note = computed({
   set: (value) => settings.rememberNote(value),
 });
 
-// The page follows the current run's mode, open or closed; with no run, the selected mode.
-const mode = computed(() => timing.run?.mode ?? settings.state.mode);
+// The page follows the current run's mode, open or closed; with no run, the selected one (timing.mode).
+const mode = computed(() => timing.mode);
 const verification = computed(() => timing.run?.verification ?? null);
 
 const startList = computed(() => timing.crossingRows("start"));
@@ -67,6 +68,8 @@ function deltaBefore(index) {
     <section class="content">
       <TimerCard :title="MODE_LABEL[mode]" :note="timing.armed ? timing.run.note : note" />
 
+      <PhotoTimingPanel v-if="CAMERA_MODES.includes(mode)" :mode="mode" />
+      <template v-else>
       <div v-if="mode === 'sprint'" class="sensors">
         <div class="card">
           <div class="card-header"><h3>🟢 Start</h3></div>
@@ -164,6 +167,7 @@ function deltaBefore(index) {
           <FaultReasons v-if="timing.run?.fault?.reasons?.length" class="fault-list" :reasons="timing.run.fault.reasons" :boundary-tick="timing.run.boundaryTick" />
         </div>
       </div>
+      </template>
     </section>
   </div>
 </template>

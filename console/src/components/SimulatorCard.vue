@@ -11,6 +11,8 @@ const sensors = ref([]);
 const gps = ref(null);
 const open = ref(false);
 const connectionBusy = ref(false);
+const car = ref("1");
+const conf = ref(95);
 
 // The fake transport keeps plain JS state; refresh after each simulator action.
 function refresh() {
@@ -100,6 +102,16 @@ function deleteSensor() {
           </fieldset>
         </section>
 
+        <section class="control-group" aria-labelledby="simulator-camera-title">
+          <h4 id="simulator-camera-title" class="group-title">Camera</h4>
+          <div class="actions">
+            <button class="btn btn-ghost" @click="act((f) => f.startCamera())">Start Camera Session</button>
+            <input v-model="car" class="form-input mono camera-car" maxlength="3" aria-label="Car number" />
+            <input v-model.number="conf" class="form-input mono camera-car" aria-label="OCR confidence" />
+            <button class="btn btn-success" @click="act((f) => f.cameraCrossing({ car: Number(car) || 0, conf }))">Camera Crossing</button>
+          </div>
+        </section>
+
         <section class="control-group" aria-labelledby="simulator-gps-title">
           <h4 id="simulator-gps-title" class="group-title">GPS &amp; PPS</h4>
           <div class="actions">
@@ -123,6 +135,7 @@ function deleteSensor() {
 </template>
 
 <style scoped>
+.camera-car { width: 4.5rem; }
 .simulator-toggle {
   display: flex;
   align-items: center;
