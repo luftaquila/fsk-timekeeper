@@ -29,8 +29,8 @@ HEADERS := $(wildcard $(SRC)/*.h)
 .PHONY: test
 # usb_lines.txt feeds console firmware-lines tests; regen: ../build/host/usb-lines > usb_lines.txt
 test: $(OUT)/gps-test $(OUT)/sync-test $(OUT)/queue-test $(OUT)/fault-test $(OUT)/mac-sim $(OUT)/radio-test \
-    $(OUT)/secure-test $(OUT)/protocol-test $(OUT)/capture-test $(OUT)/main-test $(OUT)/hal-test \
-	$(OUT)/usb-lines
+    $(OUT)/secure-test $(OUT)/protocol-test $(OUT)/capture-test $(OUT)/camera-test $(OUT)/main-test \
+	$(OUT)/hal-test $(OUT)/usb-lines
 	@ulimit -c 0; failed=0; \
 	for case in $(GPS_CASES); do "$(OUT)/gps-test" "$$case" || failed=1; done; \
 	"$(OUT)/sync-test" || failed=1; \
@@ -39,6 +39,7 @@ test: $(OUT)/gps-test $(OUT)/sync-test $(OUT)/queue-test $(OUT)/fault-test $(OUT
 	"$(OUT)/secure-test" || failed=1; \
 	"$(OUT)/protocol-test" || failed=1; \
 	"$(OUT)/capture-test" || failed=1; \
+	"$(OUT)/camera-test" || failed=1; \
 	"$(OUT)/main-test" || failed=1; \
 	"$(OUT)/hal-test" || failed=1; \
 	for case in $(SIM_CASES); do "$(OUT)/mac-sim" "$$case" || failed=1; done; \
@@ -76,6 +77,17 @@ $(OUT)/protocol-test: protocol_test.c $(SRC)/protocol.c $(HEADERS)
 $(OUT)/capture-test: capture_test.c $(SRC)/capture.c fakes/nrf.h $(HEADERS)
 	@mkdir -p $(OUT)
 	$(CC) $(CFLAGS) -Ifakes -I$(SRC) capture_test.c -o $@
+
+CAMERA_SRC := $(SRC)/camera.c $(SRC)/cam_track.c $(SRC)/master_queue.c $(SRC)/proto_usb.c $(SRC)/errlog.c \
+	$(SRC)/crc32.c
+$(OUT)/camera-test: camera_test.c $(CAMERA_SRC) fakes/nrf.h $(HEADERS)
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) -Ifakes -I$(SRC) camera_test.c $(CAMERA_SRC) -o $@
+
+# Host stand-in of the camera master for photofinish/app's tests (not run here).
+$(OUT)/camera-sim: camera_sim.c $(CAMERA_SRC) fakes/nrf.h $(HEADERS)
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) -Ifakes -I$(SRC) camera_sim.c $(CAMERA_SRC) -o $@
 
 # Link-time GC drops main.c's infinite hardware loops; real command and clock-session code stays.
 comma := ,

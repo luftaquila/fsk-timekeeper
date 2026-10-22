@@ -105,7 +105,8 @@ void capture_init(void)
     NRF_PPI->CHENSET = (1UL << CAP_PPI_DIO1);
 }
 
-void capture_sensor_enable(void)
+/* SENSOR falling edge -> TIMER1 CC and TIMER3 count on one PPI channel and its fork. */
+static void sensor_edge_hw(void)
 {
     NRF_TIMER3->TASKS_STOP = 1;
     NRF_TIMER3->MODE = TIMER_MODE_MODE_Counter;
@@ -119,7 +120,11 @@ void capture_sensor_enable(void)
     NRF_PPI->CH[CAP_PPI_SENS].TEP = (uint32_t)&NRF_TIMER1->TASKS_CAPTURE[CAP_CC_SENS];
     NRF_PPI->FORK[CAP_PPI_SENS].TEP = (uint32_t)&NRF_TIMER3->TASKS_COUNT;
     NRF_PPI->CHENSET = (1UL << CAP_PPI_SENS);
+}
 
+void capture_sensor_enable(void)
+{
+    sensor_edge_hw();
     NRF_GPIOTE->INTENSET = (1UL << (GPIOTE_INTENSET_IN0_Pos + CAP_GPIOTE_SENS));
     NVIC_ClearPendingIRQ(GPIOTE_IRQn);
     NVIC_SetPriority(GPIOTE_IRQn, 3);
@@ -216,6 +221,34 @@ int capture_sensor_checkpoint(uint64_t *tick, uint32_t *seq)
 uint16_t capture_sensor_overflow(void)
 {
     return s_overflow;
+}
+
+/* Up to 58 k strobes/s: no ISR, the main loop samples the latest CC and the count. */
+void capture_strobe_enable(void)
+{
+    sensor_edge_hw();
+}
+
+void capture_strobe_reset(void)
+{
+    NRF_TIMER3->TASKS_CLEAR = 1;
+    NRF_GPIOTE->EVENTS_IN[CAP_GPIOTE_SENS] = 0;
+}
+
+uint32_t capture_strobe_count(void)
+{
+    return sensor_count();
+}
+
+int capture_strobe_sample(uint32_t *count, uint64_t *tick)
+{
+    uint32_t before = sensor_count();
+    uint32_t low = NRF_TIMER1->CC[CAP_CC_SENS];
+    uint32_t after = sensor_count();
+    if (before != after || after == 0u) { return 0; }
+    *count = after;
+    *tick = widen(low);
+    return 1;
 }
 
 int capture_pps_get(uint64_t *tick)

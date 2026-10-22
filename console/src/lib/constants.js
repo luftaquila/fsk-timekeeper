@@ -19,6 +19,9 @@ export const REQUIRED_ROLES = Object.freeze({
   laps: ["start"],
 });
 
+// Car numbers on the stickers: one to three digits, kept as text without leading zeros.
+export const CAR_NUMBER_PATTERN = /^[1-9]\d{0,2}$/;
+
 // Freshness limit of master lines, sensor D reports, admission WAIT and the START checkpoint (not
 // link state); the master re-reports registered sensors every 5 s, LOST ones too.
 export const WIRELESS_STATUS_MAX_AGE_MS = 12000;

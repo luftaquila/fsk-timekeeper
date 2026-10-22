@@ -76,5 +76,24 @@ int main(void)
     assert(capture_sensor_get(&tick, &seq, &xtal) && seq == UINT32_MAX);
     assert(capture_sensor_get(&tick, &seq, &xtal) && seq == 0);
     puts("PASS capture_overflow_wrap");
+
+    /* Camera Strobe: the sensor's latch and count without the ISR; a sample needs a quiet read. */
+    memset(&test_gpiote, 0, sizeof test_gpiote);
+    count = read_no = inject_on = 0;
+    capture_init(); capture_strobe_enable();
+    assert(test_gpiote.INTENSET == 0 && test_ppi.FORK[CAP_PPI_SENS].TEP == (uint32_t)&test_timer3.TASKS_COUNT);
+    uint32_t strobes;
+    assert(!capture_strobe_sample(&strobes, &tick)); /* none yet */
+    edge(100); edge(200);
+    assert(capture_strobe_sample(&strobes, &tick) && strobes == 2 && tick == 200);
+    inject_on = read_no + 2u; /* a strobe between the two count reads */
+    assert(!capture_strobe_sample(&strobes, &tick));
+    assert(capture_strobe_sample(&strobes, &tick) && strobes == 3 && tick == 210);
+    test_timer3.TASKS_CLEAR = 0;
+    capture_strobe_reset();
+    assert(test_timer3.TASKS_CLEAR && !test_gpiote.EVENTS_IN[CAP_GPIOTE_SENS]);
+    count = 0; /* what TASKS_CLEAR does to the counter */
+    assert(capture_strobe_count() == 0 && !capture_strobe_sample(&strobes, &tick));
+    puts("PASS capture_strobe");
     return 0;
 }
