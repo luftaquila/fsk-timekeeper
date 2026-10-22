@@ -26,10 +26,11 @@ function onDebounce(e) {
   e.target.value = settings.state.debounceMs;
 }
 
-// Discovered nodes: telemetry ∪ admission (J) ∪ saved mapping, minus removed sensors and master.
+// Discovered nodes: telemetry ∪ admission (J) ∪ saved mapping, minus removed sensors, master and camera.
 const nodes = computed(() => {
   const s = new Set([...Object.keys(device.telemetry), ...Object.keys(device.admission), ...settings.mappingList.map((m) => m.node_id)]);
   s.delete("0");
+  s.delete(device.cameraNode); // the camera has its own screens
   return [...s].filter((node) => !settings.state.removedSensors.includes(node)).sort();
 });
 

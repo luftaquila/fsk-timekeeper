@@ -6,12 +6,14 @@ import QualityAlert from "./components/QualityAlert.vue";
 import MasterConnectionLight from "./components/MasterConnectionLight.vue";
 import { useTimingStore } from "./stores/timing";
 import { useDeviceStore } from "./stores/device";
+import { useCameraStore } from "./stores/camera";
 import * as eventLog from "./lib/eventLog";
 import * as ppsLog from "./lib/ppsLog";
 import * as deviceLog from "./lib/deviceLog";
 
 const timing = useTimingStore();
 const device = useDeviceStore();
+useCameraStore(); // keeps the camera crossings' clips while a camera run is selected
 const ready = ref(false);
 
 onMounted(async () => {

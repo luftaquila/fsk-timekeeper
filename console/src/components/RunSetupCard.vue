@@ -2,7 +2,7 @@
 import { computed } from "vue";
 import { useTimingStore } from "../stores/timing";
 import { useSettingsStore } from "../stores/settings";
-import { MODES, MODE_LABEL } from "../lib/constants";
+import { MODES, MODE_KIND, MODE_LABEL } from "../lib/constants";
 
 defineProps({ modelValue: { type: String, default: "" } });
 const emit = defineEmits(["update:modelValue"]);
@@ -10,7 +10,9 @@ const emit = defineEmits(["update:modelValue"]);
 const timing = useTimingStore();
 const settings = useSettingsStore();
 
-const mode = computed(() => timing.run?.mode ?? settings.state.mode);
+const mode = computed(() => timing.mode);
+// Photo modes only while a camera is live; a shown run keeps its own mode listed.
+const options = computed(() => MODES.filter((m) => timing.modes.includes(m) || m === mode.value));
 
 function onMode(e) {
   settings.setMode(e.target.value);
@@ -36,7 +38,7 @@ function onTarget(e) {
       <div class="form-group">
         <label class="form-label">Mode</label>
         <select class="form-select mode" :value="mode" :disabled="timing.armed" @change="onMode">
-          <option v-for="m in MODES" :key="m" :value="m">{{ MODE_LABEL[m] }}</option>
+          <option v-for="m in options" :key="m" :value="m">{{ MODE_LABEL[m] }}</option>
         </select>
       </div>
 
@@ -45,7 +47,7 @@ function onTarget(e) {
         <input :value="modelValue" class="form-input note" :disabled="timing.armed" @input="emit('update:modelValue', $event.target.value)" />
       </div>
 
-      <div v-if="mode === 'laps'" class="form-group">
+      <div v-if="MODE_KIND[mode] === 'laps'" class="form-group">
         <label for="lap-target" class="form-label">Auto-Stop After</label>
         <div class="lap-target-field">
           <input id="lap-target" type="text" inputmode="numeric" class="form-input lap-target" :value="settings.state.lapTarget ?? ''" placeholder="Off" aria-describedby="lap-target-unit" :disabled="timing.armed" @input="digitsOnly" @change="onTarget" />
@@ -72,4 +74,5 @@ function onTarget(e) {
 .lap-target-unit {
   color: var(--text-secondary);
 }
+
 </style>

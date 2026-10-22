@@ -7,9 +7,34 @@ import DfuCard from "../components/DfuCard.vue";
 import SerialConsole from "../components/SerialConsole.vue";
 import DeviceLogCard from "../components/DeviceLogCard.vue";
 import SimulatorCard from "../components/SimulatorCard.vue";
+import CameraConnectionLight from "../components/CameraConnectionLight.vue";
+import CameraLinkSection from "../components/CameraLinkSection.vue";
+import CameraConfigSection from "../components/CameraConfigSection.vue";
+import CameraLiveSection from "../components/CameraLiveSection.vue";
+import CameraReadingSection from "../components/CameraReadingSection.vue";
 
 import { useTimingStore } from "../stores/timing";
+import { useSettingsStore } from "../stores/settings";
 const timing = useTimingStore();
+const settings = useSettingsStore();
+
+// Settings kept on the camera Pi (config.EDITABLE).
+const CAPTURE_FIELDS = [
+  { key: "lineRateHz", label: "Line Rate", unit: "Hz" },
+  { key: "exposureUs", label: "Exposure", unit: "µs" },
+  { key: "gainDb", label: "Gain", unit: "dB" },
+  { key: "travel", label: "Travel Direction", choices: { left: "Right to Left", right: "Left to Right" } },
+];
+const DETECTION_FIELDS = [
+  { key: "bandTop", label: "Band Top", unit: "px" },
+  { key: "bandBottom", label: "Band Bottom", unit: "px" },
+  { key: "threshold", label: "Threshold", unit: "%" },
+];
+const CLIP_FIELDS = [
+  { key: "clipMarginPct", label: "Margin", unit: "%" },
+  { key: "clipMaxMs", label: "Maximum Length", unit: "ms" },
+  { key: "clipQuotaGb", label: "Storage Limit", unit: "GB" },
+];
 
 const isDev = import.meta.env.DEV;
 </script>
@@ -29,6 +54,21 @@ const isDev = import.meta.env.DEV;
         <RadioCard />
         <ProvisionCard />
         <DfuCard />
+      </div>
+    </details>
+    <details class="card board-settings" :open="!!settings.state.cameraHost">
+      <summary class="card-header settings-toggle">
+        <h3><span class="heading-icon" aria-hidden="true">📷</span><span>Camera Settings</span><CameraConnectionLight /></h3>
+        <svg class="disclosure" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6" /></svg>
+      </summary>
+      <p v-if="timing.armed" class="settings-notice">Stop the run to change camera settings</p>
+      <div class="settings-sections">
+        <CameraLinkSection />
+        <CameraLiveSection />
+        <CameraConfigSection id="camera-capture" title="Capture" :fields="CAPTURE_FIELDS" />
+        <CameraConfigSection id="camera-detection" title="Detection" :fields="DETECTION_FIELDS" />
+        <CameraConfigSection id="camera-clips" title="Clips" :fields="CLIP_FIELDS" />
+        <CameraReadingSection />
       </div>
     </details>
     <DeviceLogCard />

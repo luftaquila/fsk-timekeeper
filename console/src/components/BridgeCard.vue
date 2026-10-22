@@ -75,6 +75,7 @@ function disconnect() {
   font-size: 1rem;
   color: var(--text-secondary);
 }
+.hint:not(:last-child) { margin-bottom: 1rem; }
 .device-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem; margin-bottom: 1rem; }
 .device-versions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 0.35rem 1rem; margin-left: auto; color: var(--text-secondary); font-size: 0.875rem; line-height: 1.5; }
 .version-item { display: inline-flex; align-items: baseline; gap: 0.35rem; white-space: nowrap; }

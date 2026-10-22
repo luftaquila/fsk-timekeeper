@@ -4,11 +4,12 @@ import { useTimingStore } from "../stores/timing";
 import { useDeviceStore } from "../stores/device";
 import { useHistoryStore } from "../stores/history";
 import { useNotification } from "../composables/useNotification";
-import { MODES, MODE_LABEL, RESULT_CLASSIFICATIONS } from "../lib/constants";
+import { MODES, MODE_KIND, MODE_LABEL, CAMERA_MODES, RESULT_CLASSIFICATIONS } from "../lib/constants";
 import { formatDuration, fmtDateTime } from "../lib/format";
 import { historyRecord, lapSummary, lapDelta, statusLabel, calibrationLabel } from "../lib/historyPresentation";
 
 import FaultReasons from "../components/FaultReasons.vue";
+import PhotoFinishViewer from "../components/PhotoFinishViewer.vue";
 import LabeledValue from "../components/LabeledValue.vue";
 
 const history = useHistoryStore();
@@ -25,37 +26,51 @@ const lapPopup = ref(null);
 const backupMenu = ref(null);
 const backupOpen = ref(false);
 
-const rows = computed(() => history.filtered(filter.value || null));
+// One row per run, and one per car of a Photo Laps heat: { id, row (the run), view, car }.
+const rows = computed(() => history.filtered(filter.value || null).flatMap((run) =>
+  history.entries(run).map((e) => ({ ...e, id: `${run.runId}:${e.car ?? ""}` }))));
 
 function result(r) {
-  return historyRecord(r, history.edgesFor(r)).Result;
+  return historyRecord(r.view, history.edgesFor(r.row)).Result;
 }
 function lapStats(r) {
-  return lapSummary(r, history.edgesFor(r));
+  return lapSummary(r.view, history.edgesFor(r.row));
 }
-const lapSummaries = computed(() => new Map(rows.value.map((r) => [r.runId, lapStats(r)])));
-const calibrations = computed(() => new Map(rows.value.map((r) => [r.runId, calibrationLabel(r, history.edgesFor(r))])));
-
+const lapSummaries = computed(() => new Map(rows.value.map((r) => [r.id, lapStats(r)])));
+const calibrations = computed(() => new Map(rows.value.map((r) => [r.id, calibrationLabel(r.view, history.edgesFor(r.row))])));
 async function openLaps(r) {
-  const stats = lapSummaries.value.get(r.runId);
+  const stats = lapSummaries.value.get(r.id);
   if (!stats) return;
-  lapPopup.value = { ...stats, note: r.note, date: fmtDateTime(r.startedAt) };
+  lapPopup.value = { ...stats, car: r.car ?? null, note: r.row.note || null, date: fmtDateTime(r.row.startedAt) };
   await nextTick();
   lapDialog.value.showModal();
+}
+// Lap popup cells: ? for a lap an unassigned crossing falls in, and for the best-lap figures while
+// one may still be the car's (best null).
+function lapTime(p, i) {
+  return p.held.has(i) ? "?" : formatDuration(p.laps[i]);
+}
+function lapBefore(p, i) {
+  if (i > 0 && (p.held.has(i) || p.held.has(i - 1))) return "?";
+  return lapDelta(i > 0 ? p.laps[i] - p.laps[i - 1] : null);
+}
+function lapToBest(p, i) {
+  if (p.best == null || p.held.has(i)) return "?";
+  return p.laps[i] === p.best ? "BEST" : lapDelta(p.laps[i] - p.best);
 }
 function closeLaps() {
   lapDialog.value.close();
 }
 function badgeClass(r) {
-  const status = history.status(r);
+  const status = history.status(r.view);
   return status === "verified" ? "badge-success" : ["invalid", "DSQ"].includes(status) ? "badge-danger" : status === "DNS" ? "badge-default" : "badge-warning";
 }
 async function classify(r, event) {
   classifying.value = true;
   try {
-    await timing.classify(event.target.value || null, { runId: r.runId });
+    await timing.classify(event.target.value || null, { runId: r.row.runId, car: r.car ?? null });
   } finally {
-    event.target.value = history.status(history.rows.find((row) => row.runId === r.runId) || r);
+    event.target.value = history.status((rows.value.find((row) => row.id === r.id) || r).view);
     classifying.value = false;
   }
 }
@@ -99,8 +114,30 @@ function restoreBackup() {
 }
 
 async function remove(r) {
-  try { await history.removeRow(r.runId); notyf.success("Deleted"); }
-  catch (error) { notyf.error(error.message || "Delete failed"); }
+  if (r.car && !window.confirm("Delete the whole heat with every car?")) return;
+  try {
+    await history.removeRow(r.row.runId);
+    if (photos.value?.runId === r.row.runId) photos.value = null;
+    notyf.success("Deleted");
+  } catch (error) { notyf.error(error.message || "Delete failed"); }
+}
+
+// Photo-finish images of a camera record: its crossings (a heat's car: that car's).
+const photos = ref(null); // { runId, car }
+const selectedKey = ref(null);
+const detail = computed(() => rows.value.find((r) => r.row.runId === photos.value?.runId && (r.car ?? null) === photos.value?.car) ?? null);
+// The selected run's decisions follow the timing store; other records show the stored ones.
+const detailRun = computed(() => (detail.value && timing.run?.runId === detail.value.row.runId ? timing.run : detail.value?.row ?? null));
+const crossings = computed(() => {
+  const list = detailRun.value?.cameraCrossings || [];
+  return detail.value?.car ? list.filter((c) => c.car === detail.value.car) : list;
+});
+const selected = computed(() => crossings.value.find((c) => c.key === selectedKey.value) ?? crossings.value[0] ?? null);
+const refTick = computed(() => (detail.value?.car ? detail.value.view.crossingTicks?.[0] : detailRun.value?.startTick) ?? selected.value?.tick ?? null);
+const editable = computed(() => !!detail.value && timing.run?.runId === detail.value.row.runId);
+function showPhotos(r) {
+  photos.value = { runId: r.row.runId, car: r.car ?? null };
+  selectedKey.value = null;
 }
 async function clearAll() {
   if (importBlocked.value || classifying.value || device.connecting || device.dfuInProgress) return;
@@ -117,7 +154,7 @@ async function clearAll() {
         <option value="">All modes</option>
         <option v-for="m in MODES" :key="m" :value="m">{{ MODE_LABEL[m] }}</option>
       </select>
-      <span class="count muted">{{ rows.length }} run{{ rows.length === 1 ? "" : "s" }}</span>
+      <span class="count muted">{{ rows.length }} record{{ rows.length === 1 ? "" : "s" }}</span>
       <div class="spacer"></div>
       <button class="btn btn-ghost btn-sm" :disabled="!rows.length || exporting || history.importing || history.clearing" @click="exportFile('excel')"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" /></svg> Export Excel</button>
       <div ref="backupMenu" class="backup-menu" @keydown.esc="backupOpen = false">
@@ -147,34 +184,60 @@ async function clearAll() {
             </tr>
           </thead>
           <tbody>
-            <template v-for="r in rows" :key="r.runId">
-              <tr>
-                <td class="mono nowrap">{{ fmtDateTime(r.startedAt) }}</td>
-                <td class="centered"><span class="badge mode-chip" :class="{ 'mode-sprint': r.mode === 'sprint', 'mode-laps': r.mode === 'laps' }">{{ MODE_LABEL[r.mode] || r.mode }}</span></td>
-                <td class="note-cell">{{ r.note || "-" }}</td>
+            <template v-for="r in rows" :key="r.id">
+              <tr :class="{ active: detail?.id === r.id }">
+                <td class="mono nowrap">{{ fmtDateTime(r.row.startedAt) }}</td>
+                <td class="centered"><span class="badge mode-chip" :class="`mode-${MODE_KIND[r.row.mode]}`">{{ MODE_LABEL[r.row.mode] || r.row.mode }}</span></td>
+                <td class="note-cell"><span v-if="r.car" class="mono car">#{{ r.car }}</span> {{ r.row.note || (r.car ? "" : "-") }}</td>
                 <td class="mono nowrap result-cell centered">
-                  <button v-if="lapSummaries.get(r.runId)" class="result-link" aria-haspopup="dialog" @click="openLaps(r)">{{ result(r) }}</button>
+                  <button v-if="lapSummaries.get(r.id)" class="result-link" aria-haspopup="dialog" @click="openLaps(r)">{{ result(r) }}</button>
                   <span v-else>{{ result(r) }}</span>
                 </td>
                 <td class="centered">
-                  <select class="badge status-select" :class="badgeClass(r)" :value="history.status(r)"
+                  <select class="badge status-select" :class="badgeClass(r)" :value="history.status(r.view)"
                     aria-label="Record status" :disabled="classifying || timing.starting || timing.classifying || history.importing || history.clearing" @change="classify(r, $event)">
-                    <option v-if="!RESULT_CLASSIFICATIONS.includes(history.status(r))" :value="history.status(r)" disabled>{{ statusLabel(r) }}</option>
-                    <option v-if="r.classification" value="">Clear</option>
+                    <option v-if="!RESULT_CLASSIFICATIONS.includes(history.status(r.view))" :value="history.status(r.view)" disabled>{{ statusLabel(r.view) }}</option>
+                    <option v-if="r.view.classification" value="">Clear</option>
                     <option v-for="value in RESULT_CLASSIFICATIONS" :key="value" :value="value">{{ value }}</option>
                   </select>
-                  <span v-if="r.durable === false" class="badge badge-danger">Not Saved</span>
+                  <span v-if="r.row.durable === false" class="badge badge-danger">Not Saved</span>
                 </td>
                 <td class="centered">
-                  <span v-if="calibrations.get(r.runId) !== '-'" class="badge" :class="calibrations.get(r.runId) === 'GPS' ? 'badge-success' : 'badge-warning'">{{ calibrations.get(r.runId) }}</span>
+                  <span v-if="calibrations.get(r.id) !== '-'" class="badge" :class="calibrations.get(r.id) === 'GPS' ? 'badge-success' : 'badge-warning'">{{ calibrations.get(r.id) }}</span>
                   <span v-else>-</span>
                 </td>
-                <td class="actions"><button class="btn btn-ghost btn-sm" :disabled="history.importing || history.clearing" @click="remove(r)">Delete</button></td>
+                <td class="actions">
+                  <button v-if="CAMERA_MODES.includes(r.row.mode)" class="btn btn-ghost btn-sm photos-btn" @click="showPhotos(r)">Photos</button>
+                  <button class="btn btn-ghost btn-sm delete-btn" :disabled="history.importing || history.clearing" @click="remove(r)">Delete</button>
+                </td>
               </tr>
-              <tr v-if="r.fault?.reasons?.length" class="fault-row"><td colspan="7"><FaultReasons :reasons="r.fault.reasons" :boundary-tick="r.boundaryTick" /></td></tr>
+              <tr v-if="r.view.fault?.reasons?.length" class="fault-row"><td colspan="7"><FaultReasons :reasons="r.view.fault.reasons" :boundary-tick="r.row.boundaryTick" /></td></tr>
             </template>
           </tbody>
         </table>
+      </div>
+    </div>
+    <div v-if="detail" class="card">
+      <div class="card-header detail-header">
+        <div class="detail-title">
+          <h3>🔎 {{ MODE_LABEL[detail.row.mode] }}</h3>
+          <LabeledValue v-if="detail.car" label="Car" :value="detail.car" />
+          <LabeledValue label="Date" :value="fmtDateTime(detail.row.startedAt)" text />
+        </div>
+        <button class="btn btn-ghost btn-sm" @click="photos = null">Close</button>
+      </div>
+      <div class="card-body">
+        <div v-if="!crossings.length" class="empty-state">No camera crossings kept for this record</div>
+        <template v-else>
+          <div class="chips">
+            <button v-for="(c, i) in crossings" :key="c.key" class="btn btn-sm" :class="c.key === selected?.key ? 'btn-primary' : 'btn-ghost'" @click="selectedKey = c.key">
+              {{ c.role === "finish" ? "Finish" : detail.car ? `#${i}` : "Start" }}
+            </button>
+          </div>
+          <PhotoFinishViewer v-if="selected" :crossing="selected" :run="detailRun" :ref-tick="refTick" :editable="editable"
+            :show-car="true" @decide="(patch) => timing.decide(selected.key, patch)" />
+          <p v-if="!editable" class="hint">Only the run on the Timing page takes decisions. Its clip comes from the camera, or the copy kept in this browser.</p>
+        </template>
       </div>
     </div>
     <dialog ref="lapDialog" class="lap-dialog" aria-labelledby="lap-dialog-title" @click.self="closeLaps" @close="lapPopup = null">
@@ -184,15 +247,16 @@ async function clearAll() {
             <h3 id="lap-dialog-title">Lap Times</h3>
             <div class="lap-context">
               <LabeledValue label="Date" :value="lapPopup.date" text />
+              <LabeledValue v-if="lapPopup.car" label="Car" :value="lapPopup.car" />
               <LabeledValue v-if="lapPopup.note" label="Note" :value="lapPopup.note" text />
             </div>
           </div>
           <button class="btn btn-ghost" aria-label="Close lap details" autofocus @click="closeLaps">✕</button>
         </div>
         <dl class="lap-stats">
-          <div><dt>Laps</dt><dd class="mono">{{ lapPopup.laps.length }}</dd></div>
-          <div><dt>Best</dt><dd class="mono">{{ formatDuration(lapPopup.best) }} <span class="best-index">(#{{ lapPopup.bestIndex + 1 }})</span></dd></div>
-          <div><dt>Average</dt><dd class="mono">{{ formatDuration(lapPopup.sum, BigInt(lapPopup.laps.length)) }}</dd></div>
+          <div><dt>Laps</dt><dd class="mono">{{ lapPopup.laps.length }}{{ lapPopup.best == null ? "+?" : "" }}</dd></div>
+          <div><dt>Best</dt><dd class="mono"><template v-if="lapPopup.best != null">{{ formatDuration(lapPopup.best) }} <span class="best-index">(#{{ lapPopup.bestIndex + 1 }})</span></template><template v-else>?</template></dd></div>
+          <div><dt>Average</dt><dd class="mono">{{ lapPopup.best == null ? "?" : formatDuration(lapPopup.sum, BigInt(lapPopup.laps.length)) }}</dd></div>
           <div><dt>Total</dt><dd class="mono">{{ formatDuration(lapPopup.total) }}</dd></div>
         </dl>
         <div class="lap-table-scroll">
@@ -201,9 +265,9 @@ async function clearAll() {
             <tbody>
               <tr v-for="(ns, i) in lapPopup.laps" :key="i" :class="{ best: ns === lapPopup.best }">
                 <td>{{ i + 1 }}</td>
-                <td class="mono">{{ formatDuration(ns) }}</td>
-                <td class="mono" :class="{ slower: i > 0 && ns > lapPopup.laps[i - 1] }">{{ lapDelta(i > 0 ? ns - lapPopup.laps[i - 1] : null) }}</td>
-                <td class="mono">{{ ns === lapPopup.best ? "BEST" : lapDelta(ns - lapPopup.best) }}</td>
+                <td class="mono">{{ lapTime(lapPopup, i) }}</td>
+                <td class="mono" :class="{ slower: i > 0 && ns > lapPopup.laps[i - 1] && lapBefore(lapPopup, i) !== '?' }">{{ lapBefore(lapPopup, i) }}</td>
+                <td class="mono">{{ lapToBest(lapPopup, i) }}</td>
               </tr>
             </tbody>
           </table>
@@ -247,13 +311,21 @@ async function clearAll() {
   background: color-mix(in srgb, var(--accent-primary) 14%, var(--bg-card));
   color: color-mix(in srgb, var(--accent-primary) 65%, var(--text-primary));
 }
+.car { font-weight: 700; }
+.data-table tr.active td { background: var(--bg-hover); }
+.detail-header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+.detail-title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.35rem 1.25rem; min-width: 0; }
+.chips { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.75rem; }
+.hint { color: var(--text-tertiary); margin: 0.5rem 0 0; }
 .mode-chip.mode-laps {
   background: color-mix(in srgb, var(--accent-secondary) 14%, var(--bg-card));
   color: color-mix(in srgb, var(--accent-secondary) 65%, var(--text-primary));
 }
 .note-cell { max-width: 24rem; overflow-wrap: anywhere; }
 .data-table .actions .btn { font-size: 1rem; }
-.data-table .actions .btn:hover {
+.data-table .actions { white-space: nowrap; }
+.data-table .actions .btn + .btn { margin-left: 0.25rem; }
+.data-table .actions .delete-btn:hover {
   color: var(--accent-danger);
   border-color: var(--accent-danger);
   background: color-mix(in srgb, var(--accent-danger) 12%, var(--bg-card));

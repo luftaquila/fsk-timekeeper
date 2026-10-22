@@ -53,6 +53,23 @@ export function autoCar(row, run) {
   return car && row.camera.conf >= (run.ocrMinConf ?? 0) ? car : null;
 }
 
+// The camera Pi's line timing (/api/config lineTiming): the master trigger period a line rate runs
+// at, rounded as the Pi rounds it (Python round(): a half goes to the even neighbour), and the
+// longest exposure that leaves the camera its readout within that period (config.exposure_max_us).
+export function linePeriod(rateHz, t) {
+  const x = t.masterHz / rateHz;
+  const whole = Math.floor(x);
+  const up = x - whole > 0.5 || (x - whole === 0.5 && whole % 2 === 1);
+  return Math.max(t.periodMin, Math.min(t.periodMax, up ? whole + 1 : whole));
+}
+
+export const lineRateAt = (rateHz, t) => t.masterHz / linePeriod(rateHz, t);
+
+export function exposureMaxUs(rateHz, t) {
+  const ticks = Math.floor((linePeriod(rateHz, t) * t.cameraHz) / t.masterHz) - t.readoutTicks;
+  return (ticks * 1e6) / t.cameraHz;
+}
+
 export function decidedCar(row, decision, run) {
   if (decision && "car" in decision) return decision.car;
   return autoCar(row, run);
