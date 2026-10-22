@@ -4,7 +4,8 @@ import { ref, reactive, computed } from "vue";
 import { useNotification } from "../composables/useNotification";
 import { createSerialTransport, isSerialSupported } from "../transport/serial";
 import { createFakeTransport } from "../transport/fake";
-import { parseLine, parseEventLine, normalizeTelemetry, normalizePps, formatAck, isHexKey, isRadioConfig, radioCommand, contractOf, resetNames, errorNames, RADIO_FAULT_MASK, RADIO_HISTORY_LABELS, RADIO_RECOVERY_REASONS, RADIO_RECOVERY_RESULTS, NODE_MASTER } from "../lib/protocol";
+import { createPiTransport } from "../transport/pi";
+import { parseLine, parseEventLine, normalizeTelemetry, normalizePps, formatAck, isHexKey, isRadioConfig, radioCommand, contractOf, resetNames, errorNames, RADIO_FAULT_MASK, RADIO_HISTORY_LABELS, RADIO_RECOVERY_REASONS, RADIO_RECOVERY_RESULTS, NODE_MASTER, cameraNodeOf } from "../lib/protocol";
 import { createWirelessClock } from "../lib/wireless-clock";
 import { WIRELESS_STATUS_MAX_AGE_MS, UNREADABLE_ALARM_REPEATS, LOG_RETENTION_MS, LOG_MAX_ENTRIES } from "../lib/constants";
 import { MASTER_TICKS_PER_MS as TICKS_PER_MS } from "../lib/event-timing";
@@ -31,7 +32,7 @@ export const useDeviceStore = defineStore("device", () => {
     promise.then(() => pendingData.delete(promise), () => pendingData.delete(promise));
     return promise;
   }
-  const transportKind = ref(null); // "serial" | "fake"
+  const transportKind = ref(null); // "serial" | "pi" (camera Pi bridge) | "fake"
   const identity = ref(null); // parsed I line
   const radioKey = ref(null); // memory only: null = unread, "" = unprovisioned
   const keyReadState = ref("idle");
@@ -82,6 +83,8 @@ export const useDeviceStore = defineStore("device", () => {
   });
 
   const supported = computed(() => isSerialSupported());
+  // The line-scan camera's node: the master's own sender id.
+  const cameraNode = computed(() => cameraNodeOf(identity.value));
 
   eventLog.onWriteFailure((error) => onStorageFailure(error));
 
@@ -616,13 +619,14 @@ export const useDeviceStore = defineStore("device", () => {
     transportKind.value = null;
   }
 
-  function makeTransport(kind) {
+  function makeTransport(kind, host) {
     const callbacks = { onLine: handleLine, onDisconnect };
+    if (kind === "pi") return createPiTransport(callbacks, { host });
     return kind === "fake" ? createFakeTransport(callbacks) : createSerialTransport(callbacks);
   }
 
-  // kind: "serial" (default) | "fake" (dev simulator).
-  async function connect({ kind = "serial", port, forUpdate = false } = {}) {
+  // kind: "serial" (default) | "pi" (the camera Pi at host) | "fake" (dev simulator).
+  async function connect({ kind = "serial", port, forUpdate = false, host = null } = {}) {
     if (clearingData.value) return false;
     if (updateInProgress.value && !forUpdate) return false;
     if (connected.value || connecting.value) return true;
@@ -630,8 +634,12 @@ export const useDeviceStore = defineStore("device", () => {
       notyf.error("Web Serial is not supported by this browser");
       return false;
     }
+    if (kind === "pi" && !host) {
+      notyf.error("Set the camera host first");
+      return false;
+    }
     connecting.value = true;
-    const t = makeTransport(kind);
+    const t = makeTransport(kind, host);
     try {
       await t.open({ port });
       transport = t;
@@ -643,8 +651,9 @@ export const useDeviceStore = defineStore("device", () => {
       acquireWakeLock();
       transmitLine("?ID");
       transmitLine("?STATUS");
-      readRadioKey();
-      if (!forUpdate) notyf.success(kind === "fake" ? "Fake master connected" : "Master connected");
+      // The radio key never crosses the network: the Pi bridge drops key commands.
+      if (kind !== "pi") readRadioKey();
+      if (!forUpdate) notyf.success(kind === "fake" ? "Fake master connected" : kind === "pi" ? "Camera master connected" : "Master connected");
       return true;
     } catch (e) {
       connecting.value = false;
@@ -716,6 +725,7 @@ export const useDeviceStore = defineStore("device", () => {
     discardRecords,
     transportKind,
     identity,
+    cameraNode,
     radioKey,
     keyReadState,
     contract,

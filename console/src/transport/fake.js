@@ -1,9 +1,11 @@
-/* Development fake of the FSK-WL master (USB line protocol v7), same interface as serial.js:
+/* Development fake of the FSK-WL master (USB line protocol v8), same interface as serial.js:
  *   records (captures, losses, checkpoints) reach the master queue one slot after they are made,
  *     up to 5 consecutive captures per E line
  *   queue of 16 lines; the head is re-sent every 100 ms until an exact `C <hseq> <boot> <crc>`
  *   `H` every second, `D 0` every 5 s, a sensor `D` with every uplink and every 5 s
  *   a checkpoint per idle sensor every 5 s and one beacon after `CP`; one `P` per PPS edge (seg/n)
+ *   once started, a line-scan camera on the master (node = devid low word, 40 kHz lines): its
+ *     crossings (E V), a checkpoint every second and its D line every 5 s
  * Scenario helpers inject the rest. */
 import { crc32Hex } from "../lib/crc32";
 import { USB_PROTO_VERSION, RADIO_PROTO_VERSION, bootIdText, isRadioConfig } from "../lib/protocol";
@@ -52,6 +54,8 @@ export function createFakeTransport({ onLine, onDisconnect }) {
   const slotDelay = { min: fakeDefaults.slotDelayMin, max: fakeDefaults.slotDelayMax };
   let periodicCheckpoints = fakeDefaults.periodicCheckpoints;
   const sensors = new Map(); // id -> sensor state
+  // The camera host's records as the master queues them (line = lines since the session start).
+  const camera = { on: false, node: devid.slice(8), session: null, start: 0n, period: 400n, seq: 0, ev: 0, records: [], lastAt: 0, lastTick: null };
 
   // GPS: PPS edge k of the current anchor is at anchorTick + k·period (period follows ppb).
   const gps = { ppb: 0, valid: true, fix: 1, sats: 9, span: 64 };
@@ -157,7 +161,50 @@ export function createFakeTransport({ onLine, onDisconnect }) {
 
   function slots() {
     for (const [node, s] of sensors) uplink(node, s);
+    if (camera.on) cameraUplink();
     emitPps();
+  }
+
+  // ---- camera -------------------------------------------------------------------
+  function startCamera() {
+    Object.assign(camera, { on: true, session: rndBoot(), start: nowTick(), seq: 0, records: [], lastAt: Date.now(), lastTick: null });
+    cameraCheckpoint();
+    emit(cameraDiag());
+  }
+  function cameraCheckpoint() {
+    const at = nowTick();
+    const tick = camera.lastTick != null && camera.lastTick >= at ? camera.lastTick + TICKS_PER_MS : at;
+    camera.records.push({ kind: "K", seq: camera.seq, tick, due: Date.now() });
+  }
+  // A vehicle front first seen at now + offsetMs (or the tick `at`); returns its line's tick.
+  function cameraCrossing({ car = 0, conf = 0, offsetMs = 0, at = null } = {}) {
+    if (!camera.on) startCamera();
+    const when = at != null ? BigInt(at) : nowTick() + BigInt(offsetMs) * TICKS_PER_MS;
+    let line = (when - camera.start) / camera.period;
+    if (line < 1n) line = 1n;
+    const tick = camera.start + line * camera.period;
+    camera.seq = (camera.seq + 1) >>> 0;
+    camera.lastTick = camera.lastTick != null && camera.lastTick > tick ? camera.lastTick : tick;
+    camera.records.push({ kind: "V", seq: camera.seq, tick, line, car, conf, due: Date.now() + delay() / 4 });
+    return String(tick);
+  }
+  function cameraUplink() {
+    const head = camera.records[0];
+    if (!head || head.due > Date.now()) return;
+    const common = (h, kind) => `E ${h} ${camera.node} ${kind} ${camera.ev % 65536} ${HEALTHY} ${masterBoot} ${camera.session} 0 0.00 0.00 ${head.seq}`;
+    const runLo = head.line > 40000n ? head.line - 40000n : 0n;
+    const body = head.kind === "V"
+      ? (h) => `${common(h, "V")} ${head.line} ${head.tick} ${camera.period} ${runLo} ${head.line + 4000n} ${head.car} ${head.conf}`
+      : (h) => `${common(h, "K")} ${head.tick} 0 0 0 0 0 0 0 0 0 0`;
+    if (!enqueue(body)) return;
+    camera.records.shift();
+    camera.ev++;
+    camera.lastAt = Date.now();
+  }
+  function cameraDiag() {
+    const age = Date.now() - camera.lastAt;
+    const state = age <= 12000 ? "OK" : age <= 17000 ? "STALE" : "LOST";
+    return `D ${camera.node} ${state} 0 0 0 ${age} 0.00 0.00 120 0 0 0 1 1 1 XTAL 0 0 0 0 0 0 0 0 0 ${camera.session} ${masterBoot} 0 0 0 0 1`;
   }
 
   // ---- lines ------------------------------------------------------------------
@@ -287,6 +334,7 @@ export function createFakeTransport({ onLine, onDisconnect }) {
       case "?STATUS":
         emit(heartbeat());
         for (const [node, s] of sensors) { emit(diagLine(node, s)); emit(`J ${node} READY`); }
+        if (camera.on) emit(cameraDiag());
         emit(masterDiag());
         emit("A STATUS OK");
         break;
@@ -353,6 +401,7 @@ export function createFakeTransport({ onLine, onDisconnect }) {
       setInterval(() => {
         beaconSeq++;
         emit(heartbeat());
+        if (camera.on && !camera.records.length) cameraCheckpoint();
         if (beaconSeq % 5 === 0) emit(masterDiag());
         if (!provisioned && beaconSeq % 5 === 0) emit("X noprov");
       }, BEACON_MS),
@@ -363,6 +412,7 @@ export function createFakeTransport({ onLine, onDisconnect }) {
           emit(diagLine(node, s));
           if (periodicCheckpoints && !s.records.length) checkpoint(node);
         }
+        if (camera.on) emit(cameraDiag());
       }, STATUS_MS),
     );
     setTimeout(() => {
@@ -413,6 +463,11 @@ export function createFakeTransport({ onLine, onDisconnect }) {
     loss,
     rebootSensor,
     injectBadLine,
+    startCamera,
+    cameraCrossing,
+    get cameraNode() {
+      return camera.node;
+    },
     masterClockFault,
     rebootMaster,
     setProvisioned(v) {

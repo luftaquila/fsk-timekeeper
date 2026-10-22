@@ -273,6 +273,27 @@ export function freezeCalibration(source, ticks, now = Date.now()) {
   return { version: 1, method: pointsMethod(points), frozenAt: now, points };
 }
 
+// A frozen calibration with points for ticks a later operator decision brought in, from the frozen
+// points alone: the nearest one and the frequency between the two nearest (16 MHz with only one).
+// No PPS edge after the freeze enters a result.
+export function extendCalibration(calibration, ticks) {
+  const known = Object.keys(calibration?.points || {}).map((t) => BigInt(t));
+  if (!known.length) return calibration;
+  const points = { ...calibration.points };
+  let added = false;
+  for (const tick of ticks || []) {
+    if (tick == null || points[String(tick)]) continue;
+    const t = BigInt(tick);
+    const [a, b] = [...known].sort((x, y) => (abs(x - t) < abs(y - t) ? -1 : abs(x - t) > abs(y - t) ? 1 : 0));
+    const pa = calibration.points[String(a)];
+    const rate = b == null ? q(1n, F_NOMINAL) : div(sub(pointTime(calibration.points[String(b)]), pointTime(pa)), q(b - a));
+    const time = add(pointTime(pa), mul(q(t - a), rate));
+    points[String(t)] = { num: String(time.n), den: String(time.d), how: pa.how, extrapTicks: pa.extrapTicks, island: pa.island };
+    added = true;
+  }
+  return added ? { ...calibration, points } : calibration;
+}
+
 // Wall-clock UTC (ms) of a tick from the latest qualified edge that carries UTC; null without one.
 export function utcMsAt(edges, tickValue) {
   const anchor = [...normalizeEdges(edges)].reverse().find((e) => e.utc != null);

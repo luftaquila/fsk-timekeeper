@@ -7,8 +7,9 @@ import { enqueue, flush } from "../lib/storageQueue";
 import * as runLog from "../lib/runLog";
 import * as backup from "../lib/backup";
 import { useTimingStore } from "./timing";
-import { isRecord } from "../lib/engine";
+import { isRecord, isCarRecord } from "../lib/engine";
 import { ROLE_LABEL } from "../lib/constants";
+import { carRun } from "../lib/results";
 import { downloadBlob, timestampSlug, formatDuration } from "../lib/format";
 import { historyRecord, lapSummary, lapDelta, statusValue } from "../lib/historyPresentation";
 import { faultWindow, formatFaultReason } from "../lib/fault-text";
@@ -54,6 +55,12 @@ export const useHistoryStore = defineStore("history", () => {
     return mode ? rows.value.filter((r) => r.mode === mode) : rows.value.slice();
   }
 
+  // History rows of a run: a camera heat lists its cars that are records.
+  function entries(row) {
+    if (row.mode !== "camera-laps") return [{ row, view: row }];
+    return Object.keys(row.results).filter((car) => isCarRecord(row.results[car])).map((car) => ({ row, view: carRun(row, car), car }));
+  }
+
   // Provisional calibration source for a row not frozen yet, an open run (same master boot).
   function edgesFor(row) {
     const device = useDeviceStore();
@@ -64,17 +71,26 @@ export const useHistoryStore = defineStore("history", () => {
 
   // Display columns shared by Excel and the human-readable section of recovery JSON.
   function exportData(mode = null, source = rows.value) {
-    return { History: source.filter(row => !mode || row.mode === mode).map((row) => {
-      const edges = edgesFor(row);
+    const listed = source.filter(row => !mode || row.mode === mode).flatMap(entries);
+    return { History: listed.map(({ row: run, view: row, car }) => {
+      const edges = edgesFor(run);
       const record = historyRecord(row, edges);
+      if (car) {
+        record.Mode = historyRecord(run, edges).Mode;
+        record.Note = [`Car ${car}`, run.note].filter(Boolean).join(" · ");
+      }
       const stats = lapSummary(row, edges);
       if (stats) {
-        record["Lap Summary"] = { Laps: stats.laps.length,
-          Best: `${formatDuration(stats.best)} (#${stats.bestIndex + 1})`,
-          Average: formatDuration(stats.sum, BigInt(stats.laps.length)), Total: formatDuration(stats.total) };
+        // An unassigned crossing may be the car's: its lap shows ?, the count may be one more, and
+        // the best lap and average are unknown.
+        const unknown = stats.best == null;
+        record["Lap Summary"] = { Laps: unknown ? `${stats.laps.length}+?` : stats.laps.length,
+          Best: unknown ? "?" : `${formatDuration(stats.best)} (#${stats.bestIndex + 1})`,
+          Average: unknown ? "?" : formatDuration(stats.sum, BigInt(stats.laps.length)), Total: formatDuration(stats.total) };
         record["Lap Times"] = stats.laps.map((ns, i) => ({ Lap: i + 1,
-          Time: formatDuration(ns), "Δ Before": lapDelta(i > 0 ? ns - stats.laps[i - 1] : null),
-          "Δ Best": ns === stats.best ? "BEST" : lapDelta(ns - stats.best) }));
+          Time: stats.held.has(i) ? "?" : formatDuration(ns),
+          "Δ Before": i > 0 && (stats.held.has(i) || stats.held.has(i - 1)) ? "?" : lapDelta(i > 0 ? ns - stats.laps[i - 1] : null),
+          "Δ Best": unknown || stats.held.has(i) ? "?" : ns === stats.best ? "BEST" : lapDelta(ns - stats.best) }));
       }
       if (row.fault?.reasons?.length) {
         record.Errors = row.fault.reasons.map((reason) => [
@@ -148,5 +164,5 @@ export const useHistoryStore = defineStore("history", () => {
     } finally { importing.value = false; }
   }
 
-  return { rows, importing, clearing, flush, recoveryJson, importJson, removeRow, clearAll, filtered, status, edgesFor, exportData, exportExcel, exportJson };
+  return { rows, importing, clearing, flush, recoveryJson, importJson, removeRow, clearAll, filtered, entries, status, edgesFor, exportData, exportExcel, exportJson };
 });

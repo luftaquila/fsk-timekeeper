@@ -6,11 +6,12 @@ import { rowKey, lineKey } from "./protocol";
 import * as runLog from "./runLog";
 
 export const DB_NAME = "fsk-timekeeper";
-export const DB_VERSION = 4;
+export const DB_VERSION = 5;
 export const STORE_EVENTS = "events";
 export const STORE_PPS = "pps";
 export const STORE_LOG = "log";
 export const STORE_QUARANTINE = "quarantine";
+export const STORE_PHOTOS = "photos"; // downscaled camera clips (lib/photos.js)
 export const RETENTION = 100000;
 const MEMORY_WINDOW = 20000;
 const PRUNE_EVERY = 500;
@@ -38,6 +39,7 @@ function upgrade(database) {
   database.createObjectStore(STORE_QUARANTINE, { keyPath: "id", autoIncrement: true }).createIndex("line", "line", { unique: true });
   database.createObjectStore(runLog.STORE_RUNS, { keyPath: "runId" });
   database.createObjectStore(runLog.STORE_META, { keyPath: "key" });
+  database.createObjectStore(STORE_PHOTOS, { keyPath: "key" });
 }
 
 export function getDb() {
