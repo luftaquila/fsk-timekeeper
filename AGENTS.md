@@ -1,7 +1,7 @@
 # AGENTS.md
 
-- USB 마스터 1대 + 센서 최대 5대의 LoRa 계측 시스템
-- 위치: 펌웨어 `device/firmware`, 웹 콘솔 `console`, 보드 `device/hardware`
+- USB 마스터 1대 + 센서 최대 5대의 LoRa 계측 시스템, 마스터에 연결하는 라인스캔 포토피니시 카메라
+- 위치: 펌웨어 `device/firmware`, 웹 콘솔 `console`, 보드 `device/hardware`, 카메라 Pi `photofinish`
 
 ## AGENTS.md 작성 규칙
 - 간결한 개조식, 명사형 종결, 모호한 표현 금지
@@ -18,23 +18,30 @@
 - 비공개·임시 문서 참조 금지
 
 ## 시스템 구조
-- 마스터는 PC에 USB로 연결된 보드 1대뿐
+- 마스터는 USB 호스트(PC 또는 카메라 Pi)에 연결된 보드 1대뿐
   - USB 분리 시 무선 정지, 재연결 시 재부팅 후 새 세션
+  - 카메라 Pi가 호스트일 때 콘솔은 Pi의 브리지(`photofinish/app`)로 마스터에 접속
   - 배터리 마스터 모드·두 번째 마스터 감지 없음
 - 펌웨어 단일. 마스터·센서 구분은 부팅 시 USB 호스트 enumerate 여부로 1회 결정
 - 한 번에 한 경기. 센서 기준 2대(start/finish), 상한 5대
   - start·finish 각각 센서 1대만 매핑. laps는 start만 필요
+- 카메라는 마스터 보드의 카메라 노드. 카메라 모드(camera-sprint, camera-laps)에서만 사용
+- 카메라 세션은 카메라 모드 경기(Start부터 Stop까지) 또는 열린 라이브 뷰가 잡고 있을 때만 동작. 잡는 것이 없으면 마스터 트리거와 수집 정지
+  - 카메라 모드 Start는 새 세션을 받음(라이브 뷰 세션은 재시작). 배경은 Start 순간 학습
+- 카메라는 도착 지점 고정. 카메라 역할 선택 없음
+- 카메라 Pi 설치는 카메라 동작에 필요한 변경만
 - 연속 가동 최대 하루 가정. 시각·link_id overflow 미처리
 - 책임 분담
   - 센서: 캡처 유효성(`HEALTH_*` 비트)
-  - 마스터: 전송 무결성(인증, 세션, 재전송, 순서, 큐)
+  - 마스터: 전송 무결성(인증, 세션, 재전송, 순서, 큐), 카메라 라인 번호의 시각 변환·검증(`camera.c`)
+  - 카메라 Pi: 라인 수신 무결성, 차량 전면 검출, 번호 OCR, 클립 보관
   - 콘솔: 센서→start/finish 매핑, 런 제어, 판정, 보관
-- 센서 입력·라디오 DIO1·PPS는 GPIOTE→PPI→TIMER1 하드웨어 캡처
+- 센서 입력·카메라 Strobe·라디오 DIO1·PPS는 GPIOTE→PPI→TIMER1 하드웨어 캡처
 - 공통 타임베이스는 마스터 TIMER1 하나
 
 ## 설계 원칙
 - 최신 상태만 기준. 구 프로토콜·저장 형식·DB 스키마·설정 호환 코드 없음
-- 무선·USB 프로토콜 변경 시 마스터·센서·콘솔 함께 갱신
+- 무선·USB 프로토콜 변경 시 마스터·센서·콘솔·카메라 Pi 함께 갱신
 - 무선(`PROTO_VER`)·USB(`PU_USB_PROTO`) 프로토콜 버전은 호환되지 않는 형식 변경 시에만 올림
 - 무선·USB 프로토콜, 패킷, 슬롯 변경은 별도 사전 승인 필요
 - 드문 경우 때문에 정상 경로에 지연·airtime·슬롯 비용 추가 금지. 드문 경우만 타는 경로로 처리하거나(예: 동기 공백 중 캡처만 보간) 감지 후 무효·보류 판정
@@ -61,14 +68,20 @@
 - 오프셋은 비콘·DATA 업링크에 얹은 양방향 교환으로만 산출. 매 비콘의 송신·수신 시각 쌍은 skew 추정 전용
 - skew는 변환에만 적용, 클럭 조정 없음
 - 정상 캡처는 즉시 변환. 동기 공백 중 캡처만 보관 후 보간
+- 카메라 라인 시각은 마스터가 Strobe 수와 그 시각의 표본(`cam_track.c`)으로 변환
+  - 표본이 트리거 일정에서 늦거나 이르면 세션 종료. 원인(트리거 누락과 Strobe 미검출, 추가 노출과 노이즈)을 구분할 수 없으므로 추정 보정 금지
 - 마스터 클럭 절대 주파수는 펌웨어에서 보정하지 않고 콘솔이 GPS PPS로 환산
 - 계측은 HFCLK가 Xtal일 때만
+
+## 카메라 검출·판독
+- 차량 검출(`Detector`)은 배경 무늬 유지 여부로 판정. 밝기 변화만으로 차량·그림자·조명 변화 구분 금지
+- Start 순간 감지 영역의 차량·사람은 운영 절차로 배제. 배경 자동 재학습 없음
 
 ## 보안
 - 모든 공중 패킷은 AEAD(XChaCha20-Poly1305)로 봉인. 상호 challenge-response로 연결별 키 생성
 - 인증 전 센서는 ACK·동기·큐 변경 불가
 - 플릿 PSK는 USB로 보드마다 주입. 보드 flash와 운영자가 따로 관리하는 사본에만 보관, 콘솔은 메모리에만 유지. 빌드·repo·CI 반입 금지
-- USB↔PC는 신뢰 구간
+- USB↔호스트와 카메라 Pi↔콘솔(사용자 소유 tailnet)은 신뢰 구간
 - boot_id(64비트)·node_id(32비트) 축소 금지
 
 ## 견고성
@@ -76,6 +89,7 @@
   - 연속 fault 재부팅이 3회를 넘으면 정지. 60 s 가동하거나 소프트웨어 리셋이 아닌 리셋이면 횟수 초기화(`FAULT_*`)
 - RadioLib 무한 BUSY 대기는 `NrfHal::yield()` 가드로 차단. 벤더 소스 수정 금지
 - 라디오 고장 상태로 콘솔 Start 차단 금지. 라디오 복구 시 TIMER1·세션·큐 초기화 금지
+- 카메라 Pi의 앱 이미지·설치 파일 자동 업데이트 금지
 - 오류 보고는 USB X 메시지와 리셋 원인만. 새 USB 메시지 종류·부팅 배너 추가 금지
 - 무선 ACK 보장 범위는 마스터 RAM 수신까지. 무손실 복구 없이 영향 구간을 무효·보류 판정
 - IndexedDB 저장 실패 후에도 메모리에 두고 E 메시지 확인(C) 계속, 해당 기록은 `Not Saved` 표시
@@ -83,9 +97,15 @@
 ## 콘솔 판정·기록
 - 판정은 콘솔에서만, fail-closed
 - 받은 통과를 다른 센서나 이후 보고를 기다리며 보류하는 표시·판정 금지
+  - 예외: camera-laps의 미배정 통과는 운영자 결정까지 모든 차량(아직 안 보인 차량 포함)의 그 통과가 걸친 판정 보류. Stop까지 미해결이면 해당 차량 Invalid
+- camera-laps 히트는 Stop 또는 마스터 시각(TIMER1)이 끊길 때(마스터 재부팅, 프로토콜 변경, 클럭 오류)만 닫힘
+- 카메라 통과에는 debounce 미적용
+  - 같은 번호가 그 차량의 직전 통과로부터 `debounceMs` 안에 다시 읽히면 자동 배정 없이 미배정
+- 운영자 결정(통과 라인 재지정, 차량 번호 수정·배정, 비차량 지정)은 증거를 바꾸지 않고 run의 `decisions`에 기록, 자동값 보존
 - USB E 메시지는 IndexedDB 기록을 마친 뒤 C 메시지로 확인
 - sprint에서 첫 start보다 앞선 finish는 경고 없이 무시
 - laps에서 회복 불가 유실(`engine.js`의 `invalid` 판정) 시 화면·History·Excel 모두 유실 이전 랩만 표시, 상태 Invalid, Total 빈칸
+  - 예외: 미배정 통과 때문에 Invalid인 camera-laps 차량은 모든 랩 표시, 미배정 통과가 걸친 랩은 `?`
 - 기록은 FSK 서비스(`luftaquila/formula-student-korea`의 `competition/modules/traffic`) 방식
   - Stop은 수집 종료만. DNS/DNF 자동 판정 없음, 통과 없이 Start→Stop만 있으면 기록 미생성
   - 저장 시점: sprint는 첫 도착 수신 시, laps는 첫 랩부터
@@ -98,19 +118,22 @@
   - fix 없이 잰 드리프트는 표시만, 보정 미사용
 - 보정값은 결과가 정해지는 평가(sprint `verified`, run 종료)에서 그때까지 받은 PPS로 런마다 한 번 동결. 이후 변경 금지
   - 다음 PPS 대기 금지
+  - 동결 후 운영자 결정으로 생긴 tick은 동결된 점들로만 환산(`extendCalibration()`)
 - 원시값(tick, 보정 정보(`freezeCalibration()` 결과), 정확한 ns) 저장. 반올림은 표시 시에만(half-up, 3자리), 반올림 안내문 없음
 - 링크 상태(OK/STALE/LOST) 임계값은 펌웨어 `LINK_OK_MS`·`LINK_STALE_MS`에만. 콘솔 `WIRELESS_STATUS_MAX_AGE_MS` 등은 별개
 - Timing 화면의 상태 표시와 콘솔 Start는 같은 판정(`qualityFor`) 사용
 - 기록은 브라우저 내부 저장에만. JSON 내보내기는 전체 복구 백업, Excel은 화면 표시값
+  - 예외: 카메라 클립 원본은 카메라 Pi에 보관, 브라우저에는 축소본(`photos` 스토어)
 - 펌웨어 업데이트는 콘솔 Web Serial로, 사용자가 고른 릴리스 ZIP만 사용
 
 ## 하드웨어
-- J1은 필드 하네스 핀아웃 [1 +12V, 2 NC, 3 SENSE, 4 GND]
-- 센서는 Autonics BA2M-DDT(NPN open collector)
-- GPS(U4)는 마스터에만 실장
+- J1은 필드 하네스 핀아웃 [1 +12V, 2 TRIG, 3 SENSE, 4 GND]
+  - TRIG는 카메라 마스터만 사용. 센서 하네스는 2번 미연결
+- 카메라 라인 트리거는 카메라 Line 0(7번). Line 2±(차동 입력) 단일 구동 금지
 - 필드 검증 보드 기준은 `luftaquila/formula-student-korea` git HEAD의 `competition/modules/traffic/device/wireless/hardware`. 작업 트리는 기준 아님
-- 필드 보드는 핀맵이 달라 테스트 펌웨어는 repo 밖 임시 사본에서 빌드, repo 수정 금지
+  - 필드 보드는 핀맵이 달라 테스트 펌웨어는 repo 밖 임시 사본에서 빌드, repo 수정 금지
 
 ## 검증
 - 호스트 테스트·시뮬레이터 통과는 RF·보드 동작 검증이 아님. 실측 없이 정확도·하드웨어 동작 주장 금지
+  - 카메라: GenICam 기능 이름(`photofinish/app/fsk_timekeeper/camera.py`), 프레임 ID 동작, Strobe 파형, 트리거→노출 흔들림(`CAM_JITTER_TICKS`), 검출 기준(`Detector`의 `texture_k`·`min_corr`), Pi 처리 속도는 실기로 확인
 - ARM 툴체인은 newlib-nano 포함 필요. 없으면 `PREFIX`로 지정
