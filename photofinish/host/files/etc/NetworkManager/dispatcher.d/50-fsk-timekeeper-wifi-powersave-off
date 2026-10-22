@@ -1,0 +1,9 @@
+#!/bin/sh
+# Force WiFi power save OFF on wlan0. The headless camera host must stay reachable
+# (SSH/Tailscale) when idle; this driver ignores NetworkManager's
+# 802-11-wireless.powersave, so disable it at the driver on every interface-up.
+# Without this the radio parks in power save when idle: the AP still shows it
+# associated, but incoming SSH/ping time out and Tailscale keepalives starve,
+# so the node drops off the tailnet until outbound traffic wakes it.
+[ "$1" = "wlan0" ] && [ "$2" = "up" ] && /usr/sbin/iw dev wlan0 set power_save off
+exit 0

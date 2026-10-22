@@ -1,0 +1,13 @@
+#!/bin/bash
+# Manual update of the camera Pi, never automatic: sudo fsk-timekeeper-update <latest | vX.Y.Z>
+# Runs that release's installer: its host files and camera image. Use the release that matches the
+# console and the firmware.
+set -euo pipefail
+
+version="${1:?usage: fsk-timekeeper-update <latest | vX.Y.Z>}"
+repo="$(cat /etc/fsk-timekeeper/repo)"
+case "$version" in
+    latest) url="https://github.com/$repo/releases/latest/download/install-photofinish.sh" ;;
+    *) url="https://github.com/$repo/releases/download/$version/install-photofinish.sh" ;;
+esac
+curl -fsSL "$url" | bash

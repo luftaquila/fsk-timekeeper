@@ -1,0 +1,16 @@
+[Unit]
+Description=FSK Timekeeper camera (master bridge, acquisition, detection, API)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/fsk-timekeeper-run
+ExecStop=/usr/bin/podman stop -t 10 fsk-timekeeper
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

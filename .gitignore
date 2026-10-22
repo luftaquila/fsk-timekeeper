@@ -537,3 +537,6 @@ $RECYCLE.BIN/
 *.lnk
 
 # End of https://www.toptal.com/developers/gitignore/api/windows,macos,c,vim,kicad,rust,rust-analyzer,python,node
+
+# camera Pi host files: their udev, systemd and NetworkManager directories end in .d
+!photofinish/host/files/**/*.d/

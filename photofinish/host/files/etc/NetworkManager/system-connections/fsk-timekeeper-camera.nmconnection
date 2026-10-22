@@ -1,0 +1,17 @@
+# The Ethernet port belongs to the GigE camera: link-local addressing, which the camera uses by
+# default (GEV LLA); never a default route. Above any other eth0 profile (Raspberry Pi OS's DHCP).
+[connection]
+id=fsk-timekeeper-camera
+type=ethernet
+interface-name=eth0
+autoconnect=true
+autoconnect-priority=100
+
+[ethernet]
+
+[ipv4]
+method=link-local
+never-default=true
+
+[ipv6]
+method=ignore
