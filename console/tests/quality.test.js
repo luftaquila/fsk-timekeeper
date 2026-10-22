@@ -129,6 +129,15 @@ describe("wirelessQuality", () => {
     assert.equal(previousSession.ok, false);
     assert.deepEqual(previousSession.reasons.map((r) => r.reason), ["No recent status report from sensor A"]);
   });
+
+  it("judges a camera session nothing holds yet by whether it can start, not by its link", () => {
+    const mappings = [{ node_id: "C", role: "start", label: "Camera" }];
+    const idle = { 0: healthy("0"), C: healthy("C", { link_state: "lost", received_at: NOW }) };
+    assert.deepEqual(gate("camera-laps", mappings, idle).reasons.map((r) => r.reason), ["Camera link: LOST"]);
+    const standby = (reason) => wirelessQuality({ mode: "camera-laps", mappings, telemetry: idle, masterFresh: true, standby: { C: reason }, now: NOW });
+    assert.equal(standby(null).ok, true);
+    assert.deepEqual(standby("Camera offline").reasons, [{ node_id: "C", role: "start", reason: "Camera offline" }]);
+  });
 });
 
 describe("pipelineHealth", () => {

@@ -5,9 +5,11 @@ import * as deviceLog from "./deviceLog";
 import { transaction, request, done } from "./idb";
 import { enqueue } from "./storageQueue";
 import { rowKey } from "./protocol";
-import { resultNs, lapsNs, resultTicks, frozenDurationNs } from "./results";
+import { resultNs, lapsNs, resultTicks, frozenDurationNs, carRun } from "./results";
 import { freezeCalibration } from "./calibration";
 import { RUN_SCHEMA, isRecord } from "./engine";
+import { MODES } from "./constants";
+import { isCarNumber } from "./camera";
 
 export const MAX_BACKUP_BYTES = 64 * 1024 * 1024;
 const stores = { runs: runLog.STORE_RUNS, events: eventLog.STORE_EVENTS,
@@ -70,9 +72,41 @@ function validateTree(v, depth = 0) {
     validateTree(item, depth + 1);
   }
 }
+function validateCalibration(c) {
+  if (c.version !== 1 || !["nominal", "gps", "gps-extrapolated"].includes(c.method) || !object(c.points)) fail("Invalid calibration.");
+  for (const [t, p] of Object.entries(c.points)) {
+    if (!tick(t) || !object(p) || !decimal(p.num) || !decimal(p.den) || BigInt(p.den) <= 0n) fail("Invalid calibration point.");
+  }
+}
+
+// Operator decisions and the cars of a camera heat.
+function validateCamera(r) {
+  if (r.decisions != null) {
+    if (!object(r.decisions)) fail("Invalid camera decisions.");
+    for (const d of Object.values(r.decisions)) {
+      if (!object(d) || !optionalTick(d.line) || (d.car != null && !isCarNumber(d.car)) ||
+          (d.ignore != null && d.ignore !== true)) fail("Invalid camera decision.");
+    }
+  }
+  if (r.cameraCrossings != null && (!Array.isArray(r.cameraCrossings) || r.cameraCrossings.some(c => !object(c) ||
+      typeof c.key !== "string" || !tick(c.tick) || !object(c.camera)))) fail("Invalid camera crossings.");
+  if (r.mode !== "camera-laps") return;
+  if (!object(r.results) || Object.keys(r.results).some(c => !isCarNumber(c) || !object(r.results[c]))) fail("Invalid camera heat.");
+  for (const car of Object.keys(r.results)) {
+    const c = r.results[car];
+    if (!Array.isArray(c.crossingTicks) || c.crossingTicks.some(t => !tick(t)) || !["pending", "verified", "invalid"].includes(c.verification) ||
+        (c.heldTicks != null && (!Array.isArray(c.heldTicks) || c.heldTicks.some(t => !tick(t)))) ||
+        (c.classification != null && !["DNS", "DNF", "DSQ"].includes(c.classification)) ||
+        (c.durationNs != null && (!decimal(c.durationNs) || BigInt(c.durationNs) < 0n)) ||
+        (c.recordedAt != null && !uint(c.recordedAt))) fail("Invalid camera car result.");
+    if (c.calibration) validateCalibration(c.calibration);
+    try { resultNs(carRun(r, car)); lapsNs(carRun(r, car)); } catch { fail("Invalid timing data."); }
+  }
+}
+
 function validateRun(r) {
   if (!object(r) || typeof r.runId !== "string" || !r.runId.length || r.runId.length > 160 ||
-      !["sprint", "laps"].includes(r.mode) || !["pending", "verified", "invalid"].includes(r.verification) ||
+      !MODES.includes(r.mode) || !["pending", "verified", "invalid"].includes(r.verification) ||
       (r.classification != null && !["DNS", "DNF", "DSQ"].includes(r.classification))) fail("Invalid run record.");
   if (r.schema !== RUN_SCHEMA) fail("Unsupported run schema.");
   for (const key of ["startTick", "finishTick", "boundaryTick"]) if (!optionalTick(r[key])) fail("Invalid run timestamp.");
@@ -82,13 +116,8 @@ function validateRun(r) {
   if (r.recordedAt != null && !uint(r.recordedAt)) fail("Invalid record time.");
   if (r.throughSeq != null && !uint(r.throughSeq)) fail("Invalid evidence cursor.");
   if (!object(r.nodes) || typeof r.armed !== "boolean" || typeof r.closed !== "boolean" || !uint(r.cursor)) fail("Invalid run snapshot.");
-  if (r.calibration) {
-    const c = r.calibration;
-    if (c.version !== 1 || !["nominal", "gps", "gps-extrapolated"].includes(c.method) || !object(c.points)) fail("Invalid calibration.");
-    for (const [t, p] of Object.entries(c.points)) {
-      if (!tick(t) || !object(p) || !decimal(p.num) || !decimal(p.den) || BigInt(p.den) <= 0n) fail("Invalid calibration point.");
-    }
-  }
+  if (r.calibration) validateCalibration(r.calibration);
+  validateCamera(r);
   try { resultNs(r); lapsNs(r); } catch { fail("Invalid timing data."); }
 }
 
@@ -101,6 +130,14 @@ function validateEvidenceRefs(row) {
 
 // Import closes unfinished snapshots: frozen with same-session PPS, else nominal timing.
 function finalizeImported(row, edges, old, now) {
+  if (row.mode === "camera-laps") {
+    const results = { ...row.results };
+    for (const car of Object.keys(row.results)) {
+      const done = finalizeImported(carRun(row, car), edges, old?.results?.[car] ? carRun(old, car) : null, now);
+      results[car] = { ...results[car], closed: true, calibration: done.calibration, durationNs: done.durationNs };
+    }
+    return { ...row, results };
+  }
   if (row.calibration || !resultTicks(row).length) return row;
   const withoutCalibration = r => ({ ...r, calibration: null, durationNs: null });
   const reuse = old?.calibration && equivalent(withoutCalibration(old), withoutCalibration(row), true);

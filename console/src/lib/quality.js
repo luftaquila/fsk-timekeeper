@@ -15,9 +15,9 @@ export function telemetryFresh(telemetry, now = Date.now()) {
 }
 
 // A valid diagnostic can report a fault. diag_valid only identifies its source.
-export function timingHealth(report, { nodeId = report?.node_id, connected = true, admission, now = Date.now() } = {}) {
+export function timingHealth(report, { nodeId = report?.node_id, label = null, connected = true, admission, now = Date.now() } = {}) {
   const master = nodeId === "0";
-  const who = master ? "Master" : `Sensor ${nodeId}`;
+  const who = master ? "Master" : label ?? `Sensor ${nodeId}`;
   const result = (label, state, reasons = [], syncAgeMs = null) => ({ ok: state === "good", label, state, reasons, syncAgeMs });
   if (!connected) return result("UNKNOWN", "warn", ["Master not connected"]);
   const fresh = telemetryFresh(report, now);
@@ -26,7 +26,7 @@ export function timingHealth(report, { nodeId = report?.node_id, connected = tru
       !(fresh && report.link_state === "online" && report.diag_valid === 1)) {
     return result("CONNECTING", "warn", [`${who} is connecting`]);
   }
-  if (!fresh) return result("UNKNOWN", "warn", [`No recent status report from ${master ? "master" : `sensor ${nodeId}`}`]);
+  if (!fresh) return result("UNKNOWN", "warn", [`No recent status report from ${master ? "master" : label ? label.toLowerCase() : `sensor ${nodeId}`}`]);
   if (!master && report.link_state !== "online") {
     return result("UNKNOWN", "warn", [`${who} link: ${report.link_state === "degraded" ? "STALE" : report.link_state === "lost" ? "LOST" : "UNKNOWN"}`]);
   }
@@ -70,9 +70,11 @@ export function pipelineHealth({ master, head, connected, now = Date.now() }) {
   return { ok: true, reason: null };
 }
 
-// mappings: enabled [{ node_id, role }] with a required role; telemetry: { [node_id]: normalized
+// mappings: enabled [{ node_id, role, label? }] with a required role; telemetry: { [node_id]: normalized
 // telemetry } (node "0" = master); masterFresh: USB link up and the master spoke recently.
-export function wirelessQuality({ mode, mappings, telemetry, masterFresh, connected = false, contract = { ok: true }, pipeline = { ok: true }, now = Date.now() }) {
+// standby: { [node_id]: reason | null } for a camera session nothing holds yet: judged by whether it
+// can start (the reason it cannot), not by its link.
+export function wirelessQuality({ mode, mappings, telemetry, masterFresh, connected = false, contract = { ok: true }, pipeline = { ok: true }, standby = {}, now = Date.now() }) {
   const reasons = [];
   if (!masterFresh) reasons.push({ node_id: "0", reason: connected ? "No recent data from master" : "Master not connected" });
   else if (!contract.ok) reasons.push({ node_id: "0", reason: contract.reason });
@@ -88,7 +90,11 @@ export function wirelessQuality({ mode, mappings, telemetry, masterFresh, connec
 
   for (const mapping of mappings) {
     const node = String(mapping.node_id);
-    for (const reason of timingHealth(telemetry?.[node], { nodeId: node, now }).reasons) {
+    if (node in standby) {
+      if (standby[node]) reasons.push({ node_id: node, role: mapping.role, reason: standby[node] });
+      continue;
+    }
+    for (const reason of timingHealth(telemetry?.[node], { nodeId: node, label: mapping.label ?? null, now }).reasons) {
       reasons.push({ node_id: node, role: mapping.role, reason });
     }
   }

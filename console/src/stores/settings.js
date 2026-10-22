@@ -1,6 +1,6 @@
 import { defineStore } from "pinia";
 import { reactive, computed, watch } from "vue";
-import { MODES, ROLES, REQUIRED_ROLES, DEFAULT_DEBOUNCE_MS, DEBOUNCE_MIN_MS, DEBOUNCE_MAX_MS } from "../lib/constants";
+import { MODES, ROLES, REQUIRED_ROLES, DEFAULT_DEBOUNCE_MS, DEBOUNCE_MIN_MS, DEBOUNCE_MAX_MS, DEFAULT_OCR_MIN_CONF } from "../lib/constants";
 import * as eventLog from "../lib/eventLog";
 import { validateNodeId } from "../lib/protocol";
 
@@ -14,7 +14,15 @@ function defaults() {
     lapTarget: null,
     lastNote: "",
     debounceMs: DEFAULT_DEBOUNCE_MS,
+    // Camera
+    cameraHost: "", // the camera Pi's tailnet name (https://<host>)
+    ocrMinConf: DEFAULT_OCR_MIN_CONF,
   };
+}
+
+// A tailnet host name, without scheme or path.
+export function isCameraHost(s) {
+  return typeof s === "string" && /^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*(:\d{1,5})?$/.test(s);
 }
 
 function clampDebounce(ms) {
@@ -39,6 +47,8 @@ function load() {
         }
       }
       if (MODES.includes(saved.mode)) base.mode = saved.mode;
+      if (isCameraHost(saved.cameraHost)) base.cameraHost = saved.cameraHost;
+      if (Number.isInteger(saved.ocrMinConf) && saved.ocrMinConf >= 0 && saved.ocrMinConf <= 100) base.ocrMinConf = saved.ocrMinConf;
       if (Number.isInteger(saved.lapTarget) && saved.lapTarget > 0) base.lapTarget = saved.lapTarget;
       if (typeof saved.lastNote === "string") base.lastNote = saved.lastNote;
       if (Number.isInteger(saved.debounceMs)) base.debounceMs = clampDebounce(saved.debounceMs);
@@ -113,6 +123,17 @@ export const useSettingsStore = defineStore("settings", () => {
     state.mode = mode;
   }
 
+  function setCameraHost(host) {
+    const value = String(host ?? "").trim().replace(/^https?:\/\//, "").replace(/\/+$/, "");
+    if (value && !isCameraHost(value)) throw new Error("Enter a host name, e.g. camera.tailnet.ts.net");
+    state.cameraHost = value;
+  }
+
+  function setOcrMinConf(value) {
+    const v = Number.parseInt(value, 10);
+    state.ocrMinConf = Number.isFinite(v) ? Math.max(0, Math.min(100, v)) : DEFAULT_OCR_MIN_CONF;
+  }
+
   function setLapTarget(value) {
     const v = Number.parseInt(value, 10);
     state.lapTarget = Number.isFinite(v) && v > 0 ? v : null;
@@ -137,6 +158,8 @@ export const useSettingsStore = defineStore("settings", () => {
     removeSensor,
     restoreSensor,
     setMode,
+    setCameraHost,
+    setOcrMinConf,
     setLapTarget,
     rememberNote,
     setDebounceMs,

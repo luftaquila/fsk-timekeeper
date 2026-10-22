@@ -1,14 +1,21 @@
 // Timing modes and instrument-wide constants. Pure module (no Vue).
 
 // Modes (named by mechanism): sprint = first start crossing to the first finish crossing after it;
-// laps = start-role crossings only, every crossing after the first ends a lap.
-export const MODES = ["sprint", "laps"];
+// laps = start-role crossings only, every crossing after the first ends a lap; camera-sprint =
+// sprint with a sensor at the start and the line-scan camera at the finish; camera-laps = laps of
+// every car crossing the camera, told apart by their numbers.
+export const MODES = ["sprint", "laps", "camera-sprint", "camera-laps"];
+export const CAMERA_MODES = ["camera-sprint", "camera-laps"];
 export const RESULT_CLASSIFICATIONS = ["DNS", "DNF", "DSQ"];
 
 export const MODE_LABEL = {
   sprint: "Start → Finish",
   laps: "Laps",
+  "camera-sprint": "Photo Sprint",
+  "camera-laps": "Photo Laps",
 };
+// The timing rules a mode follows.
+export const MODE_KIND = { sprint: "sprint", laps: "laps", "camera-sprint": "sprint", "camera-laps": "laps" };
 
 export const ROLES = ["unused", "start", "finish"];
 export const ROLE_LABEL = { unused: "Unused", start: "Start", finish: "Finish" };
@@ -17,8 +24,12 @@ export const ROLE_LABEL = { unused: "Unused", start: "Start", finish: "Finish" }
 export const REQUIRED_ROLES = Object.freeze({
   sprint: ["start", "finish"],
   laps: ["start"],
+  "camera-sprint": ["start", "finish"],
+  "camera-laps": ["start"],
 });
 
+// Camera laps: an OCR reading below this confidence leaves a crossing unassigned (operator).
+export const DEFAULT_OCR_MIN_CONF = 80;
 // Car numbers on the stickers: one to three digits, kept as text without leading zeros.
 export const CAR_NUMBER_PATTERN = /^[1-9]\d{0,2}$/;
 
