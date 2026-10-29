@@ -1,4 +1,4 @@
-/* One master and up to MAX_NODES sensors, one channel/timebase; one binary, role from USB at boot.
+/* One master and up to MAX_NODES sensors, one channel/timebase; one binary, role from USB.
  * MASTER (a USB host enumerates it): beacons, queues sensor records, drives the line-scan camera
  * (camera.h), speaks FSK-WL lines (proto_usb.h).
  * SENSOR: syncs to beacons, hardware-captures SENSOR edges, uplinks in its slots (mac_sensor.h). */
@@ -29,7 +29,8 @@
 #include "usb.h"
 #include "nrf.h"
 
-/* Master iff a PC enumerates us in ROLE_SETTLE_MS; decided once (a later bus suspend keeps it). */
+/* Master iff a USB host enumerates us in ROLE_SETTLE_MS (a later bus suspend keeps it); a sensor
+ * a host enumerates later restarts as master (run_sensor). */
 static int role_decide_master(void)
 {
     uint32_t t0 = board_millis();
@@ -151,6 +152,9 @@ static void run_sensor(int st)
     for (;;) {
         uint32_t now = board_millis();
         service(now);
+        /* Powered up with its host but enumerated only after ROLE_SETTLE_MS (a camera Pi still
+         * booting): restart as that host's master, as a master restarts when USB comes back. */
+        if (usb_host_present()) { NVIC_SystemReset(); }
         int c;
         while ((c = usb_read_byte()) >= 0) {
             switch (pu_feed(c)) {

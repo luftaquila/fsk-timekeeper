@@ -22,7 +22,7 @@
   - USB 분리 시 무선 정지, 재연결 시 재부팅 후 새 세션
   - 카메라 Pi가 호스트일 때 콘솔은 Pi의 브리지(`photofinish/app`)로 마스터에 접속
   - 배터리 마스터 모드·두 번째 마스터 감지 없음
-- 펌웨어 단일. 마스터·센서 구분은 부팅 시 USB 호스트 enumerate 여부로 1회 결정
+- 펌웨어 단일. USB 호스트가 enumerate한 보드가 마스터. 부팅 시 결정하고, 센서로 동작 중 enumerate되면 마스터로 재부팅
 - 한 번에 한 경기. 센서 기준 2대(start/finish), 상한 5대
   - start·finish 각각 센서 1대만 매핑. laps는 start만 필요
 - 카메라는 마스터 보드의 카메라 노드. 카메라 모드(camera-sprint, camera-laps)에서만 사용

@@ -25,7 +25,7 @@ uint32_t usb_console_epoch(void);
 /* One byte from the CDC port (0-255), or -1 if none. */
 int usb_read_byte(void);
 
-/* Non-zero while a USB host has us enumerated (a PC link, not a charger); decides the boot role. */
+/* Non-zero while a USB host has us enumerated (a PC link, not a charger); makes the board master. */
 int usb_host_present(void);
 
 /* Non-zero while VBUS is present, also while a connected host merely suspends the bus. */

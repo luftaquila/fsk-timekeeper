@@ -153,7 +153,8 @@
 #define CAM_SAMPLE_MS    10u
 #define CAM_JITTER_TICKS 64u
 
-/* Role is set once at boot: master if a USB host enumerates the board within this, else sensor. */
+/* Role at boot: master if a USB host enumerates the board within this, else sensor (one a host
+ * enumerates later restarts as master). */
 #define ROLE_SETTLE_MS   1500u
 
 /* Cell-to-VDDH diode drop, added to the sensor's VDDH reading to estimate the cell voltage. */
