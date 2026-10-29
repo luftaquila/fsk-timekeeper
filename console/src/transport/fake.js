@@ -2,10 +2,10 @@
  *   records (captures, losses, checkpoints) reach the master queue one slot after they are made,
  *     up to 5 consecutive captures per E line
  *   queue of 16 lines; the head is re-sent every 100 ms until an exact `C <hseq> <boot> <crc>`
- *   `H` every second, `D 0` every 5 s, a sensor `D` with every uplink and every 5 s
+ *   `H` every second, `D 0` every 5 s, a sensor `D` with every uplink and every 3 s
  *   a checkpoint per idle sensor every 5 s and one beacon after `CP`; one `P` per PPS edge (seg/n)
  *   once started, a line-scan camera on the master (node = devid low word, 40 kHz lines): its
- *     crossings (E V), a checkpoint every second and its D line every 5 s
+ *     crossings (E V), a checkpoint every second and its D line every 3 s
  * Scenario helpers inject the rest. */
 import { crc32Hex } from "../lib/crc32";
 import { USB_PROTO_VERSION, RADIO_PROTO_VERSION, bootIdText, isRadioConfig } from "../lib/protocol";
@@ -15,7 +15,7 @@ const QUEUE_LEN = 16;
 const RETRY_MS = 100;
 const SLOT_POLL_MS = 20;
 const BEACON_MS = 1000;
-const STATUS_MS = 5000;
+const STATUS_MS = 3000;
 const HEALTHY = 7;
 const TIME_UNKNOWN = 64;
 
@@ -404,14 +404,14 @@ export function createFakeTransport({ onLine, onDisconnect }) {
         if (camera.on && !camera.records.length) cameraCheckpoint();
         if (beaconSeq % 5 === 0) emit(masterDiag());
         if (!provisioned && beaconSeq % 5 === 0) emit("X noprov");
+        if (periodicCheckpoints && beaconSeq % 5 === 0) {
+          for (const [node, s] of sensors) if (!s.records.length) checkpoint(node);
+        }
       }, BEACON_MS),
     );
     timers.push(
       setInterval(() => {
-        for (const [node, s] of sensors) {
-          emit(diagLine(node, s));
-          if (periodicCheckpoints && !s.records.length) checkpoint(node);
-        }
+        for (const [node, s] of sensors) emit(diagLine(node, s));
         if (camera.on) emit(cameraDiag());
       }, STATUS_MS),
     );

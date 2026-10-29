@@ -91,7 +91,7 @@
 /* Master's sensor link state by time since last uplink (D lines; the console uses only this). */
 #define LINK_OK_MS    12000u
 #define LINK_STALE_MS 17000u
-#define SENSOR_STATUS_PERIOD_MS 5000u
+#define SENSOR_STATUS_PERIOD_MS 3000u
 
 /* Max offset-anchor age for normal stamping: adds <= 0.56 ms at 80 ppm worst relative drift. */
 #define SYNC_TTL_MS 7000u

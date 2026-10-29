@@ -9,7 +9,7 @@ import { cameraApi, cameraContract } from "../lib/cameraApi";
 import { USB_PROTO_VERSION } from "../lib/protocol";
 import * as photos from "../lib/photos";
 
-const INFO_PERIOD_MS = 5000;
+const INFO_PERIOD_MS = 3000;
 
 // "<node>:<session>:<seq>" -> { session, seq }
 export function clipOf(key) {

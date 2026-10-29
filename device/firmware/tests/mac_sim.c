@@ -1535,7 +1535,7 @@ static void status_reports(void)
     for (unsigned ms = 0; ms <= 40000; ms += 1000) {
         cur->now_us = (uint64_t)ms * 1000u;
         mac_master_report(&mm, 1);
-        int expected = (ms && ms % 5000 == 0) || ms == 13000 || ms == 18000;
+        int expected = (ms && ms % SENSOR_STATUS_PERIOD_MS == 0) || ms == 13000 || ms == 18000;
         assert(d_lines - previous == (expected ? 2u : 0u));
         if (expected) {
             unsigned id, age;
@@ -1557,7 +1557,7 @@ static void status_reports(void)
     e = sim_entry(0, 3, board_millis());
     e->last_state = PU_STATE_OK;
     previous = d_lines;
-    cur->now_us += 4999u * 1000u;
+    cur->now_us += (SENSOR_STATUS_PERIOD_MS - 1u) * 1000u;
     mac_master_report(&mm, 1);
     assert(d_lines == previous);
     cur->now_us += 1000u;
