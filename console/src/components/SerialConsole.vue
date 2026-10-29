@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed, watch, nextTick } from "vue";
 import { useDeviceStore } from "../stores/device";
+import LabeledValue from "./LabeledValue.vue";
 
 const device = useDeviceStore();
 const open = ref(false);
@@ -40,7 +41,11 @@ function send() {
       <svg class="disclosure" :class="{ 'is-open': open }" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6" /></svg>
     </div>
     <div v-if="open" class="card-body">
-      <p class="muted console-stats">Events: {{ device.stats.events }} · ACKs: {{ device.stats.acks }} · Duplicates: {{ device.stats.duplicates }}</p>
+      <div class="console-stats">
+        <LabeledValue label="Events" :value="device.stats.events" />
+        <LabeledValue label="ACKs" :value="device.stats.acks" />
+        <LabeledValue label="Duplicates" :value="device.stats.duplicates" />
+      </div>
       <label class="opt"><input type="checkbox" v-model="hideHeartbeat" /> Hide Heartbeat (H) Lines</label>
       <div ref="box" class="log mono">
         <div v-for="(l, i) in lines" :key="i" class="line" :class="l.dir">
@@ -57,7 +62,7 @@ function send() {
 </template>
 
 <style scoped>
-.console-stats { margin-bottom: 0.75rem; }
+.console-stats { display: flex; flex-wrap: wrap; gap: 0.5rem 1.5rem; margin-bottom: 0.75rem; }
 .console-header {
   display: flex;
   align-items: center;

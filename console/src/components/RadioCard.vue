@@ -80,7 +80,7 @@ async function apply() {
 
 async function restoreDefaults() {
   if (defaultDisabled.value) return;
-  if (!window.confirm("Restore default radio settings on the connected board?\n922.900 MHz · 12 dBm · Listen Before Talk On\nThese settings will be saved and applied immediately.")) return;
+  if (!window.confirm("Restore default radio settings on the connected board?\n\nFrequency: 922.900 MHz\nOutput Power: 12 dBm\nListen Before Talk: On\n\nThese settings will be saved and applied immediately.")) return;
   load(RADIO_DEFAULT_CONFIG);
   if (!isDefault(board.value)) await save(RADIO_DEFAULT_CONFIG);
 }

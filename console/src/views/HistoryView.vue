@@ -9,6 +9,7 @@ import { formatDuration, fmtDateTime } from "../lib/format";
 import { historyRecord, lapSummary, lapDelta, statusLabel, calibrationLabel } from "../lib/historyPresentation";
 
 import FaultReasons from "../components/FaultReasons.vue";
+import LabeledValue from "../components/LabeledValue.vue";
 
 const history = useHistoryStore();
 const notyf = useNotification();
@@ -181,7 +182,10 @@ async function clearAll() {
         <div class="lap-dialog-header">
           <div>
             <h3 id="lap-dialog-title">Lap Times</h3>
-            <p class="lap-context">{{ lapPopup.date }}<span v-if="lapPopup.note"> · {{ lapPopup.note }}</span></p>
+            <div class="lap-context">
+              <LabeledValue label="Date" :value="lapPopup.date" text />
+              <LabeledValue v-if="lapPopup.note" label="Note" :value="lapPopup.note" text />
+            </div>
           </div>
           <button class="btn btn-ghost" aria-label="Close lap details" autofocus @click="closeLaps">✕</button>
         </div>
@@ -347,7 +351,7 @@ async function clearAll() {
 }
 .lap-dialog-header h3 { font-size: 1.15rem; }
 .lap-dialog-header button { flex-shrink: 0; }
-.lap-context { margin-top: 0.35rem; color: var(--text-secondary); overflow-wrap: anywhere; }
+.lap-context { margin-top: 0.35rem; display: flex; flex-wrap: wrap; gap: 0.35rem 1.25rem; }
 .lap-stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; padding: 1.25rem; }
 .lap-stats dt { margin-bottom: 0.3rem; color: var(--text-secondary); font-size: 1rem; }
 .lap-stats dd { margin: 0; font-size: 1.125rem; font-weight: 400; overflow-wrap: anywhere; }
