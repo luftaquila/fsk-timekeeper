@@ -1,4 +1,4 @@
-// PCB housing for the FSK Timekeeper, MASTER variant (USB only, no light/sensor I/O).
+// PCB housing for the FSK Timekeeper, MASTER variant (USB; J1 only for the photo finish camera).
 // Board: 92 x 57 mm, corner r 3, 4x M2 holes on an 86 x 51 rectangle; all tall parts on TOP
 // (the 18650 holder sets the cavity height).
 //
@@ -13,7 +13,7 @@
 // Walls (MASTER):
 //   left  (-X): centred SMA antenna; GPS antenna slide bracket on the inner ceiling
 //   right (+X): tripod mount at its original position
-//   front (-Y): USB-C only (J1 and toggle not fitted)
+//   front (-Y): USB-C; J1 when photofinish=true; no toggle
 //   back  (+Y): blank
 // Frame: PCB centred at the XY origin, Z=0 at the assembly bottom.
 // KiCad board centre (147.1648, 98.03); model = (boardX-cx, cy-boardY).
@@ -22,6 +22,7 @@
 part = "exploded";   // [base, lid, both, assembled, exploded]
 show_pcb = true;     // PCB + 18650 reference in 'assembled' / 'exploded'
 explode = 30;        // separation gap between stacked parts in 'exploded'
+photofinish = false; // photo finish camera master: J1 aperture for the camera harness
 
 /* [PCB] */
 pcb_l = 92;        // board length (X)
@@ -76,6 +77,15 @@ head_d = 4.4;          // counterbore for screw head (base bottom)
 head_h = 2;            // counterbore depth
 base_fit = 0.3;        // base clearance per side inside the lid bottom opening
 
+/* [J1 cutout — front/-Y wall, photo finish only] */
+// J1 at (132.724,115.63), rotated 180; use body centre +2.1 (local X=-2.7..6.9), not origin.
+molex_x = 132.724 - 2.1 - pcb_cx;
+molex_front_y = pcb_cy - (115.63 + 13.9);
+molex_cut_w = 11;
+molex_cut_h = 11;
+molex_latch_w = 4;
+molex_latch_h = 4.5;
+
 /* [USB-C cutout — front/-Y wall] */
 // U1 at (154.74401,124.704948), rotated 180; USB outline local X=3.12001..12.11999 -> centre 7.62.
 usb_x = 154.74401 - 7.62 - pcb_cx;
@@ -113,8 +123,8 @@ base_r = inner_r - base_fit;
 pcb_bot_z = base_th + standoff_h;    // PCB underside
 pcb_top_z = pcb_bot_z + pcb_th;      // PCB top surface
 usb_z     = pcb_bot_z + usb_above_bot;   // USB-C port centre Z
-// Preserve shell/tripod height: battery clearance and centred tripod bore above Ra-01.
-cavity    = max(batt_h + tri_gap, 2*(pcb_top_z + ra01_h + 4 + tri_pilot_d/2) - pcb_top_z - lid_th);
+// Preserve shell/tripod height: battery clearance, latch-slot reach and centred tripod bore above Ra-01.
+cavity    = max(batt_h + tri_gap, molex_cut_h + molex_latch_h + 2, 2*(pcb_top_z + ra01_h + 4 + tri_pilot_d/2) - pcb_top_z - lid_th);
 ceil_z    = pcb_top_z + cavity;      // lid inner ceiling
 outer_h   = ceil_z + lid_th;         // overall height
 post_len  = ceil_z - pcb_top_z;      // = cavity
@@ -253,6 +263,13 @@ module lid() {
         // post pilot bores
         for (p=mount_pos) translate([p[0],p[1],pcb_top_z-eps]) cylinder(h=post_pilot_depth, d=post_pilot_d);
 
+        // J1 front-wall aperture and latch slot (photo finish)
+        if (photofinish) {
+            translate([molex_x-molex_cut_w/2, -outer_w/2-eps, pcb_top_z-0.5])
+                cube([molex_cut_w, wall+pcb_clear+1+eps, molex_cut_h+0.5]);
+            translate([molex_x-molex_latch_w/2, -outer_w/2-eps, pcb_top_z-0.5+molex_cut_h])
+                cube([molex_latch_w, wall+pcb_clear+1+eps, molex_latch_h]);
+        }
         // USB-C opening (-Y wall)
         translate([usb_x, -inner_w/2+eps, usb_z])
             rotate([90,0,0])
@@ -298,9 +315,10 @@ module pcb_ref() {
         color([0.15,0.4,0.8,0.5])
             translate([184.912-pcb_cx-6.6,pcb_cy-94.489-14.22,pcb_top_z])
                 cube([13.2,16.25,gps_h]);
+        if (photofinish) color([0.85,0.5,0.15,0.5])
+            translate([molex_x-4.8,molex_front_y,pcb_top_z]) cube([9.6,12.8,11]);
         color([0.55,0.55,0.6,0.6])
             translate([usb_x,usb_front_y+3.25,usb_z]) cube([9,6.5,3.26],center=true);
-
     }
 }
 

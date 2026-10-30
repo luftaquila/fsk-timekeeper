@@ -32,8 +32,9 @@ jobs:
               for v in master sensor; do
                 openscad --backend=manifold -o "$v.stl" -D "part=\"both\"" "$v.scad"
               done
+              openscad --backend=manifold -o photofinish.stl -D "part=\"both\"" -D "photofinish=true" master.scad
               openscad --backend=manifold -o sensor-holder.stl sensor-holder.scad'
-          ls -la device/3d/master.stl device/3d/sensor.stl device/3d/sensor-holder.stl
+          ls -la device/3d/master.stl device/3d/photofinish.stl device/3d/sensor.stl device/3d/sensor-holder.stl
 
       - name: Export PCB STEP model
         run: |
@@ -44,6 +45,7 @@ jobs:
           name: fsk-timekeeper-3d
           path: |
             device/3d/master.stl
+            device/3d/photofinish.stl
             device/3d/sensor.stl
             device/3d/sensor-holder.stl
             device/3d/fsk-timekeeper-pcb.stp

@@ -116,6 +116,7 @@ Required per sensor: 4x M2 × 8 mm and 3x M3 × 14 mm hex bolts.
 
 1. Download `fsk-timekeeper-3d.zip` from the [latest release](https://github.com/luftaquila/fsk-timekeeper/releases/latest) and extract it.
 2. 3D-print 1x `master.stl`, 4x `sensor.stl`, and 4x `sensor-holder.stl`.
+   * With the [photo finish camera](photofinish), print `photofinish.stl` instead of `master.stl`.
 3. Mount the SMA connectors and attach the LoRa antennas.
 4. Mount the switches and insert 18650 batteries into the sensor housings.
 5. Secure each PCB between the base and lid with M2 bolts.
