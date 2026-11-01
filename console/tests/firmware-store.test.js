@@ -106,13 +106,22 @@ describe("firmware upgrade lifecycle", () => {
     await store.chooseDevice(); expect(serial.requestPort).toHaveBeenCalledTimes(2);
     store.cancel(); expect(store.phase).toBe("ready"); expect(device.updateInProgress).toBe(false);
   });
-  it("blocks measurement and incompatible packages", async () => {
+  it("blocks measurement", async () => {
     const store = await ready();
     for (const key of ["armed", "starting", "classifying"]) {
       timing[key] = true; await store.start(); expect(store.canStart).toBe(false); timing[key] = false;
     }
-    await ready({ usb_protocol: 99 }); expect(store.canStart).toBe(false);
     expect(serial.requestPort).not.toHaveBeenCalled(); expect(flash).not.toHaveBeenCalled();
+  });
+  it("flashes and verifies an incompatible package after warning", async () => {
+    device.connected = true; device.identity = { ...identity };
+    serial.getPorts.mockResolvedValue([boot]);
+    const store = await ready({ usb_protocol: 99 });
+    expect(store.firmware.compatible).toBe(false); expect(store.message).toMatch(/protocol differs/); expect(store.canStart).toBe(true);
+    await store.start(); expect(flash).toHaveBeenCalledOnce(); expect(store.phase).toBe("select-app");
+    device.connect.mockImplementation(async () => { device.connected = true; device.identity = { ...identity, usbProto: 99 }; return true; });
+    serial.requestPort.mockResolvedValue(app); await store.chooseApp();
+    expect(store.phase).toBe("complete");
   });
   it("labels reinstallation and downgrade explicitly", async () => {
     device.identity = { ...identity }; const store = await ready(); expect(store.actionLabel).toBe("Reinstall");

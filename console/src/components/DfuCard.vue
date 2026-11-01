@@ -9,7 +9,8 @@ const update = useFirmwareStore();
 const dragging = ref(false);
 const input = ref(null);
 const locked = computed(() => update.busy || update.awaitingPort || update.phase === "checking");
-const incompatible = computed(() => update.firmware && !update.firmware.compatible);
+// A warning only: an incompatible package can still be flashed.
+const incompatible = computed(() => update.phase === "ready" && update.firmware && !update.firmware.compatible);
 const stages = {
   checking: "Checking firmware…",
   preparing: "Preparing board…",
@@ -71,9 +72,9 @@ function dropped(event) {
           <div class="progress-fill" :class="{ indeterminate: update.phase !== 'writing' }" :style="update.phase === 'writing' ? { width: `${update.progress}%` } : undefined"></div>
         </div>
       </div>
-      <p v-if="details" class="firmware-detail" :class="{ bad: update.phase === 'error' || incompatible }" role="status">{{ details }}</p>
+      <p v-if="details" class="firmware-detail" :class="{ bad: update.phase === 'error', pending: incompatible }" role="status">{{ details }}</p>
       <div class="section-actions">
-        <span v-if="status && !update.busy" class="action-result" :class="{ ok: update.phase === 'complete', bad: update.phase === 'error' || incompatible, pending: update.awaitingPort || update.phase === 'unverified' }" role="status">{{ status }}</span>
+        <span v-if="status && !update.busy" class="action-result" :class="{ ok: update.phase === 'complete', bad: update.phase === 'error', pending: update.awaitingPort || update.phase === 'unverified' || incompatible }" role="status">{{ status }}</span>
         <div class="apply-group">
           <button v-if="update.awaitingPort" class="btn btn-ghost btn-sm" type="button" @click="update.cancel">{{ update.phase === 'select-app' ? 'Skip Verification' : 'Cancel' }}</button>
           <button v-if="update.phase === 'select-device'" class="btn btn-primary btn-sm" type="button" @click="update.chooseDevice">Select Device</button>

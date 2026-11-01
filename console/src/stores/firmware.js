@@ -28,7 +28,7 @@ export const useFirmwareStore = defineStore("firmware", () => {
     const comparison = compareVersions(firmware.value?.metadata.version, device.identity?.fw);
     return comparison === 0 ? "Reinstall" : comparison === -1 ? "Downgrade" : "Upgrade";
   });
-  const canStart = computed(() => !!firmware.value?.compatible && !busy.value && !awaitingPort.value &&
+  const canStart = computed(() => !!firmware.value && !busy.value && !awaitingPort.value &&
     !device.updateInProgress && !device.clearingData && !useHistoryStore().importing && !timing.armed && !timing.starting && !timing.classifying && !device.connecting && device.transportKind !== "fake" && device.supported);
 
   function release() { device.updateInProgress = false; }
@@ -50,7 +50,7 @@ export const useFirmwareStore = defineStore("firmware", () => {
       if (generation !== readingFile) return;
       firmware.value = parsed;
       phase.value = "ready";
-      if (!parsed.compatible) message.value = "This firmware needs a console with matching USB and radio protocols. Open the console from the same release.";
+      if (!parsed.compatible) message.value = "This firmware's USB or radio protocol differs from this console. Use the console from the same release after upgrading.";
     } catch (e) { if (generation === readingFile) error(e); }
   }
 
