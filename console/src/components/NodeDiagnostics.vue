@@ -99,7 +99,7 @@ const overview = computed(() => {
     { label: "RSSI", value: `${fmtNum(r.rssi)} dBm`, gauge: signalGauge(r.rssi, -130, 0, "dBm", -105) },
     { label: "SNR", value: `${fmtNum(r.snr)} dB`, gauge: signalGauge(r.snr, -10, 20, "dB", -2.5) },
     { label: "Latency", parts: [metric(fmtNum(r.latency_ms, 0), "ms")] },
-    { label: "Beacon Lost", parts: [metric(r.rx_miss ?? 0, "Observed total"), "/", metric(r.beacon_gap ?? 0, "Last gap")] },
+    { label: "Beacon Lost", parts: [metric(r.rx_miss ?? 0)] },
     { label: "Battery", parts: [metric(r.batt_mv == null ? "-" : socPct(r.batt_mv), "%"), { ...voltage(r.batt_mv), parenthesized: true }] },
     { label: "Temperature", parts: [temperature(r.temp_c10)] },
   ];
