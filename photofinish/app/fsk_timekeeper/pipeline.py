@@ -330,6 +330,11 @@ class Pipeline:
     async def _session(self):
         loop = asyncio.get_running_loop()
         self.restart.clear()  # this session takes the current settings
+        # No trigger until the camera is armed: a line exposed before the session starts would put
+        # the camera's line numbers ahead of the master's strobe count.
+        reply = await self.link.stop()
+        if reply != "ok":
+            raise SessionLost(reply)
         self.period = protocol.period_for(self.cfg["lineRateHz"])
         self._reset(self.period)
         errors = await loop.run_in_executor(self.side, self.source.configure, self.cfg.values, self.period)

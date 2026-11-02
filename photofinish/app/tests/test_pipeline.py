@@ -1,5 +1,6 @@
 """Sessions end to end on the synthetic camera: records in line order, crossings with their
-cars, clips under their capture_seq, losses for lost frames, a new session on a numbering break."""
+cars, clips under their capture_seq, losses for lost frames, a new session on a numbering break, the
+camera armed before the master triggers."""
 
 import asyncio
 import shutil
@@ -252,11 +253,11 @@ async def test_a_session_runs_only_while_held(tmp_path):
         assert await pipeline.hold(True) == "101"  # a run's Start, once its session runs
         assert await pipeline.hold(True) == "101"  # said again: the same session
         assert await pipeline.hold(False) is None
-        await wait_for(lambda: not pipeline.running and link.stops == 2)
+        await wait_for(lambda: not pipeline.running and link.stops == 3)  # one as the session started, one after it
         pipeline.watch(True)  # a live view
         await wait_for(lambda: pipeline.running)
         pipeline.watch(False)
-        await wait_for(lambda: not pipeline.running and link.stops == 3)
+        await wait_for(lambda: not pipeline.running and link.stops == 5)
         assert len(link.sessions) == 2 and pipeline.last_error is None
     finally:
         await cancel(task)
@@ -276,6 +277,49 @@ async def test_a_run_gets_a_session_started_at_its_start(tmp_path):
         assert pipeline.running and pipeline.session == "102"  # the live view still holds it
         pipeline.watch(False)
         await wait_for(lambda: not pipeline.running)
+    finally:
+        await cancel(task)
+
+
+class OrderLink(FakeLink):
+    """Logs when the master starts and stops triggering."""
+
+    def __init__(self, log):
+        super().__init__()
+        self.log = log
+
+    async def start(self, period):
+        self.log.append("trigger")
+        return await super().start(period)
+
+    async def stop(self):
+        self.log.append("stop")
+        return await super().stop()
+
+
+class OrderCamera(FastCamera):
+    """Logs when it is armed."""
+
+    def __init__(self, log, frames, **kw):
+        super().__init__(frames, **kw)
+        self.log = log
+
+    def start(self, on_frame):
+        self.log.append("arm")
+        super().start(on_frame)
+
+
+async def test_a_new_session_arms_the_camera_before_the_first_trigger(tmp_path):
+    """A run's Start over a live view restarts the session: the master stops triggering before the
+    camera is armed, so no line comes before the session's first strobe."""
+    log = []
+    pipeline = Pipeline(OrderLink(log), OrderCamera(log, 2000, width=256), ClipStore(str(tmp_path / "clips")), config(tmp_path), FakeReader())
+    task = asyncio.create_task(pipeline.run(retry_s=0.05))
+    try:
+        pipeline.watch(True)
+        await wait_for(lambda: pipeline.running)
+        assert await pipeline.hold(True) == "102"
+        assert log == ["stop", "arm", "trigger"] * 2
     finally:
         await cancel(task)
 
