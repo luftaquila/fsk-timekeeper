@@ -147,7 +147,8 @@
  * the fastest line rate the camera sends without dropping frames bounds the period from below.
  * Strobe anchors are sampled every CAM_SAMPLE_MS; an anchor whose tick step is not its strobe step
  * times the period within CAM_JITTER_TICKS (< CAM_PERIOD_MIN / 2) ends the session (cam_track.h).
- * CAM_JITTER_TICKS is a provisional bound until the trigger-to-exposure jitter is measured. */
+ * CAM_JITTER_TICKS is over ten times the measured spread of the camera's trigger-to-exposure delay,
+ * warm-up drift included. */
 #define CAM_PERIOD_MIN   270u
 #define CAM_PERIOD_MAX   16000u
 #define CAM_SAMPLE_MS    10u
