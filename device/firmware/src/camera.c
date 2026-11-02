@@ -181,7 +181,7 @@ void camera_command(const pu_camera_cmd_t *cmd, mq_t *q, uint64_t master_boot_id
     }
     if (s_cam.track.broken || last > strobes(capture_strobe_count())) {
         camera_stop();
-        pu_emit_err("camline");
+        pu_emit_err(s_cam.track.broken ? "camgrid" : "camline");
         return;
     }
     if (mq_full(q)) { pu_emit_err("camfull"); return; }

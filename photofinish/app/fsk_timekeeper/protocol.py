@@ -16,7 +16,7 @@ USB_PROTO = 8
 TICKS_PER_S = 16_000_000
 PERIOD_MIN = 270
 PERIOD_MAX = 16000
-CAMERA_REASONS = ("camoff", "camwait", "camfull", "camline", "camseq")
+CAMERA_REASONS = ("camoff", "camwait", "camfull", "camgrid", "camline", "camseq")
 
 
 def period_for(line_rate_hz):

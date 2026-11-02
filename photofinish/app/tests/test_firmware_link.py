@@ -110,7 +110,7 @@ async def test_skipped_triggers_end_the_session():
         # no line number can be trusted any more.
         with pytest.raises(SessionLost) as lost:
             await camera.send("C", 1000, 1, 99)
-        assert lost.value.reason == "camline"
+        assert lost.value.reason == "camgrid"
     finally:
         task.cancel()
         port.close()

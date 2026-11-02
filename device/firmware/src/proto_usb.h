@@ -54,7 +54,8 @@
  *       q = 1.. per session: q = last + 1 is taken, q = last is re-acknowledged, others camseq.
  *       Lines never go back: C and L above the last record's line, K at or above it (camseq).
  *       X camoff: no session; camwait: no anchor past the line yet, resend; camfull: host queue
- *       full, resend; camline: the line numbers no longer match the strobes, session ended.
+ *       full, resend; camgrid: a strobe anchor off the trigger schedule (cam_track.h), camline:
+ *       a line past the strobes counted; both end the session.
  */
 #ifndef PROTO_USB_H
 #define PROTO_USB_H

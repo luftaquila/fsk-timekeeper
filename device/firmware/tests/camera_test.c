@@ -244,7 +244,7 @@ static void session(void)
     skip_from = triggers + 100u; skip_to = skip_from + 2u;
     advance(20);
     test_timer4.TASKS_STOP = 0;
-    assert(strstr(send("V K 6 4300\n"), "X camline") && test_timer4.TASKS_STOP);
+    assert(strstr(send("V K 6 4300\n"), "X camgrid") && test_timer4.TASKS_STOP);
     assert(strstr(send("V K 6 4300\n"), "X camoff"));
     assert(camera_diag(&d, now_ms) && d.state == PU_STATE_LOST && !(d.health & HEALTH_SYNC_VALID));
 

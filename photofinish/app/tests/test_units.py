@@ -35,6 +35,7 @@ def test_protocol_lines():
     assert not protocol.is_key_command("C 1 2 ABCDEF01") and not protocol.is_key_command("?ID")
     assert protocol.Line("A V OK").camera_reply() == "ok"
     assert protocol.Line("X camwait").camera_reply() == "camwait"
+    assert protocol.Line("X camgrid").camera_reply() == "camgrid"
     assert protocol.Line("X badcmd").camera_reply() is None
     assert protocol.Line("A CP OK").camera_reply() is None
     ident = protocol.Line("I FSK-WL 8 v1.0.0 0123ABCD89EF4567 M 17 922900 7 250.00 16000 0 12 1").identity()
